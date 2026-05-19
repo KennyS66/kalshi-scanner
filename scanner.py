@@ -1,0 +1,230 @@
+"""Whale detection and volume analysis engine."""
+
+import time
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+
+@dataclass
+class WhaleAlert:
+    ticker: str
+    contracts: float
+    price: float
+    side: str  # "yes" or "no"
+    taker_side: str  # "bid" or "ask"
+    timestamp: datetime
+    notional: float = 0.0
+
+    def __post_init__(self):
+        self.notional = self.contracts * self.price
+
+
+@dataclass
+class MarketSnapshot:
+    ticker: str
+    title: str = ""
+    subtitle: str = ""
+    # From API market data
+    volume_24h: float = 0.0
+    total_volume: float = 0.0
+    open_interest: float = 0.0
+    yes_price: float = 0.0
+    no_price: float = 0.0
+    last_price: float = 0.0
+    liquidity: float = 0.0
+    # Derived from trade scanning
+    trade_count: int = 0
+    trade_volume: float = 0.0  # total contracts from trades we've seen
+    trade_notional: float = 0.0
+    recent_whale_count: int = 0
+    recent_whale_volume: float = 0.0
+    buy_pressure: float = 0.0  # net yes - no flow
+    score: float = 0.0
+
+
+def _fp(val):
+    """Parse a string fixed-point value like '129.45' to float."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+class Scanner:
+    """Scans Kalshi for whale trades and volume anomalies."""
+
+    def __init__(self, api, whale_threshold=50, lookback_minutes=60):
+        self.api = api
+        self.whale_threshold = whale_threshold
+        self.lookback_minutes = lookback_minutes
+        self.whale_alerts: list[WhaleAlert] = []
+        self.market_snapshots: dict[str, MarketSnapshot] = {}
+        self.last_trade_ts = None
+        self._seen_trade_ids: set[str] = set()
+        # Aggregated from all trades we've seen
+        self._ticker_stats: dict[str, dict] = defaultdict(lambda: {
+            "count": 0, "volume": 0.0, "notional": 0.0,
+            "yes_vol": 0.0, "no_vol": 0.0,
+            "whale_count": 0, "whale_volume": 0.0,
+        })
+
+    def scan_trades(self):
+        """Fetch recent trades, detect whales, and build per-ticker stats."""
+        cutoff = int(time.time()) - (self.lookback_minutes * 60)
+        min_ts = self.last_trade_ts or cutoff
+
+        new_whales = []
+        cursor = None
+        new_trade_count = 0
+
+        for _ in range(10):  # max pages
+            data = self.api.get_trades(limit=1000, cursor=cursor, min_ts=min_ts)
+            trades = data.get("trades", [])
+            if not trades:
+                break
+
+            for t in trades:
+                trade_id = t.get("trade_id", "")
+                if trade_id in self._seen_trade_ids:
+                    continue
+                self._seen_trade_ids.add(trade_id)
+                new_trade_count += 1
+
+                ticker = t.get("ticker", "")
+                contracts = _fp(t.get("count_fp"))
+                yes_price = _fp(t.get("yes_price_dollars"))
+                side = t.get("taker_outcome_side", t.get("taker_side", "?"))
+
+                # Aggregate per-ticker stats
+                stats = self._ticker_stats[ticker]
+                stats["count"] += 1
+                stats["volume"] += contracts
+                stats["notional"] += contracts * yes_price
+                if side == "yes":
+                    stats["yes_vol"] += contracts
+                else:
+                    stats["no_vol"] += contracts
+
+                # Whale detection
+                if contracts >= self.whale_threshold:
+                    ts_str = t.get("created_time", "")
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    except (ValueError, AttributeError):
+                        ts = datetime.now(timezone.utc)
+
+                    alert = WhaleAlert(
+                        ticker=ticker,
+                        contracts=contracts,
+                        price=yes_price,
+                        side=side,
+                        taker_side=t.get("taker_book_side", "?"),
+                        timestamp=ts,
+                    )
+                    new_whales.append(alert)
+                    stats["whale_count"] += 1
+                    stats["whale_volume"] += contracts
+
+            cursor = data.get("cursor", "")
+            if not cursor:
+                break
+
+        self.last_trade_ts = int(time.time())
+        self.whale_alerts = new_whales + self.whale_alerts
+        self.whale_alerts = self.whale_alerts[:500]
+
+        # Keep seen IDs from growing unbounded
+        if len(self._seen_trade_ids) > 50000:
+            self._seen_trade_ids = set(list(self._seen_trade_ids)[-25000:])
+
+        return new_whales, new_trade_count
+
+    def enrich_markets(self):
+        """Fetch market metadata for tickers we've seen in trades."""
+        active_tickers = sorted(
+            self._ticker_stats.keys(),
+            key=lambda t: self._ticker_stats[t]["volume"],
+            reverse=True,
+        )[:200]  # Top 200 by trade volume
+
+        # Batch fetch in groups of 100 (API limit for tickers param)
+        for i in range(0, len(active_tickers), 100):
+            batch = active_tickers[i:i+100]
+            try:
+                data = self.api.get_markets_by_tickers(batch)
+                for m in data.get("markets", []):
+                    ticker = m.get("ticker", "")
+                    stats = self._ticker_stats.get(ticker, {})
+
+                    self.market_snapshots[ticker] = MarketSnapshot(
+                        ticker=ticker,
+                        title=m.get("title", ticker),
+                        subtitle=m.get("subtitle", ""),
+                        volume_24h=_fp(m.get("volume_24h_fp")),
+                        total_volume=_fp(m.get("volume_fp")),
+                        open_interest=_fp(m.get("open_interest_fp")),
+                        yes_price=_fp(m.get("yes_ask_dollars")) or _fp(m.get("last_price_dollars")),
+                        no_price=_fp(m.get("no_ask_dollars")),
+                        last_price=_fp(m.get("last_price_dollars")),
+                        liquidity=_fp(m.get("liquidity_dollars")),
+                        trade_count=stats.get("count", 0),
+                        trade_volume=stats.get("volume", 0),
+                        trade_notional=stats.get("notional", 0),
+                        recent_whale_count=stats.get("whale_count", 0),
+                        recent_whale_volume=stats.get("whale_volume", 0),
+                        buy_pressure=stats.get("yes_vol", 0) - stats.get("no_vol", 0),
+                    )
+            except Exception:
+                # If batch fetch fails, build snapshots from trade data alone
+                for ticker in batch:
+                    if ticker not in self.market_snapshots:
+                        stats = self._ticker_stats.get(ticker, {})
+                        self.market_snapshots[ticker] = MarketSnapshot(
+                            ticker=ticker,
+                            title=ticker,
+                            trade_count=stats.get("count", 0),
+                            trade_volume=stats.get("volume", 0),
+                            trade_notional=stats.get("notional", 0),
+                            recent_whale_count=stats.get("whale_count", 0),
+                            recent_whale_volume=stats.get("whale_volume", 0),
+                            buy_pressure=stats.get("yes_vol", 0) - stats.get("no_vol", 0),
+                        )
+
+    def score_markets(self):
+        """Score markets by composite activity."""
+        if not self.market_snapshots:
+            return []
+
+        all_snaps = list(self.market_snapshots.values())
+
+        max_trade_vol = max((s.trade_volume for s in all_snaps), default=1) or 1
+        max_trade_not = max((s.trade_notional for s in all_snaps), default=1) or 1
+        max_whale_vol = max((s.recent_whale_volume for s in all_snaps), default=1) or 1
+        max_whale_count = max((s.recent_whale_count for s in all_snaps), default=1) or 1
+        max_oi = max((s.open_interest for s in all_snaps), default=1) or 1
+        max_trades = max((s.trade_count for s in all_snaps), default=1) or 1
+
+        for s in all_snaps:
+            s.score = (
+                (s.trade_volume / max_trade_vol) * 0.25
+                + (s.trade_notional / max_trade_not) * 0.15
+                + (s.recent_whale_volume / max_whale_vol) * 0.25
+                + (s.recent_whale_count / max_whale_count) * 0.10
+                + (s.open_interest / max_oi) * 0.10
+                + (s.trade_count / max_trades) * 0.15
+            )
+
+        return sorted(all_snaps, key=lambda s: s.score, reverse=True)
+
+    def get_top_markets(self, n=20):
+        return self.score_markets()[:n]
+
+    def get_volume_leaders(self, n=15):
+        snaps = list(self.market_snapshots.values())
+        return sorted(snaps, key=lambda s: s.trade_volume, reverse=True)[:n]
+
+    def get_whale_magnets(self, n=15):
+        """Markets attracting the most whale activity."""
+        snaps = list(self.market_snapshots.values())
+        return sorted(snaps, key=lambda s: s.recent_whale_volume, reverse=True)[:n]
