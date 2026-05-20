@@ -192,7 +192,7 @@ async def api_crypto_signal() -> JSONResponse:
         if "KXBTC15M" not in ticker.upper():
             continue
         price = snap.last_price or snap.yes_price or 0
-        if 0.05 < price < 0.95:
+        if 0.01 < price < 0.99:
             if active is None or snap.recent_whale_count > active[1].recent_whale_count:
                 active = (ticker, snap)
 
