@@ -29,6 +29,9 @@ from dashboard import (
     build_whale_magnets_table, build_alpha_table,
 )
 from crypto_dashboard import run_crypto_dashboard
+from whale_research import (
+    research_whale_markets, build_verdict_table, verdicts_to_json,
+)
 
 from rich.console import Console
 from rich.panel import Panel
@@ -73,6 +76,57 @@ def snapshot_mode(scanner, alpha_engine):
 
     # Recent whales
     console.print(Panel(build_whale_table(scanner.whale_alerts, limit=20), border_style="yellow"))
+
+
+def whale_research_mode(scanner, alpha_engine, json_output=False):
+    """Whale-driven research: every whale market → UP/DOWN verdict with confidence."""
+    console = Console()
+
+    if not json_output:
+        console.print("\n[bold cyan]KALSHI WHALE RESEARCH[/]\n")
+        console.print("[dim]Scanning trades...[/]")
+    new_whales, trade_count = scanner.scan_trades()
+    if not json_output:
+        console.print(f"  {trade_count} trades, {len(new_whales)} new whales "
+                      f"(>= {scanner.whale_threshold} contracts)")
+        console.print("[dim]Enriching market data...[/]")
+    scanner.enrich_markets()
+    if not json_output:
+        console.print(f"  {len(scanner.market_snapshots)} active markets")
+        console.print("[dim]Researching whale markets...[/]")
+
+    verdicts = research_whale_markets(scanner, alpha_engine)
+
+    if json_output:
+        print(json.dumps({
+            "verdicts": verdicts_to_json(verdicts),
+            "summary": {
+                "total_verdicts": len(verdicts),
+                "up": sum(1 for v in verdicts if v.verdict == "UP"),
+                "down": sum(1 for v in verdicts if v.verdict == "DOWN"),
+                "neutral": sum(1 for v in verdicts if v.verdict == "NEUTRAL"),
+            },
+        }, indent=2))
+        return
+
+    up = sum(1 for v in verdicts if v.verdict == "UP")
+    down = sum(1 for v in verdicts if v.verdict == "DOWN")
+    neutral = sum(1 for v in verdicts if v.verdict == "NEUTRAL")
+    console.print(f"  [bold green]{up} UP[/]  [bold red]{down} DOWN[/]  [dim]{neutral} neutral[/]\n")
+
+    console.print(Panel(build_verdict_table(verdicts, limit=30),
+                        border_style="magenta", title="WHALE → RESEARCH → VERDICT"))
+
+    # Top 5 with full reasoning
+    top = [v for v in verdicts if v.verdict != "NEUTRAL"][:5]
+    if top:
+        console.print("\n[bold]Top conviction trades:[/]\n")
+        for v in top:
+            color = "green" if v.verdict == "UP" else "red"
+            console.print(f"  [bold {color}]{v.verdict}[/] [cyan]{v.ticker}[/] "
+                          f"@ ${v.price:.2f}  fair ${v.fair_value:.2f}  "
+                          f"({v.edge_cents:+.1f}¢, {v.confidence:.0%} conf)")
+            console.print(f"    [dim]{v.reasoning}[/]\n")
 
 
 def json_mode(scanner, alpha_engine):
@@ -145,6 +199,8 @@ def main():
                         help="Seconds between scans in live mode (default: 30)")
     parser.add_argument("--snapshot", action="store_true",
                         help="Single scan, no live dashboard")
+    parser.add_argument("--whale-research", action="store_true", dest="whale_research",
+                        help="Whale-driven research: UP/DOWN verdict per whale market")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="JSON output (implies single scan)")
     parser.add_argument("--demo", action="store_true",
@@ -192,7 +248,9 @@ def main():
         console.print(f"  [bold cyan]Web dashboard: http://localhost:{args.web_port}/whales[/]")
         console.print(f"  [bold cyan]Crypto dashboard: http://localhost:{args.web_port}/crypto[/]")
 
-    if args.json_output:
+    if args.whale_research:
+        whale_research_mode(scanner, alpha_engine, json_output=args.json_output)
+    elif args.json_output:
         json_mode(scanner, alpha_engine)
     elif args.snapshot:
         snapshot_mode(scanner, alpha_engine)
