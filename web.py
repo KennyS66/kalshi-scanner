@@ -176,7 +176,8 @@ def _next_15m_expiry() -> "tuple[str, float]":
     exp = exp.replace(second=0, microsecond=0)
     months = {1:"JAN",2:"FEB",3:"MAR",4:"APR",5:"MAY",6:"JUN",
               7:"JUL",8:"AUG",9:"SEP",10:"OCT",11:"NOV",12:"DEC"}
-    suffix = f"{exp.day:02d}{months[exp.month]}{str(exp.year)[2:]}{exp.hour:02d}{exp.minute:02d}-{exp.minute:02d}"
+    # Format: YYMMMDDHHMIN e.g. 26MAY201745-45
+    suffix = f"{str(exp.year)[2:]}{months[exp.month]}{exp.day:02d}{exp.hour:02d}{exp.minute:02d}-{exp.minute:02d}"
     return suffix, exp.timestamp()
 
 
@@ -248,7 +249,8 @@ async def api_crypto_signal() -> JSONResponse:
         months = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
                   "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
         import datetime as dt
-        exp = dt.datetime(2000+int(m.group(3)), months[m.group(2)], int(m.group(1)),
+        # Format: YYMMMDDHHMIN e.g. 26MAY201745 = 2026, May, day 20, 17:45
+        exp = dt.datetime(2000+int(m.group(1)), months[m.group(2)], int(m.group(3)),
                           int(m.group(4)), int(m.group(5)), tzinfo=dt.timezone.utc)
         mins_left = round((exp.timestamp() - time.time()) / 60, 1)
 
@@ -916,7 +918,7 @@ function parseExpiry15m(ticker) {
   const m = ticker.match(/(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})-/);
   if (!m) return null;
   const months = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
-  return new Date(Date.UTC(2000+parseInt(m[3]), months[m[2]], parseInt(m[1]), parseInt(m[4]), parseInt(m[5])));
+  return new Date(Date.UTC(2000+parseInt(m[1]), months[m[2]], parseInt(m[3]), parseInt(m[4]), parseInt(m[5])));
 }
 
 function expiryStr(ticker, is15m) {
