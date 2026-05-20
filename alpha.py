@@ -493,6 +493,144 @@ def detect_odds_edge(scanner, odds_api):
     return sorted(signals, key=lambda s: s.strength, reverse=True)
 
 
+# ── BTC Strike Monotonicity Arb ─────────────────────────────────────
+
+def _btc_strike(ticker: str):
+    """Return (strike_int, direction_char) from KXBTCD-T77000-... or None."""
+    m = re.search(r'-([TB])(\d{4,6})', ticker.upper())
+    if not m:
+        return None, None
+    return int(m.group(2)), m.group(1)  # e.g. (77000, 'T')
+
+
+def detect_btc_strike_arb(scanner):
+    """
+    P(BTC > higher_strike) must be <= P(BTC > lower_strike).
+    Any inversion is a tradeable arb.
+    """
+    signals = []
+
+    # Build {(series_key, direction): [(strike, price, snap), ...]}
+    buckets: dict = {}
+    for ticker, snap in scanner.market_snapshots.items():
+        if not ticker.upper().startswith("KXBTC"):
+            continue
+        strike, direction = _btc_strike(ticker)
+        if strike is None:
+            continue
+        price = snap.last_price or snap.yes_price
+        if not price or price <= 0.01 or price >= 0.99:
+            continue
+        # Group by date suffix so we only compare same-expiry markets
+        parts = ticker.split("-")
+        date_key = parts[-1] if len(parts) >= 3 else "all"
+        key = (date_key, direction)
+        buckets.setdefault(key, []).append((strike, price, snap))
+
+    for (date_key, direction), entries in buckets.items():
+        if len(entries) < 2:
+            continue
+        entries.sort(key=lambda x: x[0])  # ascending strike
+
+        for i in range(len(entries) - 1):
+            s_lo, p_lo, snap_lo = entries[i]
+            s_hi, p_hi, snap_hi = entries[i + 1]
+
+            if direction == "T":
+                # P(above higher) should be < P(above lower)
+                if p_hi > p_lo + 0.03:
+                    edge = p_hi - p_lo
+                    signals.append(AlphaSignal(
+                        ticker=snap_hi.ticker,
+                        title=snap_hi.title or snap_hi.ticker,
+                        signal_type="btc_strike_arb",
+                        direction="no",
+                        strength=min(edge / 0.15, 1.0),
+                        edge_pct=round(edge * 100, 1),
+                        kalshi_price=p_hi,
+                        fair_value=round(p_lo * 0.97, 3),
+                        detail=(
+                            f"P(BTC>{s_hi:,}) = {p_hi:.2f} > P(BTC>{s_lo:,}) = {p_lo:.2f}. "
+                            f"Higher strike must be cheaper. Sell {snap_hi.ticker}."
+                        ),
+                    ))
+            else:
+                # P(below lower) should be < P(below higher)
+                if p_lo > p_hi + 0.03:
+                    edge = p_lo - p_hi
+                    signals.append(AlphaSignal(
+                        ticker=snap_lo.ticker,
+                        title=snap_lo.title or snap_lo.ticker,
+                        signal_type="btc_strike_arb",
+                        direction="no",
+                        strength=min(edge / 0.15, 1.0),
+                        edge_pct=round(edge * 100, 1),
+                        kalshi_price=p_lo,
+                        fair_value=round(p_hi * 0.97, 3),
+                        detail=(
+                            f"P(BTC<{s_lo:,}) = {p_lo:.2f} > P(BTC<{s_hi:,}) = {p_hi:.2f}. "
+                            f"Lower threshold must be cheaper. Sell {snap_lo.ticker}."
+                        ),
+                    ))
+
+    return sorted(signals, key=lambda s: s.strength, reverse=True)
+
+
+# ── BTC Ladder Sweep ─────────────────────────────────────────────────
+
+def detect_btc_ladder_sweep(scanner):
+    """
+    If whales are buying the same direction across 3+ BTC 15m markets,
+    it's a coordinated directional bet — high conviction signal.
+    """
+    signals = []
+
+    yes_markets = []
+    no_markets = []
+
+    for ticker, snap in scanner.market_snapshots.items():
+        if "KXBTC15M" not in ticker.upper() and not ("KXBTC" in ticker.upper() and "15M" in ticker.upper()):
+            continue
+        if snap.recent_whale_count == 0:
+            continue
+        price = snap.last_price or snap.yes_price
+        if not price or price <= 0.01 or price >= 0.99:
+            continue
+        if snap.buy_pressure > 0:
+            yes_markets.append(snap)
+        elif snap.buy_pressure < 0:
+            no_markets.append(snap)
+
+    for direction, mkt_list in (("yes", yes_markets), ("no", no_markets)):
+        if len(mkt_list) < 3:
+            continue
+
+        total_whales = sum(s.recent_whale_count for s in mkt_list)
+        total_notional = sum(s.trade_notional for s in mkt_list)
+        top = max(mkt_list, key=lambda s: s.recent_whale_count)
+        price = top.last_price or top.yes_price or 0.5
+
+        strength = min(len(mkt_list) / 8, 1.0) * 0.6 + min(total_whales / 20, 1.0) * 0.4
+
+        signals.append(AlphaSignal(
+            ticker=top.ticker,
+            title=f"BTC 15m ladder sweep ({len(mkt_list)} markets)",
+            signal_type="btc_ladder_sweep",
+            direction=direction,
+            strength=round(strength, 3),
+            edge_pct=round(strength * 20, 1),
+            kalshi_price=price,
+            fair_value=round(price + (0.05 if direction == "yes" else -0.05), 3),
+            detail=(
+                f"{len(mkt_list)} BTC 15m markets with {direction.upper()} whale flow. "
+                f"{total_whales} total whale prints, ${total_notional:,.0f} notional. "
+                f"Coordinated directional positioning."
+            ),
+        ))
+
+    return sorted(signals, key=lambda s: s.strength, reverse=True)
+
+
 # ── Main Alpha Engine ────────────────────────────────────────────────
 
 class AlphaEngine:
@@ -518,6 +656,12 @@ class AlphaEngine:
         # 4. External odds comparison
         if self.odds_api and self.odds_api.api_key:
             all_signals.extend(detect_odds_edge(self.scanner, self.odds_api))
+
+        # 5. BTC strike monotonicity arb
+        all_signals.extend(detect_btc_strike_arb(self.scanner))
+
+        # 6. BTC 15m ladder sweep
+        all_signals.extend(detect_btc_ladder_sweep(self.scanner))
 
         # Deduplicate — keep strongest signal per ticker
         best_by_ticker = {}

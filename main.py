@@ -28,6 +28,7 @@ from dashboard import (
     run_dashboard, build_whale_table, build_top_markets_table,
     build_whale_magnets_table, build_alpha_table,
 )
+from crypto_dashboard import run_crypto_dashboard
 
 from rich.console import Console
 from rich.panel import Panel
@@ -154,6 +155,12 @@ def main():
                         help="Path to RSA private key PEM file")
     parser.add_argument("--odds-key", type=str, default=None,
                         help="The Odds API key (free at the-odds-api.com)")
+    parser.add_argument("--crypto", action="store_true",
+                        help="Crypto-only TUI (BTC/ETH strike ladder, whale flow, alpha)")
+    parser.add_argument("--web", action="store_true",
+                        help="Start web dashboard at /whales (BTC signal cards + whale feed)")
+    parser.add_argument("--web-port", type=int, default=9050,
+                        help="Web dashboard port (default: 9050)")
 
     args = parser.parse_args()
 
@@ -177,10 +184,20 @@ def main():
         odds_api_key=odds_key,
     )
 
+    if args.web:
+        from web import init as web_init, start_background
+        web_init(scanner, alpha_engine)
+        start_background(args.web_port)
+        console = Console()
+        console.print(f"  [bold cyan]Web dashboard: http://localhost:{args.web_port}/whales[/]")
+        console.print(f"  [bold cyan]Crypto dashboard: http://localhost:{args.web_port}/crypto[/]")
+
     if args.json_output:
         json_mode(scanner, alpha_engine)
     elif args.snapshot:
         snapshot_mode(scanner, alpha_engine)
+    elif args.crypto:
+        run_crypto_dashboard(scanner, alpha_engine=alpha_engine, refresh_seconds=args.refresh)
     else:
         run_dashboard(scanner, alpha_engine=alpha_engine, refresh_seconds=args.refresh)
 
