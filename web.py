@@ -187,15 +187,33 @@ async def api_crypto_signal() -> JSONResponse:
     if _scanner is None:
         return JSONResponse({"status": "no_data"})
 
+    import datetime as dt
+    _months = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
+               "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
+
+    def _ticker_expiry(t):
+        m = re.search(r'(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})', t)
+        if not m:
+            return None
+        try:
+            return dt.datetime(2000+int(m.group(1)), _months[m.group(2)], int(m.group(3)),
+                               int(m.group(4)), int(m.group(5)), tzinfo=dt.timezone.utc)
+        except Exception:
+            return None
+
     # Find active (unsettled) BTC 15m market — prefer most whale activity
     active = None
     for ticker, snap in list(_scanner.market_snapshots.items()):
         if "KXBTC15M" not in ticker.upper():
             continue
         price = snap.last_price or snap.yes_price or 0
-        if 0.01 < price < 0.99:
-            if active is None or snap.recent_whale_count > active[1].recent_whale_count:
-                active = (ticker, snap)
+        if not (0.01 < price < 0.99):
+            continue
+        exp = _ticker_expiry(ticker)
+        if exp and (exp.timestamp() - time.time()) < -120:
+            continue  # expired more than 2 minutes ago
+        if active is None or snap.recent_whale_count > active[1].recent_whale_count:
+            active = (ticker, snap)
 
     # If no active market found, also check Kalshi directly for the current ticker
     if not active:
