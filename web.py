@@ -247,12 +247,8 @@ async def api_crypto_signal() -> JSONResponse:
     total_c = yes_c + no_c or 1
     yes_pct = yes_c / total_c
 
-    # Direction from buy_pressure (fastest signal) + whale ratio
-    bp_dir = "YES" if snap.buy_pressure >= 0 else "NO"
-    flow_dir = "YES" if yes_pct >= 0.5 else "NO"
-    direction = "YES" if (yes_pct >= 0.5 and snap.buy_pressure >= 0) else \
-                "NO"  if (yes_pct < 0.5 and snap.buy_pressure < 0) else \
-                bp_dir  # tiebreak on buy_pressure
+    # Whale flow is the primary signal — retail buy_pressure is noise
+    direction = "YES" if yes_pct >= 0.5 else "NO"
 
     # Confidence 0-100
     ratio_conf = abs(yes_pct - 0.5) * 2          # 0-1
