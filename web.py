@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import json
 import re
@@ -16,6 +17,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 _scanner = None
 _alpha_engine = None
+
+# BTC spot price history — filled by background poller every 5s
+_btc_spot_history: collections.deque = collections.deque(maxlen=20)
+_btc_spot_lock = threading.Lock()
+# Kalshi floor_strike per ticker — fetched once per market
+_market_floor_strike: dict[str, float] = {}
 
 app = FastAPI(title="kalshi-scanner")
 
@@ -56,6 +63,21 @@ def _is_15m_or_1h(ticker: str) -> bool:
     return "15M" in t or "1H" in t
 
 
+def _btc_spot_poller_loop(interval: float = 5.0) -> None:
+    """Background thread: poll BTC spot from Coinbase every 5s."""
+    import urllib.request as ur
+    while True:
+        time.sleep(interval)
+        with contextlib.suppress(Exception):
+            req = ur.Request("https://api.coinbase.com/v2/prices/BTC-USD/spot",
+                             headers={"User-Agent": "kalshi-scanner/1.0"})
+            with ur.urlopen(req, timeout=4) as r:
+                data = json.loads(r.read())
+                price = float(data["data"]["amount"])
+                with _btc_spot_lock:
+                    _btc_spot_history.append((time.time(), price))
+
+
 def _pick_writer_loop(interval: int = 30) -> None:
     while True:
         time.sleep(interval)
@@ -67,6 +89,7 @@ def _pick_writer_loop(interval: int = 30) -> None:
 
 def start_background(port: int = 9050) -> threading.Thread:
     threading.Thread(target=_pick_writer_loop, daemon=True).start()
+    threading.Thread(target=_btc_spot_poller_loop, daemon=True).start()
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error")
     server = uvicorn.Server(config)
     t = threading.Thread(target=server.run, daemon=True)
@@ -180,7 +203,7 @@ def _next_15m_expiry() -> "tuple[str, float]":
 
 @app.get("/api/crypto/signal")
 async def api_crypto_signal() -> JSONResponse:
-    """Analyze active BTC 15m market and return UP/DOWN recommendation."""
+    """Analyze active BTC 15m market: blends whale flow + spot-vs-strike + momentum."""
     if _scanner is None:
         return JSONResponse({"status": "no_data"})
 
@@ -195,7 +218,6 @@ async def api_crypto_signal() -> JSONResponse:
         if not m:
             return None
         try:
-            # Times in tickers are US Eastern Time (ET), not UTC
             return dt.datetime(2000+int(m.group(1)), _months[m.group(2)], int(m.group(3)),
                                int(m.group(4)), int(m.group(5)), tzinfo=_ET)
         except Exception:
@@ -215,7 +237,6 @@ async def api_crypto_signal() -> JSONResponse:
         if active is None or snap.recent_whale_count > active[1].recent_whale_count:
             active = (ticker, snap)
 
-    # If no active market found, also check Kalshi directly for the current ticker
     if not active:
         try:
             next_suffix, next_ts = _next_15m_expiry()
@@ -247,27 +268,85 @@ async def api_crypto_signal() -> JSONResponse:
     total_c = yes_c + no_c or 1
     yes_pct = yes_c / total_c
 
-    # Whale flow is the primary signal — retail buy_pressure is noise
-    direction = "YES" if yes_pct >= 0.5 else "NO"
-
-    # Confidence 0-100
-    ratio_conf = abs(yes_pct - 0.5) * 2          # 0-1
-    bp_mag = min(abs(snap.buy_pressure) / 10000, 1.0)
-    whale_conf = min(snap.recent_whale_count / 300, 1.0)
-    confidence = round((ratio_conf * 0.5 + bp_mag * 0.3 + whale_conf * 0.2) * 100)
-
-    # Parse expiry minutes remaining from ticker (KXBTC15M-26MAY201645-45)
+    # Minutes left
     mins_left = None
-    m = re.search(r'(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})', ticker)
-    if m:
-        months = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
-                  "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
-        import datetime as dt
-        from zoneinfo import ZoneInfo
-        # Ticker times are US Eastern (ET) — YYMMMDDHHMIN e.g. 26MAY201745 = 2026-05-20 17:45 ET
-        exp = dt.datetime(2000+int(m.group(1)), months[m.group(2)], int(m.group(3)),
-                          int(m.group(4)), int(m.group(5)), tzinfo=ZoneInfo("America/New_York"))
-        mins_left = round((exp.timestamp() - time.time()) / 60, 1)
+    mx = re.search(r'(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})', ticker)
+    if mx:
+        exp_dt = dt.datetime(2000+int(mx.group(1)), _months[mx.group(2)], int(mx.group(3)),
+                             int(mx.group(4)), int(mx.group(5)), tzinfo=_ET)
+        mins_left = round((exp_dt.timestamp() - time.time()) / 60, 1)
+
+    # ── Floor strike (fetch from Kalshi once per market) ────────────────
+    if ticker not in _market_floor_strike:
+        with contextlib.suppress(Exception):
+            async with httpx.AsyncClient(timeout=4) as client:
+                r = await client.get(
+                    f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}"
+                )
+                mkt = r.json().get("market", {})
+                fs = mkt.get("floor_strike")
+                if fs is not None:
+                    _market_floor_strike[ticker] = float(fs)
+
+    floor_strike = _market_floor_strike.get(ticker)
+
+    # ── BTC spot + momentum from poller history ──────────────────────────
+    with _btc_spot_lock:
+        hist = list(_btc_spot_history)
+
+    spot = hist[-1][1] if hist else None
+    momentum = None  # $/min, positive = BTC rising
+
+    if len(hist) >= 2:
+        recent = [(t, p) for t, p in hist if time.time() - t < 90]
+        if len(recent) >= 2:
+            dt_span = recent[-1][0] - recent[0][0]
+            dp_span = recent[-1][1] - recent[0][1]
+            if dt_span > 1:
+                momentum = round((dp_span / dt_span) * 60, 2)  # $/min
+
+    # ── Distance from strike ─────────────────────────────────────────────
+    distance = None
+    if spot is not None and floor_strike is not None:
+        distance = round(spot - floor_strike, 2)
+
+    # ── Three component signals, each -1 to +1 ───────────────────────────
+    # Whale: positive = more whale YES contracts
+    whale_signal = (yes_pct - 0.5) * 2
+
+    # Spot: positive = BTC currently above the strike (in-the-money for YES)
+    # $200 above/below = half signal; $500 = full
+    spot_signal = 0.0
+    if distance is not None:
+        spot_signal = max(-1.0, min(1.0, distance / 400.0))
+
+    # Momentum: positive = BTC trending up; $80/min = full signal
+    momentum_signal = 0.0
+    if momentum is not None:
+        momentum_signal = max(-1.0, min(1.0, momentum / 80.0))
+
+    # ── Time-weighted blend ───────────────────────────────────────────────
+    # Late in market: spot dominates (where is BTC right now vs strike?)
+    # Early: whale flow and momentum matter more
+    mins_remaining = max(mins_left or 15.0, 0.5)
+    if mins_remaining < 2:
+        w = (0.15, 0.70, 0.15)  # final minutes: almost pure spot
+    elif mins_remaining < 5:
+        w = (0.25, 0.50, 0.25)
+    elif mins_remaining < 9:
+        w = (0.35, 0.35, 0.30)
+    else:
+        w = (0.45, 0.20, 0.35)  # early: whale + momentum, spot less reliable
+
+    # If spot/strike not available yet, fall back to whale+momentum only
+    if floor_strike is None or spot is None:
+        w_total = w[0] + w[2] or 1.0
+        combined = (whale_signal * w[0] + momentum_signal * w[2]) / w_total
+    else:
+        combined = whale_signal * w[0] + spot_signal * w[1] + momentum_signal * w[2]
+
+    direction = "YES" if combined >= 0 else "NO"
+    confidence = round(min(abs(combined), 1.0) * 100)
 
     return JSONResponse({
         "status": "ok",
@@ -275,6 +354,7 @@ async def api_crypto_signal() -> JSONResponse:
         "direction": direction,
         "confidence": confidence,
         "price": round(price, 4),
+        # Whale component
         "yes_pct": round(yes_pct * 100, 1),
         "yes_contracts": round(yes_c),
         "no_contracts": round(no_c),
@@ -282,6 +362,17 @@ async def api_crypto_signal() -> JSONResponse:
         "no_notional": round(no_not),
         "whale_count": snap.recent_whale_count,
         "buy_pressure": round(snap.buy_pressure),
+        # Spot / strike component
+        "spot": round(spot, 2) if spot is not None else None,
+        "floor_strike": round(floor_strike, 2) if floor_strike is not None else None,
+        "distance": distance,
+        # Momentum component
+        "momentum": momentum,
+        # Raw signal values (-100 to +100)
+        "sig_whale": round(whale_signal * 100),
+        "sig_spot": round(spot_signal * 100),
+        "sig_momentum": round(momentum_signal * 100),
+        "sig_combined": round(combined * 100),
         "mins_left": mins_left,
         "ts": time.time(),
     })
@@ -426,6 +517,12 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .sig-stat .k { font-size:10px; color:var(--mute); text-transform:uppercase; }
 .sig-stat .v { font-weight:700; font-variant-numeric:tabular-nums; }
 
+.sig-components { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.sig-comp { padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;
+            border:1px solid var(--border); white-space:nowrap; }
+.sig-comp.bull { background:#0d1f10; color:var(--green); border-color:#2d5a3d; }
+.sig-comp.bear { background:#1f0d0d; color:var(--red);   border-color:#5a2a2a; }
+.sig-comp.neut { background:var(--bg3); color:var(--mute); }
 .sig-ticker-label { font-size:11px; color:var(--mute); margin-left:auto; }
 .sig-reset-badge  { font-size:10px; padding:2px 7px; border-radius:10px; background:#1a3a2a; color:var(--green);
                     border:1px solid #2d5a3d; white-space:nowrap; }
@@ -515,7 +612,7 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
 
 <div class="signal-banner" id="signal-banner">
   <div class="sig-direction" id="sig-dir">—</div>
-  <div>
+  <div style="min-width:220px">
     <div style="font-size:13px;font-weight:700;margin-bottom:3px" id="sig-label">waiting for market data…</div>
     <div class="sig-conf">
       Confidence <span id="sig-conf-val">—</span>
@@ -523,6 +620,7 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
     </div>
   </div>
   <div class="sig-stats" id="sig-stats"></div>
+  <div class="sig-components" id="sig-components"></div>
   <span class="sig-ticker-label" id="sig-ticker"></span>
   <span id="sig-badge" style="display:none" class="sig-reset-badge">NEW MARKET</span>
 </div>
@@ -721,6 +819,14 @@ refresh(); setInterval(refresh, 3000);
 let _lastTicker = null;
 let _t1Timer = null;
 
+function fmt$2(n) { return n==null?'—':'$'+Math.round(n).toLocaleString(); }
+function sigComp(label, val, suffix='') {
+  if(val==null) return '';
+  const cls = val > 8 ? 'bull' : val < -8 ? 'bear' : 'neut';
+  const arrow = val > 8 ? '▲' : val < -8 ? '▼' : '▶';
+  return `<span class="sig-comp ${cls}">${arrow} ${label}${suffix}</span>`;
+}
+
 function renderSignalBanner(s, isT1=false) {
   if(!s || s.status !== 'ok') return;
   const banner = $('signal-banner');
@@ -733,10 +839,19 @@ function renderSignalBanner(s, isT1=false) {
   banner.className = 'signal-banner ' + dirCls + ' flash';
   setTimeout(() => banner.classList.remove('flash'), 700);
 
+  // Label line: show buy side + spot vs strike if available
   const edgeCents = Math.round(Math.abs((isUp ? s.yes_pct/100 : (100-s.yes_pct)/100) - s.price) * 100);
-  $('sig-label').textContent = isUp
-    ? `BUY YES — whales ${s.yes_pct}% YES at ${(s.price*100).toFixed(1)}¢ (edge ~${edgeCents}¢)`
-    : `BUY NO  — whales ${(100-s.yes_pct).toFixed(1)}% NO at ${((1-s.price)*100).toFixed(1)}¢ (edge ~${edgeCents}¢)`;
+  let spotStr = '';
+  if(s.spot != null && s.floor_strike != null) {
+    const dist = s.distance;
+    const sign = dist >= 0 ? '+' : '';
+    const distCls = dist >= 0 ? 'pos' : 'neg';
+    spotStr = ` · spot ${fmt$2(s.spot)} vs ${fmt$2(s.floor_strike)} (<span class="${distCls}">${sign}$${Math.round(Math.abs(dist)).toLocaleString()}</span>)`;
+  }
+  $('sig-label').innerHTML = (isUp
+    ? `BUY YES — whales ${s.yes_pct}% YES at ${(s.price*100).toFixed(1)}¢`
+    : `BUY NO  — whales ${(100-s.yes_pct).toFixed(1)}% NO at ${((1-s.price)*100).toFixed(1)}¢`)
+    + ` (edge ~${edgeCents}¢)` + spotStr;
 
   $('sig-conf-val').textContent = s.confidence + '%';
   const bar = $('conf-bar');
@@ -747,14 +862,21 @@ function renderSignalBanner(s, isT1=false) {
     ? (s.mins_left < 0 ? 'expired' : s.mins_left.toFixed(1) + 'm left')
     : '';
 
+  // Stats row: whale details
   $('sig-stats').innerHTML = `
     <div class="sig-stat"><span class="k">Whale flow</span><span class="v" style="color:${isUp?'var(--green)':'var(--red)'}">${s.yes_pct}% YES</span></div>
-    <div class="sig-stat"><span class="k">YES contracts</span><span class="v pos">${s.yes_contracts.toLocaleString()}</span></div>
-    <div class="sig-stat"><span class="k">NO contracts</span><span class="v neg">${s.no_contracts.toLocaleString()}</span></div>
-    <div class="sig-stat"><span class="k">Net pressure</span><span class="v ${s.buy_pressure>=0?'pos':'neg'}">${s.buy_pressure>=0?'+':''}${s.buy_pressure.toLocaleString()}</span></div>
+    <div class="sig-stat"><span class="k">YES / NO</span><span class="v"><span class="pos">${s.yes_contracts.toLocaleString()}</span> / <span class="neg">${s.no_contracts.toLocaleString()}</span></span></div>
     <div class="sig-stat"><span class="k">Whales</span><span class="v">${s.whale_count}</span></div>
+    ${s.momentum!=null ? `<div class="sig-stat"><span class="k">Momentum</span><span class="v ${s.momentum>=0?'pos':'neg'}">${s.momentum>=0?'+':''}${s.momentum.toFixed(0)}/min</span></div>` : ''}
     ${minsStr ? `<div class="sig-stat"><span class="k">Expires</span><span class="v dim">${minsStr}</span></div>` : ''}
   `;
+
+  // Signal component badges
+  $('sig-components').innerHTML =
+    sigComp('Whale', s.sig_whale) +
+    sigComp('Spot', s.sig_spot) +
+    sigComp('Momo', s.sig_momentum) +
+    (s.sig_combined != null ? `<span class="sig-comp ${s.sig_combined>8?'bull':s.sig_combined<-8?'bear':'neut'}" style="font-size:12px;padding:3px 10px">NET ${s.sig_combined>0?'+':''}${s.sig_combined}</span>` : '');
 
   const parts = s.ticker.split('-');
   $('sig-ticker').textContent = parts.slice(1).join('-') || s.ticker;
