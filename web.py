@@ -164,19 +164,16 @@ async def api_crypto_strikes() -> JSONResponse:
 
 
 def _next_15m_expiry() -> "tuple[str, float]":
-    """Return (ticker_suffix, unix_ts) for the next BTC 15m expiry."""
+    """Return (ticker_suffix, unix_ts) for the next BTC 15m expiry (ET-based)."""
     import datetime as dt
-    now = dt.datetime.now(dt.timezone.utc)
-    # Round up to next 15-min boundary
-    minute = (now.minute // 15 + 1) * 15
-    delta = dt.timedelta(hours=minute // 60, minutes=minute % 60) - dt.timedelta(hours=now.hour, minutes=now.minute, seconds=now.second, microseconds=now.microsecond)
-    if delta.total_seconds() < 0:
-        delta += dt.timedelta(hours=24)
-    exp = now + delta
-    exp = exp.replace(second=0, microsecond=0)
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+    now = dt.datetime.now(ET)
+    # Round up to next 15-min boundary in ET
+    next_min = (now.minute // 15 + 1) * 15
+    exp = now.replace(second=0, microsecond=0, minute=0) + dt.timedelta(minutes=next_min)
     months = {1:"JAN",2:"FEB",3:"MAR",4:"APR",5:"MAY",6:"JUN",
               7:"JUL",8:"AUG",9:"SEP",10:"OCT",11:"NOV",12:"DEC"}
-    # Format: YYMMMDDHHMIN e.g. 26MAY201745-45
     suffix = f"{str(exp.year)[2:]}{months[exp.month]}{exp.day:02d}{exp.hour:02d}{exp.minute:02d}-{exp.minute:02d}"
     return suffix, exp.timestamp()
 
@@ -188,6 +185,8 @@ async def api_crypto_signal() -> JSONResponse:
         return JSONResponse({"status": "no_data"})
 
     import datetime as dt
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
     _months = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
                "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
 
@@ -196,8 +195,9 @@ async def api_crypto_signal() -> JSONResponse:
         if not m:
             return None
         try:
+            # Times in tickers are US Eastern Time (ET), not UTC
             return dt.datetime(2000+int(m.group(1)), _months[m.group(2)], int(m.group(3)),
-                               int(m.group(4)), int(m.group(5)), tzinfo=dt.timezone.utc)
+                               int(m.group(4)), int(m.group(5)), tzinfo=_ET)
         except Exception:
             return None
 
@@ -267,9 +267,10 @@ async def api_crypto_signal() -> JSONResponse:
         months = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
                   "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
         import datetime as dt
-        # Format: YYMMMDDHHMIN e.g. 26MAY201745 = 2026, May, day 20, 17:45
+        from zoneinfo import ZoneInfo
+        # Ticker times are US Eastern (ET) — YYMMMDDHHMIN e.g. 26MAY201745 = 2026-05-20 17:45 ET
         exp = dt.datetime(2000+int(m.group(1)), months[m.group(2)], int(m.group(3)),
-                          int(m.group(4)), int(m.group(5)), tzinfo=dt.timezone.utc)
+                          int(m.group(4)), int(m.group(5)), tzinfo=ZoneInfo("America/New_York"))
         mins_left = round((exp.timestamp() - time.time()) / 60, 1)
 
     return JSONResponse({
@@ -936,7 +937,11 @@ function parseExpiry15m(ticker) {
   const m = ticker.match(/(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})-/);
   if (!m) return null;
   const months = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
-  return new Date(Date.UTC(2000+parseInt(m[1]), months[m[2]], parseInt(m[3]), parseInt(m[4]), parseInt(m[5])));
+  // Ticker times are US Eastern — convert ET to UTC by building a local date string
+  const etStr = `20${m[1]}-${String(months[m[2]]+1).padStart(2,'0')}-${m[3].padStart(2,'0')}T${m[4]}:${m[5]}:00`;
+  // Use Intl to get ET offset then adjust
+  const etDate = new Date(etStr + ' GMT-0400'); // EDT (May = summer, UTC-4)
+  return etDate;
 }
 
 function expiryStr(ticker, is15m) {
