@@ -11,6 +11,10 @@ Monitors Kalshi prediction markets for edge opportunities:
 Usage:
   python main.py                              # Live dashboard
   python main.py --snapshot                   # Single scan
+  python main.py --crypto                     # Crypto live TUI (BTC/ETH strike ladder)
+  python main.py --crypto-snapshot            # Crypto screen snapshot: spot vs strike
+  python main.py --crypto-snapshot --json     # Crypto snapshot as JSON
+  python main.py --whale-research             # UP/DOWN verdict per whale market
   python main.py --json                       # JSON output
   python main.py --threshold 100              # Bigger whale threshold
   python main.py --lookback 120               # 2 hour lookback
@@ -27,6 +31,8 @@ from alpha import AlphaEngine
 from dashboard import (
     run_dashboard, build_whale_table, build_top_markets_table,
     build_whale_magnets_table, build_alpha_table,
+    build_crypto_screen_table, build_crypto_header,
+    CryptoSpot, crypto_symbol, _extract_strike,
 )
 from crypto_dashboard import run_crypto_dashboard
 from whale_research import (
@@ -36,19 +42,17 @@ from whale_research import (
 from rich.console import Console
 from rich.panel import Panel
 
-from dashboard import BTCPrice
-
 
 def snapshot_mode(scanner, alpha_engine):
     """Single scan with alpha analysis."""
     console = Console()
-    btc = BTCPrice()
-    btc.fetch()
-    spot = btc.price
+    crypto = CryptoSpot()
+    crypto.fetch()
+    spots = crypto.prices
 
     console.print("\n[bold cyan]KALSHI ALPHA SCANNER - SNAPSHOT[/]\n")
-    if spot:
-        console.print(f"  [bold orange1]BTC spot: ${spot:,.2f}[/]")
+    if spots:
+        console.print(build_crypto_header(spots))
 
     console.print("[dim]Scanning trades...[/]")
     new_whales, trade_count = scanner.scan_trades()
@@ -64,18 +68,87 @@ def snapshot_mode(scanner, alpha_engine):
 
     # Alpha signals first — this is what matters
     if signals:
-        console.print(Panel(build_alpha_table(signals, limit=20, btc_spot=spot), border_style="magenta", title="ALPHA SIGNALS"))
+        console.print(Panel(build_alpha_table(signals, limit=20, spots=spots), border_style="magenta", title="ALPHA SIGNALS"))
 
     # Top markets
     top = scanner.get_top_markets(15)
-    console.print(Panel(build_top_markets_table(top, btc_spot=spot), border_style="green"))
+    console.print(Panel(build_top_markets_table(top, spots=spots), border_style="green"))
 
     # Whale magnets
     magnets = scanner.get_whale_magnets(10)
-    console.print(Panel(build_whale_magnets_table(magnets, btc_spot=spot), border_style="red"))
+    console.print(Panel(build_whale_magnets_table(magnets, spots=spots), border_style="red"))
+
+    # Crypto screen
+    console.print(Panel(build_crypto_screen_table(scanner, spots, limit=25),
+                        border_style="orange1", title="CRYPTO SCREEN"))
 
     # Recent whales
     console.print(Panel(build_whale_table(scanner.whale_alerts, limit=20), border_style="yellow"))
+
+
+def crypto_mode(scanner, alpha_engine, json_output=False):
+    """Single scan focused on crypto markets — spot, strike, distance, edge."""
+    console = Console()
+    crypto = CryptoSpot()
+    crypto.fetch()
+    spots = crypto.prices
+
+    if not json_output:
+        console.print("\n[bold cyan]KALSHI CRYPTO SCREEN[/]\n")
+        if spots:
+            console.print(build_crypto_header(spots))
+        console.print("[dim]Scanning trades...[/]")
+    new_whales, trade_count = scanner.scan_trades()
+    if not json_output:
+        console.print(f"  {trade_count} trades, {len(new_whales)} whales")
+        console.print("[dim]Enriching market data...[/]")
+    scanner.enrich_markets()
+    if not json_output:
+        console.print(f"  {len(scanner.market_snapshots)} active markets")
+
+    # Filter scanner to crypto-only summary for stats
+    crypto_markets = {
+        t: s for t, s in scanner.market_snapshots.items() if crypto_symbol(t)
+    }
+
+    if json_output:
+        output = {
+            "spots": {sym: round(p, 6) for sym, p in spots.items()},
+            "crypto_markets": [],
+        }
+        for ticker, snap in crypto_markets.items():
+            sym = crypto_symbol(ticker)
+            strike, stype = _extract_strike(ticker)
+            spot = spots.get(sym, 0.0) if sym else 0.0
+            diff = (spot - strike) if (spot and strike) else None
+            yes = snap.yes_price or snap.last_price
+            output["crypto_markets"].append({
+                "ticker": ticker,
+                "symbol": sym,
+                "title": snap.title,
+                "type": stype or None,
+                "strike": strike,
+                "spot": round(spot, 6) if spot else None,
+                "distance": round(diff, 6) if diff is not None else None,
+                "distance_pct": round(diff / strike * 100, 4) if (diff is not None and strike) else None,
+                "yes_price": yes,
+                "last_price": snap.last_price,
+                "trade_volume": snap.trade_volume,
+                "trade_notional": round(snap.trade_notional, 2),
+                "whale_count": snap.recent_whale_count,
+                "whale_volume": snap.recent_whale_volume,
+                "buy_pressure": round(snap.buy_pressure, 2),
+            })
+        output["summary"] = {
+            "total_crypto_markets": len(crypto_markets),
+            "symbols_with_spot": sorted(spots.keys()),
+        }
+        print(json.dumps(output, indent=2))
+        return
+
+    console.print(f"  [bold orange1]{len(crypto_markets)} crypto markets[/]\n")
+    console.print(Panel(build_crypto_screen_table(scanner, spots, limit=60),
+                        border_style="orange1", title="CRYPTO SCREEN"))
 
 
 def whale_research_mode(scanner, alpha_engine, json_output=False):
@@ -201,6 +274,8 @@ def main():
                         help="Single scan, no live dashboard")
     parser.add_argument("--whale-research", action="store_true", dest="whale_research",
                         help="Whale-driven research: UP/DOWN verdict per whale market")
+    parser.add_argument("--crypto-snapshot", action="store_true", dest="crypto_mode",
+                        help="Crypto screen snapshot: spot vs strike for every crypto market (one-shot)")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="JSON output (implies single scan)")
     parser.add_argument("--demo", action="store_true",
@@ -250,6 +325,8 @@ def main():
 
     if args.whale_research:
         whale_research_mode(scanner, alpha_engine, json_output=args.json_output)
+    elif args.crypto_mode:
+        crypto_mode(scanner, alpha_engine, json_output=args.json_output)
     elif args.json_output:
         json_mode(scanner, alpha_engine)
     elif args.snapshot:
