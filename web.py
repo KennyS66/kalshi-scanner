@@ -19,10 +19,15 @@ _scanner = None
 _alpha_engine = None
 
 # BTC spot price history — filled by background poller every 5s
-_btc_spot_history: collections.deque = collections.deque(maxlen=20)
+_btc_spot_history: collections.deque = collections.deque(maxlen=40)
 _btc_spot_lock = threading.Lock()
 # Kalshi floor_strike per ticker — fetched once per market
 _market_floor_strike: dict[str, float] = {}
+# Whale flow history per ticker — (ts, yes_pct) pairs
+_whale_flow_history: dict[str, collections.deque] = {}
+# Signal decision log — last 20 market calls with outcomes
+_signal_log: list[dict] = []
+_signal_log_lock = threading.Lock()
 
 app = FastAPI(title="kalshi-scanner")
 
@@ -78,6 +83,30 @@ def _btc_spot_poller_loop(interval: float = 5.0) -> None:
                     _btc_spot_history.append((time.time(), price))
 
 
+def _outcome_checker_loop(interval: float = 30.0) -> None:
+    """Background thread: check if past signal tickers have finalized on Kalshi."""
+    import urllib.request as ur
+    while True:
+        time.sleep(interval)
+        with _signal_log_lock:
+            pending = [s for s in _signal_log if s.get("outcome") is None]
+        for sig in pending:
+            with contextlib.suppress(Exception):
+                ticker = sig["ticker"]
+                req = ur.Request(
+                    f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}",
+                    headers={"User-Agent": "kalshi-scanner/1.0"},
+                )
+                with ur.urlopen(req, timeout=4) as r:
+                    mkt = json.loads(r.read()).get("market", {})
+                    if mkt.get("status") == "finalized":
+                        result = mkt.get("result", "").upper()
+                        if result in ("YES", "NO"):
+                            with _signal_log_lock:
+                                sig["outcome"] = result
+                                sig["correct"] = (sig["direction"] == result)
+
+
 def _pick_writer_loop(interval: int = 30) -> None:
     while True:
         time.sleep(interval)
@@ -90,6 +119,7 @@ def _pick_writer_loop(interval: int = 30) -> None:
 def start_background(port: int = 9050) -> threading.Thread:
     threading.Thread(target=_pick_writer_loop, daemon=True).start()
     threading.Thread(target=_btc_spot_poller_loop, daemon=True).start()
+    threading.Thread(target=_outcome_checker_loop, daemon=True).start()
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error")
     server = uvicorn.Server(config)
     t = threading.Thread(target=server.run, daemon=True)
@@ -310,35 +340,66 @@ async def api_crypto_signal() -> JSONResponse:
     if spot is not None and floor_strike is not None:
         distance = round(spot - floor_strike, 2)
 
-    # ── Three component signals, each -1 to +1 ───────────────────────────
-    # Whale: positive = more whale YES contracts
-    whale_signal = (yes_pct - 0.5) * 2
+    # ── Whale flow trend (is conviction accelerating or fading?) ─────────
+    if ticker not in _whale_flow_history:
+        _whale_flow_history[ticker] = collections.deque(maxlen=40)
+    _whale_flow_history[ticker].append((time.time(), yes_pct))
 
-    # Spot: positive = BTC currently above the strike (in-the-money for YES)
-    # $200 above/below = half signal; $500 = full
+    whale_trend = 0.0  # yes_pct change per minute; positive = getting more bullish
+    wh_hist = list(_whale_flow_history[ticker])
+    if len(wh_hist) >= 2:
+        recent_wh = [(t, p) for t, p in wh_hist if time.time() - t < 180]
+        if len(recent_wh) >= 2:
+            dt_wh = recent_wh[-1][0] - recent_wh[0][0]
+            dp_wh = recent_wh[-1][1] - recent_wh[0][1]
+            if dt_wh > 1:
+                whale_trend = (dp_wh / dt_wh) * 60
+
+    # ── BTC realized volatility ($/min) — to scale distance signal ───────
+    import math
+    btc_vol_per_min = 50.0  # default fallback
+    if len(hist) >= 3:
+        recent_h = [(t, p) for t, p in hist if time.time() - t < 300]
+        if len(recent_h) >= 3:
+            moves = [abs(recent_h[i+1][1] - recent_h[i][1]) /
+                     max((recent_h[i+1][0] - recent_h[i][0]) / 60.0, 0.01)
+                     for i in range(len(recent_h) - 1)]
+            if moves:
+                btc_vol_per_min = sum(moves) / len(moves)
+
+    # ── Three component signals, each -1 to +1 ───────────────────────────
+    # Whale: flow (70%) + trend acceleration (30%)
+    whale_flow_sig = (yes_pct - 0.5) * 2
+    whale_trend_sig = max(-1.0, min(1.0, whale_trend * 4))  # 0.25/min → full
+    whale_signal = whale_flow_sig * 0.70 + whale_trend_sig * 0.30
+
+    # Spot: distance normalized by expected BTC range (vol × √mins_remaining)
+    mins_remaining = max(mins_left or 15.0, 0.5)
     spot_signal = 0.0
     if distance is not None:
-        spot_signal = max(-1.0, min(1.0, distance / 400.0))
+        expected_range = btc_vol_per_min * math.sqrt(mins_remaining)
+        spot_signal = max(-1.0, min(1.0, distance / max(expected_range, 1.0)))
 
-    # Momentum: positive = BTC trending up; $80/min = full signal
+    # Momentum: BTC $/min; scaled by vol so context-aware
     momentum_signal = 0.0
     if momentum is not None:
-        momentum_signal = max(-1.0, min(1.0, momentum / 80.0))
+        momentum_signal = max(-1.0, min(1.0, momentum / max(btc_vol_per_min, 1.0)))
+
+    # ── Bid/ask spread — market maker certainty indicator ─────────────────
+    yes_ask = snap.yes_price or 0
+    no_ask = snap.no_price or 0
+    spread = round(yes_ask + no_ask - 1.0, 4) if yes_ask and no_ask else None
 
     # ── Time-weighted blend ───────────────────────────────────────────────
-    # Late in market: spot dominates (where is BTC right now vs strike?)
-    # Early: whale flow and momentum matter more
-    mins_remaining = max(mins_left or 15.0, 0.5)
     if mins_remaining < 2:
-        w = (0.15, 0.70, 0.15)  # final minutes: almost pure spot
+        w = (0.15, 0.70, 0.15)
     elif mins_remaining < 5:
         w = (0.25, 0.50, 0.25)
     elif mins_remaining < 9:
         w = (0.35, 0.35, 0.30)
     else:
-        w = (0.45, 0.20, 0.35)  # early: whale + momentum, spot less reliable
+        w = (0.45, 0.20, 0.35)
 
-    # If spot/strike not available yet, fall back to whale+momentum only
     if floor_strike is None or spot is None:
         w_total = w[0] + w[2] or 1.0
         combined = (whale_signal * w[0] + momentum_signal * w[2]) / w_total
@@ -347,6 +408,24 @@ async def api_crypto_signal() -> JSONResponse:
 
     direction = "YES" if combined >= 0 else "NO"
     confidence = round(min(abs(combined), 1.0) * 100)
+
+    # ── Log signal (once per new ticker) ─────────────────────────────────
+    with _signal_log_lock:
+        if not _signal_log or _signal_log[-1]["ticker"] != ticker:
+            _signal_log.append({
+                "ticker": ticker,
+                "direction": direction,
+                "conf": confidence,
+                "yes_pct": round(yes_pct * 100, 1),
+                "price": round(price, 4),
+                "distance": distance,
+                "momentum": momentum,
+                "ts": time.time(),
+                "outcome": None,
+                "correct": None,
+            })
+            if len(_signal_log) > 20:
+                _signal_log.pop(0)
 
     return JSONResponse({
         "status": "ok",
@@ -362,10 +441,14 @@ async def api_crypto_signal() -> JSONResponse:
         "no_notional": round(no_not),
         "whale_count": snap.recent_whale_count,
         "buy_pressure": round(snap.buy_pressure),
+        "whale_trend": round(whale_trend * 100, 1),
         # Spot / strike component
         "spot": round(spot, 2) if spot is not None else None,
         "floor_strike": round(floor_strike, 2) if floor_strike is not None else None,
         "distance": distance,
+        "btc_vol_per_min": round(btc_vol_per_min, 1),
+        # Bid/ask spread
+        "spread": spread,
         # Momentum component
         "momentum": momentum,
         # Raw signal values (-100 to +100)
@@ -376,6 +459,13 @@ async def api_crypto_signal() -> JSONResponse:
         "mins_left": mins_left,
         "ts": time.time(),
     })
+
+
+@app.get("/api/crypto/history")
+async def api_crypto_history() -> JSONResponse:
+    with _signal_log_lock:
+        rows = list(_signal_log)
+    return JSONResponse({"rows": rows})
 
 
 @app.get("/api/crypto/updown")
@@ -524,11 +614,22 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .sig-comp.bear { background:#1f0d0d; color:var(--red);   border-color:#5a2a2a; }
 .sig-comp.neut { background:var(--bg3); color:var(--mute); }
 .sig-ticker-label { font-size:11px; color:var(--mute); margin-left:auto; }
+
+/* ── signal history strip ── */
+.history-strip { display:flex; gap:8px; padding:6px 16px; overflow-x:auto;
+                 border-bottom:1px solid var(--border); background:var(--bg);
+                 min-height:62px; align-items:center; }
+.hist-card { flex-shrink:0; padding:5px 10px; border-radius:6px; min-width:100px;
+             border:1px solid var(--border); background:var(--bg2); font-size:11px;
+             display:flex; flex-direction:column; gap:2px; cursor:default; }
+.hist-card.correct { border-color:var(--green); background:#0a1a0c; }
+.hist-card.wrong   { border-color:var(--red);   background:#1a0a0a; }
+.hist-card.pending { opacity:0.65; }
 .sig-reset-badge  { font-size:10px; padding:2px 7px; border-radius:10px; background:#1a3a2a; color:var(--green);
                     border:1px solid #2d5a3d; white-space:nowrap; }
 .sig-reset-badge.t1 { background:#3a2e0a; color:var(--yellow); border-color:#5a4a10; }
 
-.layout { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:12px; height:calc(100vh - 45px - 64px); }
+.layout { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:12px; height:calc(100vh - 45px - 64px - 62px); }
 .col { display:flex; flex-direction:column; gap:12px; min-height:0; }
 
 .card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
@@ -624,6 +725,8 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
   <span class="sig-ticker-label" id="sig-ticker"></span>
   <span id="sig-badge" style="display:none" class="sig-reset-badge">NEW MARKET</span>
 </div>
+
+<div class="history-strip" id="history-strip"><span style="color:var(--mute);font-size:11px">signal history loads after first market…</span></div>
 
 <div class="layout">
   <div class="col">
@@ -790,15 +893,76 @@ function renderCWhales(rows) {
   }).join('');
 }
 
+// ── Signal history strip ─────────────────────────────────────────────
+function renderHistory(rows) {
+  if(!rows||!rows.length) return;
+  const strip = $('history-strip');
+  strip.innerHTML = rows.slice().reverse().map(r => {
+    const isUp = r.direction === 'YES';
+    const dirCls = isUp ? 'yes' : 'no';
+    const dir = isUp ? '▲ YES' : '▼ NO';
+    let outHtml = '<span class="dim" style="font-size:10px">pending…</span>';
+    let cardCls = 'hist-card pending';
+    if(r.outcome) {
+      const ok = r.correct;
+      outHtml = ok
+        ? `<span class="pos" style="font-size:10px;font-weight:700">✓ ${r.outcome}</span>`
+        : `<span class="neg" style="font-size:10px;font-weight:700">✗ ${r.outcome}</span>`;
+      cardCls = 'hist-card ' + (ok ? 'correct' : 'wrong');
+    }
+    const ts = r.ts ? new Date(r.ts*1000).toISOString().slice(11,16) : '?';
+    const label = r.ticker ? r.ticker.split('-').slice(-2).join('-') : '';
+    const conf = r.conf != null ? r.conf + '%' : '?';
+    return `<div class="${cardCls}" title="${r.ticker}">
+      <span class="${dirCls}" style="font-weight:800;font-size:12px">${dir}</span>
+      <span class="dim" style="font-size:10px">${conf} conf</span>
+      <span class="dim" style="font-size:10px">${label}</span>
+      ${outHtml}
+      <span class="dim" style="font-size:9px">${ts} UTC</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Sound alert ──────────────────────────────────────────────────────
+let _audioCtx = null;
+function playAlert(isUp) {
+  try {
+    if(!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = _audioCtx.createOscillator();
+    const gain = _audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(_audioCtx.destination);
+    osc.frequency.value = isUp ? 880 : 440;
+    osc.type = 'sine';
+    gain.gain.setValueAtTime(0.25, _audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, _audioCtx.currentTime + 0.6);
+    osc.start(_audioCtx.currentTime);
+    osc.stop(_audioCtx.currentTime + 0.6);
+    // Second tone for strong signals
+    const osc2 = _audioCtx.createOscillator();
+    const gain2 = _audioCtx.createGain();
+    osc2.connect(gain2);
+    gain2.connect(_audioCtx.destination);
+    osc2.frequency.value = isUp ? 1100 : 330;
+    osc2.type = 'sine';
+    gain2.gain.setValueAtTime(0, _audioCtx.currentTime);
+    gain2.gain.setValueAtTime(0.15, _audioCtx.currentTime + 0.2);
+    gain2.gain.exponentialRampToValueAtTime(0.001, _audioCtx.currentTime + 0.8);
+    osc2.start(_audioCtx.currentTime + 0.2);
+    osc2.stop(_audioCtx.currentTime + 0.8);
+  } catch(e) { /* audio not available */ }
+}
+
 // ── Main refresh ─────────────────────────────────────────────────────
 async function refresh() {
   try {
-    const [spotR, strikesR, udR, sigsR, whR] = await Promise.all([
+    const [spotR, strikesR, udR, sigsR, whR, histR] = await Promise.all([
       fetch('/api/crypto/spot').then(r=>r.json()),
       fetch('/api/crypto/strikes').then(r=>r.json()),
       fetch('/api/crypto/updown').then(r=>r.json()),
       fetch('/api/crypto/signals').then(r=>r.json()),
       fetch('/api/crypto/whales').then(r=>r.json()),
+      fetch('/api/crypto/history').then(r=>r.json()),
     ]);
 
     if(spotR.btc) $('spot-btc').textContent = 'BTC ' + fmt$(spotR.btc);
@@ -808,6 +972,7 @@ async function refresh() {
     renderUpDown(udR.rows);
     renderSignals(sigsR.rows);
     renderCWhales(whR.rows);
+    renderHistory(histR.rows);
   } catch(e) { console.error('refresh error', e); }
 }
 
@@ -818,6 +983,8 @@ refresh(); setInterval(refresh, 3000);
 // ── Signal banner ────────────────────────────────────────────────────
 let _lastTicker = null;
 let _t1Timer = null;
+let _lastAlertTicker = null;
+let _lastConfAbove50 = false;
 
 function fmt$2(n) { return n==null?'—':'$'+Math.round(n).toLocaleString(); }
 function sigComp(label, val, suffix='') {
@@ -863,11 +1030,20 @@ function renderSignalBanner(s, isT1=false) {
     : '';
 
   // Stats row: whale details
+  const trendStr = s.whale_trend != null && Math.abs(s.whale_trend) > 2
+    ? ` <span class="${s.whale_trend>0?'pos':'neg'}" style="font-size:10px">${s.whale_trend>0?'↑':'↓'}${Math.abs(s.whale_trend).toFixed(0)}</span>`
+    : '';
+  const spreadStr = s.spread != null
+    ? `<span class="${s.spread>0.05?'neg':s.spread<0?'pos':'dim'}">${(s.spread*100).toFixed(1)}¢</span>`
+    : '—';
+  const volStr = s.btc_vol_per_min != null ? `±$${Math.round(s.btc_vol_per_min)}/min` : '';
   $('sig-stats').innerHTML = `
-    <div class="sig-stat"><span class="k">Whale flow</span><span class="v" style="color:${isUp?'var(--green)':'var(--red)'}">${s.yes_pct}% YES</span></div>
+    <div class="sig-stat"><span class="k">Whale flow</span><span class="v" style="color:${isUp?'var(--green)':'var(--red)'}">${s.yes_pct}% YES${trendStr}</span></div>
     <div class="sig-stat"><span class="k">YES / NO</span><span class="v"><span class="pos">${s.yes_contracts.toLocaleString()}</span> / <span class="neg">${s.no_contracts.toLocaleString()}</span></span></div>
     <div class="sig-stat"><span class="k">Whales</span><span class="v">${s.whale_count}</span></div>
-    ${s.momentum!=null ? `<div class="sig-stat"><span class="k">Momentum</span><span class="v ${s.momentum>=0?'pos':'neg'}">${s.momentum>=0?'+':''}${s.momentum.toFixed(0)}/min</span></div>` : ''}
+    ${s.momentum!=null ? `<div class="sig-stat"><span class="k">Momo</span><span class="v ${s.momentum>=0?'pos':'neg'}">${s.momentum>=0?'+':''}${s.momentum.toFixed(0)}/min</span></div>` : ''}
+    ${volStr ? `<div class="sig-stat"><span class="k">BTC vol</span><span class="v dim">${volStr}</span></div>` : ''}
+    <div class="sig-stat"><span class="k">Spread</span><span class="v">${spreadStr}</span></div>
     ${minsStr ? `<div class="sig-stat"><span class="k">Expires</span><span class="v dim">${minsStr}</span></div>` : ''}
   `;
 
@@ -927,6 +1103,14 @@ async function pollSignal() {
 
     renderSignalBanner(s);
     _lastTicker = s.ticker;
+
+    // Sound alert when confidence ≥ 50 and it's a new market or just crossed threshold
+    const confAbove50 = s.confidence >= 50;
+    if(confAbove50 && (s.ticker !== _lastAlertTicker || !_lastConfAbove50)) {
+      playAlert(s.direction === 'YES');
+      _lastAlertTicker = s.ticker;
+    }
+    _lastConfAbove50 = confAbove50;
   } catch(e) { console.error('signal poll error', e); }
 }
 
