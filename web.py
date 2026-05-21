@@ -267,7 +267,31 @@ async def api_crypto_signal() -> JSONResponse:
         if active is None or snap.recent_whale_count > active[1].recent_whale_count:
             active = (ticker, snap)
 
+    # Fallback: scanner hasn't seen this market yet — fetch directly from Kalshi
+    _direct_mkt: dict | None = None
     if not active:
+        with contextlib.suppress(Exception):
+            next_suffix, next_ts = _next_15m_expiry()
+            _dticker = f"KXBTC15M-{next_suffix}"
+            _mins_rem = (next_ts - time.time()) / 60
+            if 0 < _mins_rem <= 15:
+                async with httpx.AsyncClient(timeout=4) as client:
+                    r = await client.get(
+                        f"https://api.elections.kalshi.com/trade-api/v2/markets/{_dticker}"
+                    )
+                    mkt = r.json().get("market", {})
+                    if mkt.get("status") == "active":
+                        _direct_mkt = {
+                            "ticker": _dticker,
+                            "price": float(mkt.get("last_price_dollars") or 0.5),
+                            "floor_strike": float(mkt["floor_strike"]) if mkt.get("floor_strike") else None,
+                            "yes_ask": float(mkt.get("yes_ask_dollars") or 0),
+                            "no_ask": float(mkt.get("no_ask_dollars") or 0),
+                        }
+                        if _direct_mkt["floor_strike"]:
+                            _market_floor_strike[_dticker] = _direct_mkt["floor_strike"]
+
+    if not active and _direct_mkt is None:
         try:
             next_suffix, next_ts = _next_15m_expiry()
             next_ticker = f"KXBTC15M-{next_suffix}"
@@ -280,8 +304,12 @@ async def api_crypto_signal() -> JSONResponse:
         except Exception:
             return JSONResponse({"status": "no_active_market"})
 
-    ticker, snap = active
-    price = snap.last_price or snap.yes_price or 0.5
+    if active is not None:
+        ticker, snap = active
+        price = snap.last_price or snap.yes_price or 0.5
+    else:
+        ticker, snap = _direct_mkt["ticker"], None
+        price = _direct_mkt["price"]
 
     # Tally whale YES vs NO on this ticker
     yes_c = no_c = yes_not = no_not = 0
@@ -295,8 +323,8 @@ async def api_crypto_signal() -> JSONResponse:
             no_c += a.contracts
             no_not += a.notional
 
-    total_c = yes_c + no_c or 1
-    yes_pct = yes_c / total_c
+    total_c = yes_c + no_c
+    yes_pct = (yes_c / total_c) if total_c > 0 else 0.5  # neutral when no whale data yet
 
     # Minutes left
     mins_left = None
@@ -386,8 +414,8 @@ async def api_crypto_signal() -> JSONResponse:
         momentum_signal = max(-1.0, min(1.0, momentum / max(btc_vol_per_min, 1.0)))
 
     # ── Bid/ask spread — market maker certainty indicator ─────────────────
-    yes_ask = snap.yes_price or 0
-    no_ask = snap.no_price or 0
+    yes_ask = (snap.yes_price if snap else _direct_mkt["yes_ask"]) or 0
+    no_ask = (snap.no_price if snap else _direct_mkt["no_ask"]) or 0
     spread = round(yes_ask + no_ask - 1.0, 4) if yes_ask and no_ask else None
 
     # ── Time-weighted blend ───────────────────────────────────────────────
@@ -439,8 +467,8 @@ async def api_crypto_signal() -> JSONResponse:
         "no_contracts": round(no_c),
         "yes_notional": round(yes_not),
         "no_notional": round(no_not),
-        "whale_count": snap.recent_whale_count,
-        "buy_pressure": round(snap.buy_pressure),
+        "whale_count": snap.recent_whale_count if snap else 0,
+        "buy_pressure": round(snap.buy_pressure if snap else 0),
         "whale_trend": round(whale_trend * 100, 1),
         # Spot / strike component
         "spot": round(spot, 2) if spot is not None else None,
@@ -477,10 +505,13 @@ async def api_crypto_updown() -> JSONResponse:
         if not _is_crypto(ticker) or not _is_15m_or_1h(ticker):
             continue
         price = snap.last_price or snap.yes_price or 0
+        if not (0.01 < price < 0.99):
+            continue  # skip settled markets at the rails
         rows.append({
             "ticker": ticker,
             "title": snap.title or ticker,
             "price": round(price, 4),
+            "direction": "YES" if snap.buy_pressure >= 0 else "NO",
             "volume": snap.trade_volume,
             "whale_count": snap.recent_whale_count,
             "buy_pressure": round(snap.buy_pressure, 1),
@@ -655,7 +686,7 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .diff-neg { color:var(--red); }
 
 /* ── up/down table ── */
-.ud-row { display:grid; grid-template-columns:1fr 48px 64px 36px 72px;
+.ud-row { display:grid; grid-template-columns:42px 1fr 48px 64px 36px 72px;
           gap:4px; padding:4px 10px; border-bottom:1px solid #1c2128; align-items:center; font-size:12px; }
 .ud-row:last-child { border-bottom:none; }
 .ud-row:hover { background:#1c2128; }
@@ -831,12 +862,15 @@ function renderStrikes(rows, btc_spot, eth_spot) {
 
 // ── Up/Down Markets ──────────────────────────────────────────────────
 function renderUpDown(rows) {
-  if(!rows||!rows.length){$('updown').innerHTML='<div class="empty">no 15m/1h markets yet</div>';return;}
-  $('ud-meta').textContent = rows.length + ' markets';
+  if(!rows||!rows.length){$('updown').innerHTML='<div class="empty">no active 15m/1h markets right now</div>';return;}
+  $('ud-meta').textContent = rows.length + ' active';
   const maxBP = Math.max(...rows.map(r=>Math.abs(r.buy_pressure)),1);
   $('updown').innerHTML = rows.map(r => {
-    const bpDir = r.buy_pressure >= 0 ? '<span class="yes">YES</span>' : '<span class="no">NO</span>';
+    const dir = r.direction === 'YES'
+      ? '<span class="yes" style="font-size:11px;font-weight:800">▲UP</span>'
+      : '<span class="no"  style="font-size:11px;font-weight:800">▼DN</span>';
     return `<div class="ud-row">
+      ${dir}
       <span class="ticker trunc" title="${r.ticker}">${shortTicker(r.title||r.ticker,32)}</span>
       <span class="num dim">${r.price ? fmtP(r.price) : '—'}</span>
       <span class="num dim">${fmtN(r.volume)}</span>
