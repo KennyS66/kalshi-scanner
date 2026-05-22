@@ -253,8 +253,9 @@ async def api_crypto_signal() -> JSONResponse:
         except Exception:
             return None
 
-    # Find active (unsettled) BTC 15m market — prefer most whale activity
+    # Find active (unsettled) BTC 15m market — prefer soonest future expiry
     active = None
+    active_exp = None
     for ticker, snap in list(_scanner.market_snapshots.items()):
         if "KXBTC15M" not in ticker.upper():
             continue
@@ -262,10 +263,13 @@ async def api_crypto_signal() -> JSONResponse:
         if not (0.01 < price < 0.99):
             continue
         exp = _ticker_expiry(ticker)
-        if exp and (exp.timestamp() - time.time()) < -120:
+        if exp is None:
+            continue
+        if (exp.timestamp() - time.time()) < -120:
             continue  # expired more than 2 minutes ago
-        if active is None or snap.recent_whale_count > active[1].recent_whale_count:
+        if active is None or exp < active_exp:
             active = (ticker, snap)
+            active_exp = exp
 
     # Fallback: scanner hasn't seen this market yet — fetch directly from Kalshi
     _direct_mkt: dict | None = None
@@ -323,8 +327,19 @@ async def api_crypto_signal() -> JSONResponse:
             no_c += a.contracts
             no_not += a.notional
 
-    total_c = yes_c + no_c
-    yes_pct = (yes_c / total_c) if total_c > 0 else 0.5  # neutral when no whale data yet
+    total_not = yes_not + no_not
+    has_whale_data = total_not > 0
+    if has_whale_data:
+        # Notional-weighted: bigger trades count more
+        yes_pct = yes_not / total_not
+    else:
+        # No whale trades yet — fall back to all-trade buy pressure if available
+        _bp = snap.buy_pressure if snap else 0
+        _tv = snap.trade_volume if snap else 0
+        if _tv > 0:
+            yes_pct = (_bp / _tv + 1) / 2  # map [-1,1] → [0,1]
+        else:
+            yes_pct = 0.5  # truly no data
 
     # Minutes left
     mins_left = None
@@ -445,6 +460,7 @@ async def api_crypto_signal() -> JSONResponse:
                 "direction": direction,
                 "conf": confidence,
                 "yes_pct": round(yes_pct * 100, 1),
+                "has_whale_data": has_whale_data,
                 "price": round(price, 4),
                 "distance": distance,
                 "momentum": momentum,
@@ -461,8 +477,9 @@ async def api_crypto_signal() -> JSONResponse:
         "direction": direction,
         "confidence": confidence,
         "price": round(price, 4),
-        # Whale component
+        # Whale / flow component
         "yes_pct": round(yes_pct * 100, 1),
+        "has_whale_data": has_whale_data,
         "yes_contracts": round(yes_c),
         "no_contracts": round(no_c),
         "yes_notional": round(yes_not),
@@ -1049,9 +1066,10 @@ function renderSignalBanner(s, isT1=false) {
     const distCls = dist >= 0 ? 'pos' : 'neg';
     spotStr = ` · spot ${fmt$2(s.spot)} vs ${fmt$2(s.floor_strike)} (<span class="${distCls}">${sign}$${Math.round(Math.abs(dist)).toLocaleString()}</span>)`;
   }
+  const flowSrc = s.has_whale_data ? 'whales' : 'retail flow';
   $('sig-label').innerHTML = (isUp
-    ? `BUY YES — whales ${s.yes_pct}% YES at ${(s.price*100).toFixed(1)}¢`
-    : `BUY NO  — whales ${(100-s.yes_pct).toFixed(1)}% NO at ${((1-s.price)*100).toFixed(1)}¢`)
+    ? `BUY YES — ${flowSrc} ${s.yes_pct}% YES at ${(s.price*100).toFixed(1)}¢`
+    : `BUY NO  — ${flowSrc} ${(100-s.yes_pct).toFixed(1)}% NO at ${((1-s.price)*100).toFixed(1)}¢`)
     + ` (edge ~${edgeCents}¢)` + spotStr;
 
   $('sig-conf-val').textContent = s.confidence + '%';
@@ -1071,8 +1089,9 @@ function renderSignalBanner(s, isT1=false) {
     ? `<span class="${s.spread>0.05?'neg':s.spread<0?'pos':'dim'}">${(s.spread*100).toFixed(1)}¢</span>`
     : '—';
   const volStr = s.btc_vol_per_min != null ? `±$${Math.round(s.btc_vol_per_min)}/min` : '';
+  const flowLabel = s.has_whale_data ? 'Whale flow' : 'Retail flow';
   $('sig-stats').innerHTML = `
-    <div class="sig-stat"><span class="k">Whale flow</span><span class="v" style="color:${isUp?'var(--green)':'var(--red)'}">${s.yes_pct}% YES${trendStr}</span></div>
+    <div class="sig-stat"><span class="k">${flowLabel}</span><span class="v" style="color:${isUp?'var(--green)':'var(--red)'}">${s.yes_pct}% YES${trendStr}${s.has_whale_data?'':' <span class="dim" style="font-size:10px">(no whales)</span>'}</span></div>
     <div class="sig-stat"><span class="k">YES / NO</span><span class="v"><span class="pos">${s.yes_contracts.toLocaleString()}</span> / <span class="neg">${s.no_contracts.toLocaleString()}</span></span></div>
     <div class="sig-stat"><span class="k">Whales</span><span class="v">${s.whale_count}</span></div>
     ${s.momentum!=null ? `<div class="sig-stat"><span class="k">Momo</span><span class="v ${s.momentum>=0?'pos':'neg'}">${s.momentum>=0?'+':''}${s.momentum.toFixed(0)}/min</span></div>` : ''}
