@@ -41,6 +41,10 @@ class MarketSnapshot:
     recent_whale_volume: float = 0.0
     buy_pressure: float = 0.0  # net yes - no flow
     score: float = 0.0
+    # Resolution metadata (populated for BTC strike markets)
+    floor_strike: float | None = None
+    cap_strike: float | None = None
+    close_ts: float | None = None  # epoch seconds when market closes
 
 
 def _fp(val):
@@ -49,6 +53,16 @@ def _fp(val):
         return float(val)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _parse_iso_ts(s):
+    """Parse 2026-05-23T19:45:00Z → epoch seconds, or None."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
 
 
 class Scanner:
@@ -157,6 +171,7 @@ class Scanner:
                     ticker = m.get("ticker", "")
                     stats = self._ticker_stats.get(ticker, {})
 
+                    close_ts = _parse_iso_ts(m.get("close_time"))
                     self.market_snapshots[ticker] = MarketSnapshot(
                         ticker=ticker,
                         title=m.get("title", ticker),
@@ -174,6 +189,9 @@ class Scanner:
                         recent_whale_count=stats.get("whale_count", 0),
                         recent_whale_volume=stats.get("whale_volume", 0),
                         buy_pressure=stats.get("yes_vol", 0) - stats.get("no_vol", 0),
+                        floor_strike=float(m["floor_strike"]) if m.get("floor_strike") else None,
+                        cap_strike=float(m["cap_strike"]) if m.get("cap_strike") else None,
+                        close_ts=close_ts,
                     )
             except Exception:
                 # If batch fetch fails, build snapshots from trade data alone

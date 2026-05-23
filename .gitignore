@@ -2,3 +2,8 @@ venv/
 __pycache__/
 *.pyc
 .env
+
+# Calibration runtime state — accumulated locally, not part of repo
+data/whales/picks_log.jsonl
+data/whales/picks_outcomes.json
+data/whales/calibration.json

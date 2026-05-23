@@ -113,13 +113,25 @@ def _pick_writer_loop(interval: int = 30) -> None:
         if _scanner is not None:
             with contextlib.suppress(Exception):
                 from sink import write_btc_picks
-                write_btc_picks(_scanner)
+                with _btc_spot_lock:
+                    hist = list(_btc_spot_history)
+                write_btc_picks(_scanner, spot_history=hist)
+
+
+def _calibration_loop(interval: int = 600) -> None:
+    """Every 10 min, refresh outcomes and refit calibration weights from picks_log."""
+    while True:
+        time.sleep(interval)
+        with contextlib.suppress(Exception):
+            from calibration import fit
+            fit()
 
 
 def start_background(port: int = 9050) -> threading.Thread:
     threading.Thread(target=_pick_writer_loop, daemon=True).start()
     threading.Thread(target=_btc_spot_poller_loop, daemon=True).start()
     threading.Thread(target=_outcome_checker_loop, daemon=True).start()
+    threading.Thread(target=_calibration_loop, daemon=True).start()
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error")
     server = uvicorn.Server(config)
     t = threading.Thread(target=server.run, daemon=True)
