@@ -17,6 +17,59 @@ from collections import defaultdict
 import requests
 
 
+# ── Math helpers ─────────────────────────────────────────────────────
+
+def _erfinv(z: float) -> float:
+    """Rational approximation to erfinv(z); accurate to ~5e-4 for |z| < 0.99."""
+    a = 0.147
+    z = max(-1 + 1e-9, min(1 - 1e-9, z))
+    ln = math.log(1.0 - z * z)
+    c = 2.0 / (math.pi * a) + ln / 2.0
+    return math.copysign(math.sqrt(math.sqrt(c * c - ln / a) - c), z)
+
+
+def _normal_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2)))
+
+
+def _normal_ppf(p: float) -> float:
+    p = max(1e-6, min(1 - 1e-6, p))
+    return math.sqrt(2) * _erfinv(2 * p - 1)
+
+
+def _lin_reg(xs, ys):
+    """Simple OLS; returns (slope, intercept) or (None, None)."""
+    n = len(xs)
+    if n < 2:
+        return None, None
+    xm = sum(xs) / n
+    ym = sum(ys) / n
+    num = sum((x - xm) * (y - ym) for x, y in zip(xs, ys))
+    den = sum((x - xm) ** 2 for x in xs)
+    if den == 0:
+        return None, None
+    slope = num / den
+    return slope, ym - slope * xm
+
+
+def _ewma_whale_flow(whale_alerts, ticker: str, half_life_min: float = 10.0):
+    """Return (yes_w, no_w) — time-decayed, aggression-boosted whale flow."""
+    now = time.time()
+    decay = math.log(2) / (half_life_min * 60)
+    yes_w = no_w = 0.0
+    for a in whale_alerts:
+        if a.ticker != ticker:
+            continue
+        age_s = max(0.0, now - (a.timestamp.timestamp() if a.timestamp else now))
+        w = math.exp(-decay * age_s) * a.contracts
+        aggr = 1.4 if a.taker_side == "ask" else 1.0
+        if a.side == "yes":
+            yes_w += w * aggr
+        else:
+            no_w += w * aggr
+    return yes_w, no_w
+
+
 # ── Data structures ──────────────────────────────────────────────────
 
 @dataclass
@@ -63,7 +116,7 @@ def detect_flow_divergence(scanner):
         if snap.trade_notional < 50:
             continue
 
-        # Flow ratio: what fraction of volume is YES
+        # Flow ratio: what fraction of volume is YES (flat lookback)
         stats = scanner._ticker_stats.get(ticker, {})
         yes_vol = stats.get("yes_vol", 0)
         no_vol = stats.get("no_vol", 0)
@@ -71,10 +124,18 @@ def detect_flow_divergence(scanner):
         if total < 100:
             continue
 
-        flow_ratio = yes_vol / total  # 0 = all NO, 1 = all YES
+        flat_ratio = yes_vol / total  # 0 = all NO, 1 = all YES
+
+        # EWMA whale flow (time-decayed + aggression-boosted) — more reactive
+        ewma_yes, ewma_no = _ewma_whale_flow(scanner.whale_alerts, ticker)
+        ewma_total = ewma_yes + ewma_no
+        if ewma_total > 0:
+            # Blend: 50% flat (volume-rich) + 50% EWMA (time/conviction-aware)
+            flow_ratio = flat_ratio * 0.5 + (ewma_yes / ewma_total) * 0.5
+        else:
+            flow_ratio = flat_ratio
 
         # Implied fair value from flow (with dampening — flow isn't perfectly predictive)
-        # Blend flow signal with current price (60% flow, 40% market)
         flow_fair = flow_ratio * 0.6 + price * 0.4
 
         # Divergence: how far the price is from flow-implied fair value
@@ -89,7 +150,14 @@ def detect_flow_divergence(scanner):
 
         # Scale strength by whale conviction
         whale_ratio = snap.recent_whale_volume / snap.trade_volume if snap.trade_volume > 0 else 0
-        strength = strength * (0.5 + 0.5 * min(whale_ratio, 1.0))
+        # Extra boost when EWMA ratio strongly agrees with direction
+        ewma_agree = 1.0
+        if ewma_total > 0:
+            ewma_ratio = ewma_yes / ewma_total
+            agreement = abs(ewma_ratio - 0.5) * 2  # 0 = neutral, 1 = one-sided
+            same_direction = (ewma_ratio > 0.5) == (divergence > 0)
+            ewma_agree = 1.0 + 0.3 * agreement if same_direction else 1.0 - 0.2 * agreement
+        strength = min(strength * (0.5 + 0.5 * min(whale_ratio, 1.0)) * ewma_agree, 1.0)
 
         signals.append(AlphaSignal(
             ticker=ticker,
@@ -258,64 +326,62 @@ def detect_whale_momentum(scanner):
         if snap.trade_notional < 50:
             continue
 
-        # Check directional consistency of recent whales
-        yes_whales = [w for w in whales if w.side == "yes"]
-        no_whales = [w for w in whales if w.side == "no"]
+        # EWMA-weighted + aggression-boosted directional flow
+        ewma_yes, ewma_no = _ewma_whale_flow(whales, ticker)
+        ewma_total = ewma_yes + ewma_no
+        if ewma_total == 0:
+            continue
 
+        ewma_ratio = ewma_yes / ewma_total  # 0 = all NO, 1 = all YES
+        dominant_side = "yes" if ewma_ratio > 0.5 else "no"
+        # Directional consensus strength (0 = split, 1 = one-sided)
+        ratio = abs(ewma_ratio - 0.5) * 2
+
+        # Need strong directional consensus (>70% one-sided → ratio > 0.40)
+        if ratio < 0.40:
+            continue
+
+        # Flat counts for display
         total_whale_contracts = sum(w.contracts for w in whales)
-        yes_whale_contracts = sum(w.contracts for w in yes_whales)
-        no_whale_contracts = sum(w.contracts for w in no_whales)
+        yes_whale_contracts = sum(w.contracts for w in whales if w.side == "yes")
+        no_whale_contracts = total_whale_contracts - yes_whale_contracts
 
-        if total_whale_contracts == 0:
-            continue
+        # EWMA recency: ratio of EWMA weight vs flat weight; high = recent whales dominate
+        flat_yes = sum(w.contracts for w in whales if w.side == "yes")
+        flat_total = sum(w.contracts for w in whales)
+        flat_ratio_raw = flat_yes / flat_total if flat_total > 0 else 0.5
+        # Recency amplification: EWMA diverges from flat when recent flow is strong
+        recency = min(abs(ewma_ratio - flat_ratio_raw) * 5, 1.0)
 
-        # Directional ratio
-        dominant_side = "yes" if yes_whale_contracts > no_whale_contracts else "no"
-        dominant_vol = max(yes_whale_contracts, no_whale_contracts)
-        ratio = dominant_vol / total_whale_contracts
-
-        # Need strong directional consensus (>70%)
-        if ratio < 0.70:
-            continue
-
-        # Check time clustering — are whales arriving recently?
-        timestamps = sorted([w.timestamp.timestamp() for w in whales if w.timestamp])
-        if len(timestamps) < 3:
-            continue
-
-        # Recency score: what fraction of whale volume is in the last 15 min
-        now = time.time()
-        recent_vol = sum(w.contracts for w in whales if w.timestamp and (now - w.timestamp.timestamp()) < 900)
-        recency = recent_vol / total_whale_contracts if total_whale_contracts > 0 else 0
-
-        # Momentum strength
+        # Momentum strength: directional consensus (50%) + recency (30%) + whale count (20%)
         strength = ratio * 0.5 + recency * 0.3 + min(len(whales) / 20, 1.0) * 0.2
 
-        if strength < 0.4:
+        if strength < 0.35:
             continue
 
         # Estimated edge based on momentum
+        edge = ratio * 0.15  # conservative; ratio=1 → 15¢ edge
         if dominant_side == "yes":
-            edge = (ratio - 0.5) * 0.3  # conservative estimate
             fair = min(price + edge, 0.95)
         else:
-            edge = (ratio - 0.5) * 0.3
             fair = max(price - edge, 0.05)
 
+        dominant_vol = yes_whale_contracts if dominant_side == "yes" else no_whale_contracts
         signals.append(AlphaSignal(
             ticker=ticker,
             title=snap.title,
             signal_type="momentum",
             direction=dominant_side,
-            strength=round(strength, 3),
+            strength=round(min(strength, 1.0), 3),
             edge_pct=round(edge * 100, 1),
             kalshi_price=price,
             fair_value=round(fair, 3),
             detail=(
-                f"{len(whales)} whales, {ratio:.0%} {dominant_side.upper()}. "
-                f"{dominant_vol:.0f} contracts one way vs {total_whale_contracts - dominant_vol:.0f} the other. "
-                f"{'Recent surge — ' if recency > 0.5 else ''}"
-                f"{recency:.0%} of whale vol in last 15 min."
+                f"{len(whales)} whales, EWMA {ewma_ratio:.0%} YES. "
+                f"{dominant_vol:.0f} contracts {dominant_side.upper()} vs "
+                f"{total_whale_contracts - dominant_vol:.0f} other. "
+                f"{'Recency surge — ' if recency > 0.5 else ''}"
+                f"aggression-weighted flow {ratio:.0%} directional."
             ),
         ))
 
@@ -578,10 +644,31 @@ def detect_btc_strike_arb(scanner):
 
 # ── BTC Ladder Sweep ─────────────────────────────────────────────────
 
+_ET_MONTHS = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
+              "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
+
+
+def _ticker_mins_left(ticker: str) -> float | None:
+    """Parse ET-based expiry from a BTC 15m ticker; return minutes until expiry."""
+    m = re.search(r'(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})', ticker.upper())
+    if not m:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        import datetime as _dt
+        ET = ZoneInfo("America/New_York")
+        exp = _dt.datetime(2000 + int(m.group(1)), _ET_MONTHS[m.group(2)],
+                           int(m.group(3)), int(m.group(4)), int(m.group(5)), tzinfo=ET)
+        return (exp.timestamp() - time.time()) / 60
+    except Exception:
+        return None
+
+
 def detect_btc_ladder_sweep(scanner):
     """
     If whales are buying the same direction across 3+ BTC 15m markets,
     it's a coordinated directional bet — high conviction signal.
+    Strength is boosted when time-to-expiry is short (final minutes are high-info).
     """
     signals = []
 
@@ -610,7 +697,21 @@ def detect_btc_ladder_sweep(scanner):
         top = max(mkt_list, key=lambda s: s.recent_whale_count)
         price = top.last_price or top.yes_price or 0.5
 
-        strength = min(len(mkt_list) / 8, 1.0) * 0.6 + min(total_whales / 20, 1.0) * 0.4
+        base_strength = min(len(mkt_list) / 8, 1.0) * 0.6 + min(total_whales / 20, 1.0) * 0.4
+
+        # Boost when close to expiry — whales in final minutes = much higher conviction
+        mins_left = _ticker_mins_left(top.ticker)
+        expiry_boost = 1.0
+        expiry_note = ""
+        if mins_left is not None and 0 < mins_left <= 15:
+            if mins_left < 2:
+                expiry_boost = 1.6
+                expiry_note = f"FINAL {mins_left:.1f} min — "
+            elif mins_left < 5:
+                expiry_boost = 1.3
+                expiry_note = f"{mins_left:.1f} min left — "
+
+        strength = min(base_strength * expiry_boost, 1.0)
 
         signals.append(AlphaSignal(
             ticker=top.ticker,
@@ -622,11 +723,126 @@ def detect_btc_ladder_sweep(scanner):
             kalshi_price=price,
             fair_value=round(price + (0.05 if direction == "yes" else -0.05), 3),
             detail=(
-                f"{len(mkt_list)} BTC 15m markets with {direction.upper()} whale flow. "
+                f"{expiry_note}{len(mkt_list)} BTC 15m markets with {direction.upper()} whale flow. "
                 f"{total_whales} total whale prints, ${total_notional:,.0f} notional. "
                 f"Coordinated directional positioning."
             ),
         ))
+
+    return sorted(signals, key=lambda s: s.strength, reverse=True)
+
+
+# ── Ask-Sum Arb ──────────────────────────────────────────────────────
+
+def detect_ask_sum_arb(scanner):
+    """
+    If yes_ask + no_ask < 1.00, buying both guarantees $1 in profit — a real arb.
+    Also flags illiquid markets (sum > 1.10) where other signals should be discounted.
+    """
+    signals = []
+    for ticker, snap in scanner.market_snapshots.items():
+        if "KXMVE" in ticker:
+            continue
+        yes_ask = snap.yes_price
+        no_ask = snap.no_price
+        if not yes_ask or not no_ask:
+            continue
+        ask_sum = yes_ask + no_ask
+
+        if ask_sum < 0.97 and ask_sum > 0.05:
+            edge = round((1.0 - ask_sum) * 100, 1)
+            direction = "yes" if yes_ask <= no_ask else "no"
+            signals.append(AlphaSignal(
+                ticker=ticker,
+                title=snap.title or ticker,
+                signal_type="ask_arb",
+                direction=direction,
+                strength=min((0.97 - ask_sum) / 0.10, 1.0),
+                edge_pct=edge,
+                kalshi_price=yes_ask,
+                fair_value=round(1.0 - no_ask, 3),
+                detail=(
+                    f"YES ask {yes_ask:.3f} + NO ask {no_ask:.3f} = {ask_sum:.3f}. "
+                    f"Buy both → guaranteed {edge}¢ profit per contract."
+                ),
+            ))
+
+    return sorted(signals, key=lambda s: s.strength, reverse=True)
+
+
+# ── BTC Implied Distribution ─────────────────────────────────────────
+
+def detect_btc_implied_distribution(scanner):
+    """
+    Fit a log-normal/normal CDF to the full BTC T-type strike ladder per expiry.
+    Strikes that deviate from the fitted curve by >3¢ are mispriced.
+
+    P(BTC > K) = 1 - N((K - mu) / sigma)
+    => normppf(1 - price) = (K - mu) / sigma  → linear in K
+    Fit via OLS on (strike, normppf(1 - price)); outliers = mispricings.
+    """
+    signals = []
+
+    # Group T-type BTC strikes by expiry suffix (last date component of ticker)
+    buckets: dict = {}
+    for ticker, snap in scanner.market_snapshots.items():
+        t = ticker.upper()
+        if not t.startswith("KXBTC"):
+            continue
+        m = re.search(r'-T(\d{4,7})-(\S+)', t)
+        if not m:
+            continue
+        strike = int(m.group(1))
+        expiry_key = m.group(2)
+        price = snap.last_price or snap.yes_price
+        if not price or price <= 0.03 or price >= 0.97:
+            continue
+        buckets.setdefault(expiry_key, []).append((strike, price, snap))
+
+    for expiry_key, entries in buckets.items():
+        if len(entries) < 5:
+            continue
+
+        entries.sort(key=lambda x: x[0])
+        strikes = [e[0] for e in entries]
+        prices = [e[1] for e in entries]
+
+        # y = normppf(1 - price) = (K - mu) / sigma
+        try:
+            ys = [_normal_ppf(1.0 - p) for p in prices]
+        except Exception:
+            continue
+
+        slope, intercept = _lin_reg(strikes, ys)
+        if slope is None or slope <= 0:
+            continue
+
+        sigma = 1.0 / slope
+        mu = -intercept * sigma
+
+        for strike, price, snap in entries:
+            fitted_price = 1.0 - _normal_cdf((strike - mu) / sigma)
+            deviation = price - fitted_price
+            if abs(deviation) < 0.03:
+                continue
+            # Mispriced relative to the curve
+            direction = "no" if deviation > 0 else "yes"  # overpriced → sell (no), underpriced → buy (yes)
+            edge = abs(deviation)
+            signals.append(AlphaSignal(
+                ticker=snap.ticker,
+                title=snap.title or snap.ticker,
+                signal_type="implied_curve",
+                direction=direction,
+                strength=min(edge / 0.12, 1.0),
+                edge_pct=round(edge * 100, 1),
+                kalshi_price=price,
+                fair_value=round(fitted_price, 3),
+                detail=(
+                    f"Strike {strike:,} actual {price:.3f} vs curve-implied {fitted_price:.3f}. "
+                    f"Implied BTC median ~${mu:,.0f} ± ${sigma:,.0f}. "
+                    f"{'Overpriced — sell' if direction == 'no' else 'Underpriced — buy'}."
+                ),
+            ))
 
     return sorted(signals, key=lambda s: s.strength, reverse=True)
 
@@ -660,8 +876,14 @@ class AlphaEngine:
         # 5. BTC strike monotonicity arb
         all_signals.extend(detect_btc_strike_arb(self.scanner))
 
-        # 6. BTC 15m ladder sweep
+        # 6. BTC 15m ladder sweep (time-to-expiry boosted)
         all_signals.extend(detect_btc_ladder_sweep(self.scanner))
+
+        # 7. Ask-sum arb (yes_ask + no_ask < 1.00)
+        all_signals.extend(detect_ask_sum_arb(self.scanner))
+
+        # 8. BTC implied distribution curve — outlier strikes
+        all_signals.extend(detect_btc_implied_distribution(self.scanner))
 
         # Deduplicate — keep strongest signal per ticker
         best_by_ticker = {}

@@ -316,22 +316,34 @@ async def api_crypto_signal() -> JSONResponse:
         price = _direct_mkt["price"]
 
     # Tally whale YES vs NO on this ticker
-    yes_c = no_c = yes_not = no_not = 0
+    # Weights: time-decayed (8-min half-life) + aggressiveness (ask-side takers = 1.4x)
+    import math as _math
+    _decay = _math.log(2) / (8 * 60)
+    _now_ts = time.time()
+    yes_c = no_c = 0
+    yes_not = no_not = 0.0   # raw notional for display
+    yes_w = no_w = 0.0       # time-decayed + aggression-weighted notional for signal
     for a in list(_scanner.whale_alerts):
         if a.ticker != ticker:
             continue
+        age_s = max(0.0, _now_ts - (a.timestamp.timestamp() if a.timestamp else _now_ts))
+        tw = _math.exp(-_decay * age_s)
+        aggr = 1.4 if getattr(a, "taker_side", None) == "ask" else 1.0
+        w = a.notional * tw * aggr
         if a.side == "yes":
             yes_c += a.contracts
             yes_not += a.notional
+            yes_w += w
         else:
             no_c += a.contracts
             no_not += a.notional
+            no_w += w
 
     total_not = yes_not + no_not
-    has_whale_data = total_not > 0
+    has_whale_data = (yes_w + no_w) > 0
     if has_whale_data:
-        # Notional-weighted: bigger trades count more
-        yes_pct = yes_not / total_not
+        # Use time-decayed + aggression-weighted ratio for the signal
+        yes_pct = yes_w / (yes_w + no_w)
     else:
         # No whale trades yet — fall back to all-trade buy pressure if available
         _bp = snap.buy_pressure if snap else 0
@@ -593,6 +605,11 @@ async def crypto_page() -> str:
     return _CRYPTO_HTML
 
 
+@app.get("/trade", response_class=HTMLResponse)
+async def trade_page() -> str:
+    return _TRADE_HTML
+
+
 @app.get("/api/whales")
 async def api_whales(limit: int = 60) -> JSONResponse:
     return JSONResponse({"rows": _whale_rows(limit)})
@@ -610,6 +627,320 @@ async def api_btc() -> JSONResponse:
 async def whales_page() -> str:
     return _WHALES_HTML
 
+
+_TRADE_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>kalshi · trade caller</title>
+<style>
+:root {
+  --bg:#0d1117; --bg2:#161b22; --bg3:#21262d; --fg:#e6edf3; --mute:#7d8590;
+  --border:#30363d; --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body {
+  font-family:ui-monospace,"SF Mono","Fira Code",monospace;
+  background:var(--bg); color:var(--fg);
+  min-height:100vh; display:flex; flex-direction:column;
+}
+
+/* ── header ── */
+header {
+  padding:10px 24px; border-bottom:1px solid var(--border); background:var(--bg2);
+  display:flex; align-items:center; justify-content:space-between;
+}
+.logo { font-size:13px; font-weight:700; color:var(--blue); }
+.nav { display:flex; gap:16px; }
+.nav a { color:var(--mute); font-size:11px; text-decoration:none; }
+.nav a:hover { color:var(--blue); }
+.clock { color:var(--mute); font-size:12px; }
+
+/* ── main call box ── */
+#call-box {
+  margin:28px auto; width:100%; max-width:720px; padding:0 20px;
+  display:flex; flex-direction:column; gap:0;
+}
+
+.mkt-label {
+  font-size:11px; color:var(--mute); letter-spacing:0.5px; margin-bottom:4px;
+}
+.mkt-ticker {
+  font-size:14px; color:var(--blue); margin-bottom:16px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+
+/* big call card */
+.call-card {
+  border:2px solid var(--border); border-radius:12px; padding:28px 32px;
+  background:var(--bg2); transition:border-color 0.3s, background 0.3s;
+}
+.call-card.yes { border-color:#2d5a3d; background:#0d1f12; }
+.call-card.no  { border-color:#5a2a2a; background:#1a0d0d; }
+.call-card.waiting { border-color:var(--border); background:var(--bg2); }
+
+.call-direction {
+  font-size:72px; font-weight:900; letter-spacing:-2px; line-height:1;
+  margin-bottom:12px;
+}
+.call-direction.yes { color:var(--green); }
+.call-direction.no  { color:var(--red); }
+.call-direction.waiting { color:var(--mute); font-size:36px; margin-bottom:0; }
+
+.call-action {
+  font-size:22px; font-weight:700; margin-bottom:20px; color:var(--fg);
+}
+
+.call-meta {
+  display:flex; flex-wrap:wrap; gap:24px; margin-bottom:20px;
+}
+.meta-item { display:flex; flex-direction:column; gap:2px; }
+.meta-label { font-size:10px; color:var(--mute); text-transform:uppercase; letter-spacing:0.5px; }
+.meta-value { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }
+.meta-value.yes { color:var(--green); }
+.meta-value.no  { color:var(--red); }
+.meta-value.neu { color:var(--yellow); }
+
+/* confidence bar */
+.conf-wrap { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+.conf-label { font-size:11px; color:var(--mute); white-space:nowrap; }
+.conf-track {
+  flex:1; height:8px; background:var(--bg3); border-radius:4px; overflow:hidden;
+}
+.conf-fill {
+  height:100%; border-radius:4px; transition:width 0.4s;
+}
+.conf-fill.yes { background:var(--green); }
+.conf-fill.no  { background:var(--red); }
+.conf-pct { font-size:14px; font-weight:700; min-width:40px; text-align:right; }
+
+/* component row */
+.components {
+  display:flex; gap:10px; flex-wrap:wrap;
+}
+.comp-chip {
+  padding:4px 12px; border-radius:20px; font-size:12px; font-weight:700; border:1px solid;
+}
+.comp-chip.bull { background:#0d2018; color:var(--green); border-color:#2d5a3d; }
+.comp-chip.bear { background:#1f0d0d; color:var(--red); border-color:#5a2a2a; }
+.comp-chip.neut { background:var(--bg3); color:var(--mute); border-color:var(--border); }
+
+/* ── round history ── */
+#history-section {
+  max-width:720px; width:100%; margin:0 auto 28px; padding:0 20px;
+}
+.hist-title {
+  font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:0.5px;
+  margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;
+}
+.hist-grid {
+  display:flex; flex-wrap:wrap; gap:8px;
+}
+.hcard {
+  border:1px solid var(--border); border-radius:8px; padding:10px 14px;
+  background:var(--bg2); min-width:130px; display:flex; flex-direction:column; gap:4px;
+}
+.hcard.correct  { border-color:#2d5a3d; background:#0d1f12; }
+.hcard.wrong    { border-color:#5a2a2a; background:#1a0d0d; }
+.hcard.pending  { opacity:0.6; }
+.hcard-dir { font-size:16px; font-weight:900; }
+.hcard-dir.yes { color:var(--green); }
+.hcard-dir.no  { color:var(--red); }
+.hcard-conf { font-size:11px; color:var(--mute); }
+.hcard-out { font-size:13px; font-weight:700; }
+.hcard-out.ok  { color:var(--green); }
+.hcard-out.bad { color:var(--red); }
+.hcard-out.pending { color:var(--mute); font-style:italic; }
+.hcard-time { font-size:10px; color:var(--mute); }
+
+/* ── score pill ── */
+.score-pill {
+  display:inline-block; padding:2px 10px; border-radius:12px;
+  font-size:12px; font-weight:700; border:1px solid var(--border);
+  background:var(--bg3);
+}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">kalshi · trade caller</span>
+  <nav class="nav">
+    <a href="/crypto">→ full dashboard</a>
+    <a href="/whales">→ whales</a>
+  </nav>
+  <span class="clock" id="clock">--:--:--</span>
+</header>
+
+<div id="call-box">
+  <div class="mkt-label">CURRENT MARKET</div>
+  <div class="mkt-ticker" id="mkt-ticker">loading…</div>
+
+  <div class="call-card waiting" id="call-card">
+    <div class="call-direction waiting" id="call-dir">—</div>
+    <div class="call-action" id="call-action" style="color:var(--mute)">waiting for data…</div>
+
+    <div class="call-meta" id="call-meta"></div>
+
+    <div class="conf-wrap">
+      <span class="conf-label">Confidence</span>
+      <div class="conf-track"><div class="conf-fill" id="conf-fill" style="width:0%"></div></div>
+      <span class="conf-pct" id="conf-pct">—</span>
+    </div>
+
+    <div class="components" id="call-comps"></div>
+  </div>
+</div>
+
+<div id="history-section">
+  <div class="hist-title">
+    <span>ROUND HISTORY</span>
+    <span id="score-label"></span>
+  </div>
+  <div class="hist-grid" id="hist-grid">
+    <span style="color:var(--mute);font-size:11px">history appears after first round…</span>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function tick() { $('clock').textContent = new Date().toISOString().slice(11,19)+' UTC'; }
+tick(); setInterval(tick, 1000);
+
+function chip(label, val) {
+  if(val == null) return '';
+  const cls = val > 8 ? 'bull' : val < -8 ? 'bear' : 'neut';
+  const arrow = val > 8 ? '▲' : val < -8 ? '▼' : '▶';
+  return `<span class="comp-chip ${cls}">${arrow} ${label} ${val > 0 ? '+' : ''}${val}</span>`;
+}
+
+function metaItem(label, value, cls='') {
+  return `<div class="meta-item">
+    <span class="meta-label">${label}</span>
+    <span class="meta-value ${cls}">${value}</span>
+  </div>`;
+}
+
+function fmt$(n) { return n == null ? '—' : '$' + Math.round(n).toLocaleString(); }
+
+async function pollSignal() {
+  try {
+    const s = await fetch('/api/crypto/signal').then(r => r.json());
+    const card = $('call-card');
+
+    if(s.status === 'between_markets' || s.status === 'no_active_market') {
+      card.className = 'call-card waiting';
+      $('call-dir').className = 'call-direction waiting';
+      $('call-dir').textContent = '—';
+      const mins = s.mins_to_open != null ? ` · opens in ${s.mins_to_open.toFixed(1)}m` : '';
+      $('call-action').textContent = 'Waiting for next round' + mins;
+      $('call-action').style.color = 'var(--mute)';
+      $('mkt-ticker').textContent = s.next_ticker || 'between markets';
+      $('call-meta').innerHTML = '';
+      $('call-comps').innerHTML = '';
+      $('conf-fill').style.width = '0%';
+      $('conf-pct').textContent = '—';
+      return;
+    }
+    if(s.status !== 'ok') return;
+
+    const isUp = s.direction === 'YES';
+    const dirCls = isUp ? 'yes' : 'no';
+    card.className = 'call-card ' + dirCls;
+    $('call-dir').className = 'call-direction ' + dirCls;
+    $('call-dir').textContent = isUp ? '▲ YES' : '▼ NO';
+
+    const price = isUp ? s.price : (1 - s.price);
+    const flowPct = isUp ? s.yes_pct : (100 - s.yes_pct);
+    const flowSrc = s.has_whale_data ? 'whale' : 'retail';
+    $('call-action').style.color = 'var(--fg)';
+    $('call-action').textContent = `BUY ${s.direction} at ${(price * 100).toFixed(1)}¢`;
+
+    // Spot vs strike info
+    let spotNote = '';
+    if(s.spot != null && s.floor_strike != null) {
+      const dist = Math.round(s.distance);
+      const sign = dist >= 0 ? '+$' : '−$';
+      spotNote = `spot ${fmt$(s.spot)} vs strike ${fmt$(s.floor_strike)} (${sign}${Math.abs(dist).toLocaleString()})`;
+    }
+
+    const minsStr = s.mins_left != null ? s.mins_left.toFixed(1) + 'm' : '—';
+    const spreadStr = s.spread != null ? (s.spread * 100).toFixed(1) + '¢ vig' : '—';
+
+    $('call-meta').innerHTML =
+      metaItem('Price', (price * 100).toFixed(1) + '¢', dirCls) +
+      metaItem('Flow', flowPct.toFixed(1) + '% ' + s.direction + ' (' + flowSrc + ')', dirCls) +
+      metaItem('Time Left', minsStr, 'neu') +
+      metaItem('Spread', spreadStr, s.spread > 0.06 ? 'no' : 'neu') +
+      (spotNote ? `<div class="meta-item" style="flex-basis:100%">
+        <span class="meta-label">Spot vs Strike</span>
+        <span class="meta-value" style="font-size:14px;color:var(--mute)">${spotNote}</span>
+      </div>` : '');
+
+    const conf = s.confidence;
+    $('conf-fill').style.width = conf + '%';
+    $('conf-fill').className = 'conf-fill ' + dirCls;
+    $('conf-pct').textContent = conf + '%';
+    $('conf-pct').style.color = conf >= 60 ? (isUp ? 'var(--green)' : 'var(--red)') : 'var(--mute)';
+
+    $('call-comps').innerHTML =
+      chip('Whale', s.sig_whale) +
+      chip('Spot',  s.sig_spot) +
+      chip('Momo',  s.sig_momentum) +
+      (s.sig_combined != null
+        ? `<span class="comp-chip ${s.sig_combined > 8 ? 'bull' : s.sig_combined < -8 ? 'bear' : 'neut'}" style="font-size:13px;padding:4px 14px">NET ${s.sig_combined > 0 ? '+' : ''}${s.sig_combined}</span>`
+        : '');
+
+    $('mkt-ticker').textContent = s.ticker;
+  } catch(e) { console.error('signal poll error', e); }
+}
+
+async function pollHistory() {
+  try {
+    const { rows } = await fetch('/api/crypto/history').then(r => r.json());
+    if(!rows || !rows.length) return;
+
+    const wins = rows.filter(r => r.correct === true).length;
+    const settled = rows.filter(r => r.outcome != null).length;
+    const scoreHtml = settled > 0
+      ? `<span class="score-pill">${wins}/${settled} (${Math.round(wins/settled*100)}%)</span>`
+      : '';
+    $('score-label').innerHTML = scoreHtml;
+
+    $('hist-grid').innerHTML = rows.slice().reverse().map(r => {
+      const isUp = r.direction === 'YES';
+      const dirCls = isUp ? 'yes' : 'no';
+      const dirLabel = isUp ? '▲ YES' : '▼ NO';
+      const ts = r.ts ? new Date(r.ts * 1000).toISOString().slice(11, 16) : '?';
+      const label = r.ticker ? r.ticker.split('-').slice(-2).join('-') : '';
+
+      let outHtml, outCls;
+      if(r.outcome) {
+        const ok = r.correct;
+        outHtml = ok ? `✓ ${r.outcome}` : `✗ ${r.outcome}`;
+        outCls = ok ? 'ok' : 'bad';
+      } else {
+        outHtml = 'pending…';
+        outCls = 'pending';
+      }
+      const cardCls = r.outcome ? (r.correct ? 'correct' : 'wrong') : 'pending';
+
+      return `<div class="hcard ${cardCls}">
+        <span class="hcard-dir ${dirCls}">${dirLabel}</span>
+        <span class="hcard-conf">${r.conf != null ? r.conf + '% conf' : ''}</span>
+        <span class="hcard-out ${outCls}">${outHtml}</span>
+        <span class="hcard-time">${label} · ${ts} UTC</span>
+      </div>`;
+    }).join('');
+  } catch(e) { console.error('history poll error', e); }
+}
+
+pollSignal();   setInterval(pollSignal,   4000);
+pollHistory();  setInterval(pollHistory,  10000);
+</script>
+</body>
+</html>"""
 
 _CRYPTO_HTML = r"""<!doctype html>
 <html lang="en">
