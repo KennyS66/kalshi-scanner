@@ -7,3 +7,7 @@ __pycache__/
 data/whales/picks_log.jsonl
 data/whales/picks_outcomes.json
 data/whales/calibration.json
+
+# Live pick files — runtime state, not part of repo
+data/whales/btc_15m_pick.json
+data/whales/btc_d_pick.json
