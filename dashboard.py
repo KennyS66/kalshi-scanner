@@ -297,36 +297,40 @@ def build_whale_table(alerts, limit=20):
 # ── Top Markets Table ────────────────────────────────────────────────
 
 def build_top_markets_table(markets, spots=None):
-    table = Table(title="Top Markets by Activity Score", expand=True, padding=(0, 1))
-    table.add_column("#", width=3, style="dim")
-    table.add_column("Market", style="cyan", width=35)
-    table.add_column("Trades", justify="right", width=6)
-    table.add_column("Vol", justify="right", width=8)
-    table.add_column("$Not", justify="right", width=8)
-    table.add_column("OI", justify="right", width=7)
-    table.add_column("Whl", justify="right", width=4)
-    table.add_column("Flow", justify="right", width=7)
-    table.add_column("Scr", justify="right", width=5)
+    table = Table(title="Top Markets by Activity Score", expand=True, padding=(0, 2))
+    table.add_column("#", min_width=3, style="dim")
+    table.add_column("Market", style="cyan", min_width=38)
+    table.add_column("Trades", justify="right", min_width=7)
+    table.add_column("Volume", justify="right", min_width=9)
+    table.add_column("Notional", justify="right", min_width=10)
+    table.add_column("OI", justify="right", min_width=8)
+    table.add_column("Whales", justify="right", min_width=7)
+    table.add_column("Flow", justify="right", min_width=9)
+    table.add_column("Score", min_width=10)
 
     for i, m in enumerate(markets, 1):
-        score_style = "bold green" if m.score > 0.6 else "yellow" if m.score > 0.3 else "dim"
+        score_style = "bold green" if m.score > 0.6 else "yellow" if m.score > 0.3 else "white"
         whale_style = "bold red" if m.recent_whale_count >= 5 else "yellow" if m.recent_whale_count >= 2 else "white"
         flow_style = "green" if m.buy_pressure > 0 else "red" if m.buy_pressure < 0 else "dim"
         flow_prefix = "+" if m.buy_pressure > 0 else ""
+
+        filled = round(m.score * 8)
+        bar = "█" * filled + "░" * (8 - filled)
+        score_text = Text(f"{bar} {m.score:.0%}", style=score_style)
 
         display = label_market(m.title, m.ticker, spots) if spots else m.title
         if display == m.title:
             display = m.title if m.title != m.ticker else m.ticker
         table.add_row(
             str(i),
-            trunc(display, 34),
+            trunc(display, 45),
             str(m.trade_count),
             format_contracts(m.trade_volume),
             format_dollars(m.trade_notional),
             format_contracts(m.open_interest) if m.open_interest else "-",
             Text(str(m.recent_whale_count), style=whale_style),
             Text(f"{flow_prefix}{format_contracts(m.buy_pressure)}", style=flow_style),
-            Text(f"{m.score:.2f}", style=score_style),
+            score_text,
         )
 
     return table
@@ -564,8 +568,8 @@ def run_dashboard(scanner, alpha_engine=None, refresh_seconds=30):
                     alpha_signals = alpha_engine.get_top_signals(15)
 
                 # Ranked views
-                top_markets = scanner.get_top_markets(12)
-                whale_magnets = scanner.get_whale_magnets(6)
+                top_markets = scanner.get_top_markets(20)
+                whale_magnets = scanner.get_whale_magnets(12)
 
                 # Build layout
                 layout = Layout()
@@ -576,15 +580,14 @@ def run_dashboard(scanner, alpha_engine=None, refresh_seconds=30):
                 )
                 layout["body"].split_row(
                     Layout(name="left", ratio=1),
-                    Layout(name="right", ratio=1),
+                    Layout(name="right", ratio=2),
                 )
                 layout["left"].split_column(
                     Layout(name="alpha", ratio=2),
-                    Layout(name="whales", ratio=2),
                 )
                 layout["right"].split_column(
-                    Layout(name="top", ratio=2),
-                    Layout(name="magnets", ratio=1),
+                    Layout(name="top", ratio=5),
+                    Layout(name="magnets", ratio=2),
                     Layout(name="crypto", ratio=2),
                 )
 
@@ -603,9 +606,6 @@ def run_dashboard(scanner, alpha_engine=None, refresh_seconds=30):
 
                 layout["alpha"].update(
                     Panel(build_alpha_table(alpha_signals, spots=spots), border_style="magenta")
-                )
-                layout["whales"].update(
-                    Panel(build_whale_table(scanner.whale_alerts), border_style="yellow")
                 )
                 layout["top"].update(
                     Panel(build_top_markets_table(top_markets, spots=spots), border_style="green")

@@ -117,15 +117,15 @@ def build_strike_ladder(scanner, spot_prices):
     # Sort by asset then distance from spot (closest first)
     rows.sort(key=lambda r: (r["asset"], abs(r["diff"])))
 
-    table = Table(title="Crypto Strike Ladder", expand=True, padding=(0, 1))
-    table.add_column("Asset", width=4, style="dim")
-    table.add_column("Strike", justify="right", width=10)
-    table.add_column("vs Spot", justify="right", width=9)
-    table.add_column("ITM?", width=5)
-    table.add_column("Price", justify="right", width=6)
-    table.add_column("Vol", justify="right", width=8)
-    table.add_column("Whl", justify="right", width=4)
-    table.add_column("Flow", justify="right", width=8)
+    table = Table(title="Crypto Strike Ladder", expand=True, padding=(0, 2))
+    table.add_column("Asset", min_width=5, style="dim")
+    table.add_column("Strike", justify="right", min_width=11)
+    table.add_column("vs Spot", justify="right", min_width=10)
+    table.add_column("ITM?", min_width=5)
+    table.add_column("Price", justify="right", min_width=7)
+    table.add_column("Volume", justify="right", min_width=10)
+    table.add_column("Whales", justify="right", min_width=7)
+    table.add_column("Flow", justify="right", min_width=10)
 
     current_asset = None
     for r in rows:
@@ -390,11 +390,11 @@ def run_crypto_dashboard(scanner, alpha_engine=None, refresh_seconds=30):
                     Layout(name="body"),
                 )
                 layout["body"].split_row(
-                    Layout(name="left", ratio=5),
-                    Layout(name="right", ratio=4),
+                    Layout(name="left", ratio=7),
+                    Layout(name="right", ratio=3),
                 )
                 layout["left"].split_column(
-                    Layout(name="ladder", ratio=3),
+                    Layout(name="ladder", ratio=5),
                     Layout(name="updown", ratio=2),
                 )
                 layout["right"].split_column(

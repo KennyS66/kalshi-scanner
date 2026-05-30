@@ -163,11 +163,16 @@ def fit() -> dict | None:
     labels = [r[2] for r in rows]
     w, b = _fit_logreg(features, labels)
 
-    # Translate logistic weights → blend weights in [0,1] for sink.py
-    # Just normalise the absolute weights; bias rolls into the implicit prior.
+    # Translate logistic weights → blend weights in [0,1] for sink.py.
+    # Preserve sign: a negative coefficient means the feature is anti-predictive
+    # in this direction, so we clamp to 0 rather than flipping it positive.
     abs_sum = abs(w[0]) + abs(w[1]) or 1.0
-    base_weight = abs(w[0]) / abs_sum
-    flow_weight = abs(w[1]) / abs_sum
+    base_weight = max(0.0, w[0]) / abs_sum
+    flow_weight = max(0.0, w[1]) / abs_sum
+    # Renormalise so they sum to 1 (both could be positive, or one could be 0)
+    wt_sum = base_weight + flow_weight or 1.0
+    base_weight = round(base_weight / wt_sum, 4)
+    flow_weight = round(flow_weight / wt_sum, 4)
 
     # Hit rate over the training set (sanity check; written for the user)
     hits = 0

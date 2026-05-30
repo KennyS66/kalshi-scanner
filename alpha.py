@@ -136,7 +136,7 @@ def detect_flow_divergence(scanner):
             flow_ratio = flat_ratio
 
         # Implied fair value from flow (with dampening — flow isn't perfectly predictive)
-        flow_fair = flow_ratio * 0.6 + price * 0.4
+        flow_fair = flow_ratio * 0.7 + price * 0.3
 
         # Divergence: how far the price is from flow-implied fair value
         divergence = flow_fair - price
@@ -309,6 +309,9 @@ def detect_whale_momentum(scanner):
 
     for ticker, whales in whale_by_ticker.items():
         if len(whales) < 3:
+            continue
+        # Require meaningful notional — 3 tiny whales shouldn't trigger momentum
+        if sum(w.notional for w in whales) < 500:
             continue
 
         # Skip MVE parlays
@@ -813,17 +816,45 @@ def detect_btc_implied_distribution(scanner):
         except Exception:
             continue
 
-        slope, intercept = _lin_reg(strikes, ys)
-        if slope is None or slope <= 0:
+        def _fit_curve(xs, ys_vals):
+            s, i = _lin_reg(xs, ys_vals)
+            if s is None or s <= 0:
+                return None, None
+            sig = 1.0 / s
+            return sig, -i * sig  # sigma, mu
+
+        sigma, mu = _fit_curve(strikes, ys)
+        if sigma is None:
             continue
 
-        sigma = 1.0 / slope
-        mu = -intercept * sigma
+        # Iterative outlier rejection: drop points > 2.5σ residual, refit once
+        residuals = [
+            abs((1.0 - _normal_cdf((sk - mu) / sigma)) - pr)
+            for sk, pr, _ in entries
+        ]
+        med_res = sorted(residuals)[len(residuals) // 2]
+        clean = [(sk, pr, sn, r) for (sk, pr, sn), r in zip(entries, residuals)
+                 if r < max(med_res * 4, 0.06)]
+        if len(clean) >= 5:
+            try:
+                clean_ys = [_normal_ppf(1.0 - pr) for _, pr, _, _ in clean]
+                sigma2, mu2 = _fit_curve([sk for sk, _, _, _ in clean], clean_ys)
+                if sigma2 is not None:
+                    sigma, mu = sigma2, mu2
+            except Exception:
+                pass
 
+        # Expiry-aware threshold: tighter near expiry where noise is lower
+        now_epoch = time.time()
         for strike, price, snap in entries:
             fitted_price = 1.0 - _normal_cdf((strike - mu) / sigma)
             deviation = price - fitted_price
-            if abs(deviation) < 0.03:
+            # Tighten threshold when close to expiry
+            mins_left = None
+            if snap.close_ts:
+                mins_left = max(0.0, (snap.close_ts - now_epoch) / 60)
+            threshold = 0.02 if (mins_left is not None and mins_left < 10) else 0.03
+            if abs(deviation) < threshold:
                 continue
             # Mispriced relative to the curve
             direction = "no" if deviation > 0 else "yes"  # overpriced → sell (no), underpriced → buy (yes)

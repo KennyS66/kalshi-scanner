@@ -268,8 +268,8 @@ def main():
                         help="Min contracts to flag as whale (default: 50)")
     parser.add_argument("--lookback", type=int, default=60,
                         help="Minutes to look back for trades (default: 60)")
-    parser.add_argument("--refresh", type=int, default=30,
-                        help="Seconds between scans in live mode (default: 30)")
+    parser.add_argument("--refresh", type=int, default=5,
+                        help="Seconds between scans in live mode (default: 5)")
     parser.add_argument("--snapshot", action="store_true",
                         help="Single scan, no live dashboard")
     parser.add_argument("--whale-research", action="store_true", dest="whale_research",

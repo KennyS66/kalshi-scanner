@@ -75,7 +75,7 @@ class Scanner:
         self.whale_alerts: list[WhaleAlert] = []
         self.market_snapshots: dict[str, MarketSnapshot] = {}
         self.last_trade_ts = None
-        self._seen_trade_ids: set[str] = set()
+        self._seen_trade_ids: dict[str, float] = {}  # trade_id → epoch when first seen
         # Aggregated from all trades we've seen
         self._ticker_stats: dict[str, dict] = defaultdict(lambda: {
             "count": 0, "volume": 0.0, "notional": 0.0,
@@ -88,6 +88,8 @@ class Scanner:
         cutoff = int(time.time()) - (self.lookback_minutes * 60)
         min_ts = self.last_trade_ts or cutoff
 
+        scan_start_ts = int(time.time())  # capture before API calls so we don't miss trades during slow fetches
+        now_ts = float(scan_start_ts)
         new_whales = []
         cursor = None
         new_trade_count = 0
@@ -102,7 +104,7 @@ class Scanner:
                 trade_id = t.get("trade_id", "")
                 if trade_id in self._seen_trade_ids:
                     continue
-                self._seen_trade_ids.add(trade_id)
+                self._seen_trade_ids[trade_id] = now_ts
                 new_trade_count += 1
 
                 ticker = t.get("ticker", "")
@@ -144,13 +146,20 @@ class Scanner:
             if not cursor:
                 break
 
-        self.last_trade_ts = int(time.time())
-        self.whale_alerts = new_whales + self.whale_alerts
-        self.whale_alerts = self.whale_alerts[:500]
+        self.last_trade_ts = scan_start_ts
+        # Merge new alerts and prune anything older than 4 hours
+        _whale_cutoff = time.time() - 4 * 3600
+        self.whale_alerts = [
+            a for a in (new_whales + self.whale_alerts)
+            if a.timestamp and a.timestamp.timestamp() >= _whale_cutoff
+        ]
 
-        # Keep seen IDs from growing unbounded
-        if len(self._seen_trade_ids) > 50000:
-            self._seen_trade_ids = set(list(self._seen_trade_ids)[-25000:])
+        # Prune seen IDs older than 24 hours
+        _id_cutoff = now_ts - 86400
+        self._seen_trade_ids = {
+            tid: ts for tid, ts in self._seen_trade_ids.items()
+            if ts >= _id_cutoff
+        }
 
         return new_whales, new_trade_count
 
