@@ -14,6 +14,8 @@ data/whales/btc_d_pick.json
 
 # Signal feature log + alert files — runtime state, not part of repo
 data/whales/signal_feature_log.jsonl
+data/whales/gate_history.log
+data/whales/GATE_PASSED.flag
 data/entry_alert.txt
 data/exit_alert.txt
 data/prewarn_alert.txt
