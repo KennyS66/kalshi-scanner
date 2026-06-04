@@ -165,11 +165,15 @@ class Scanner:
 
     def enrich_markets(self):
         """Fetch market metadata for tickers we've seen in trades."""
-        active_tickers = sorted(
-            self._ticker_stats.keys(),
+        all_tickers = list(self._ticker_stats.keys())
+        # Always include crypto 15m tickers so whale data loads immediately at market open
+        priority = {t for t in all_tickers if "15M" in t and t.startswith("KX")}
+        rest = sorted(
+            [t for t in all_tickers if t not in priority],
             key=lambda t: self._ticker_stats[t]["volume"],
             reverse=True,
-        )[:200]  # Top 200 by trade volume
+        )[:200]
+        active_tickers = list(priority) + rest
 
         # Batch fetch in groups of 100 (API limit for tickers param)
         for i in range(0, len(active_tickers), 100):

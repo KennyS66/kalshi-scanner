@@ -74,11 +74,11 @@ def _btc_spot_poller_loop(interval: float = 5.0) -> None:
     while True:
         time.sleep(interval)
         with contextlib.suppress(Exception):
-            req = ur.Request("https://api.coinbase.com/v2/prices/BTC-USD/spot",
+            req = ur.Request("https://api.exchange.coinbase.com/products/BTC-USD/ticker",
                              headers={"User-Agent": "kalshi-scanner/1.0"})
             with ur.urlopen(req, timeout=4) as r:
                 data = json.loads(r.read())
-                price = float(data["data"]["amount"])
+                price = float(data["price"])
                 with _btc_spot_lock:
                     _btc_spot_history.append((time.time(), price))
 
@@ -178,12 +178,12 @@ async def api_crypto_spot() -> JSONResponse:
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             br, er = await asyncio.gather(
-                client.get("https://api.coinbase.com/v2/prices/BTC-USD/spot"),
-                client.get("https://api.coinbase.com/v2/prices/ETH-USD/spot"),
+                client.get("https://api.exchange.coinbase.com/products/BTC-USD/ticker"),
+                client.get("https://api.exchange.coinbase.com/products/ETH-USD/ticker"),
             )
         return JSONResponse({
-            "btc": float(br.json()["data"]["amount"]),
-            "eth": float(er.json()["data"]["amount"]),
+            "btc": float(br.json()["price"]),
+            "eth": float(er.json()["price"]),
         })
     except Exception:
         return JSONResponse({"btc": None, "eth": None})
@@ -265,23 +265,33 @@ async def api_crypto_signal() -> JSONResponse:
         except Exception:
             return None
 
-    # Find active (unsettled) BTC 15m market — prefer soonest future expiry
+    # Find active (unsettled) BTC 15m market — prefer soonest FUTURE expiry.
+    # Two-pass: first pass only considers markets that haven't expired yet;
+    # second pass allows the 2-min grace window. This ensures a newly opened
+    # market is always preferred over the one that just expired.
     active = None
     active_exp = None
-    for ticker, snap in list(_scanner.market_snapshots.items()):
-        if "KXBTC15M" not in ticker.upper():
-            continue
-        price = snap.last_price or snap.yes_price or 0
-        if not (0.01 < price < 0.99):
-            continue
-        exp = _ticker_expiry(ticker)
-        if exp is None:
-            continue
-        if (exp.timestamp() - time.time()) < -120:
-            continue  # expired more than 2 minutes ago
-        if active is None or exp < active_exp:
-            active = (ticker, snap)
-            active_exp = exp
+    _now_ts = time.time()
+    for _grace_ok in (False, True):
+        for ticker, snap in list(_scanner.market_snapshots.items()):
+            if "KXBTC15M" not in ticker.upper():
+                continue
+            price = snap.last_price or snap.yes_price or 0
+            if not (0.01 < price < 0.99):
+                continue
+            exp = _ticker_expiry(ticker)
+            if exp is None:
+                continue
+            age_s = _now_ts - exp.timestamp()
+            if age_s > 120:
+                continue  # expired more than 2 minutes ago
+            if age_s > 0 and not _grace_ok:
+                continue  # skip expired markets in first pass
+            if active is None or exp < active_exp:
+                active = (ticker, snap)
+                active_exp = exp
+        if active:
+            break
 
     # Fallback: scanner hasn't seen this market yet — fetch directly from Kalshi
     _direct_mkt: dict | None = None
@@ -473,6 +483,19 @@ async def api_crypto_signal() -> JSONResponse:
     else:
         combined = whale_signal * w[0] + spot_signal * w[1] + momentum_signal * w[2]
 
+    # ── Flush detector ───────────────────────────────────────────────────
+    # When spot is below strike but buy pressure is strongly positive,
+    # the market is absorbing the drop — suppress aggressive NO calls.
+    is_flush = False
+    flush_score = 0
+    _bp = snap.buy_pressure if snap else 0
+    if (distance is not None and distance < -5 and
+            _bp > 5000 and mins_remaining > 3):
+        flush_score = min(100, int(_bp / 300))
+        if flush_score >= 20:
+            is_flush = True
+            combined = max(combined, -0.15)  # floor — weaken NO, don't force YES
+
     direction = "YES" if combined >= 0 else "NO"
     confidence = round(min(abs(combined), 1.0) * 100)
 
@@ -520,6 +543,9 @@ async def api_crypto_signal() -> JSONResponse:
         "spread": spread,
         # Momentum component
         "momentum": momentum,
+        # Flush detector
+        "is_flush": is_flush,
+        "flush_score": flush_score,
         # Raw signal values (-100 to +100)
         "sig_whale": round(whale_signal * 100),
         "sig_spot": round(spot_signal * 100),
