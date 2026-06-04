@@ -11,3 +11,12 @@ data/whales/calibration.json
 # Live pick files — runtime state, not part of repo
 data/whales/btc_15m_pick.json
 data/whales/btc_d_pick.json
+
+# Signal feature log + alert files — runtime state, not part of repo
+data/whales/signal_feature_log.jsonl
+data/entry_alert.txt
+data/exit_alert.txt
+data/prewarn_alert.txt
+
+# Local Claude Code config
+.claude/

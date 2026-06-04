@@ -33,6 +33,32 @@ app = FastAPI(title="kalshi-scanner")
 
 _DATA_DIR = Path("data/whales")
 
+# Durable, full-resolution signal feature log (for backtesting the actual
+# flush-bounce / NO entry conditions, which need flush_score / buy_pressure /
+# sig_* — fields the older picks_log never captured). Throttled per ticker so
+# dashboard polling doesn't bloat the file; one row every few seconds is plenty.
+_SIGNAL_FEATURE_LOG = _DATA_DIR / "signal_feature_log.jsonl"
+_feature_log_lock = threading.Lock()
+_feature_log_last_ts: dict[str, float] = {}
+_FEATURE_LOG_MIN_GAP_S = 4.0
+
+
+def _log_signal_features(row: dict) -> None:
+    """Append a full signal snapshot, throttled to one row per ticker per few seconds."""
+    ticker = row.get("ticker")
+    now = row.get("ts") or time.time()
+    try:
+        with _feature_log_lock:
+            last = _feature_log_last_ts.get(ticker, 0.0)
+            if now - last < _FEATURE_LOG_MIN_GAP_S:
+                return
+            _feature_log_last_ts[ticker] = now
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with _SIGNAL_FEATURE_LOG.open("a") as f:
+                f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
 _CRYPTO_PREFIXES = ("KXBTC", "KXETH", "KXSOL", "KXXBT")
 
 
@@ -518,7 +544,7 @@ async def api_crypto_signal() -> JSONResponse:
             if len(_signal_log) > 20:
                 _signal_log.pop(0)
 
-    return JSONResponse({
+    payload = {
         "status": "ok",
         "ticker": ticker,
         "direction": direction,
@@ -553,7 +579,13 @@ async def api_crypto_signal() -> JSONResponse:
         "sig_combined": round(combined * 100),
         "mins_left": mins_left,
         "ts": time.time(),
-    })
+    }
+
+    # Persist the full feature snapshot so the real entry signals become
+    # backtestable later (joined against settled outcomes per ticker).
+    _log_signal_features(payload)
+
+    return JSONResponse(payload)
 
 
 @app.get("/api/analyze")
