@@ -24,6 +24,28 @@ if [[ ! -f "$KEY_FILE" ]]; then
   exit 1
 fi
 
+# Launch background data collectors (idempotent) so the full pipeline comes up
+# with the scanner. They poll :9050 and retry until it's listening, and they
+# keep the signal feature log / alerts flowing for the gate + analysis tools.
+start_bg() {  # <name> <pgrep-pattern> <command...>
+  local name="$1" pat="$2"; shift 2
+  if pgrep -f "$pat" >/dev/null 2>&1; then
+    echo "  $name already running"
+  else
+    nohup "$@" >"/tmp/${name}.log" 2>&1 &
+    echo "  started $name (pid $!)"
+  fi
+}
+echo "Starting data collectors..."
+start_bg btc_monitor  "btc_monitor.sh"  ./btc_monitor.sh
+start_bg exit_watcher "exit_watcher.py" .venv/bin/python -u exit_watcher.py
+
+echo
+echo "Scanner: http://localhost:9050  (dashboards: /whales, /crypto)"
+echo ">> Live market-analysis loop: type  /marketloop  in Claude Code to start it."
+echo "   (a Python launch can't spawn the Claude reasoning loop; this is the one command)"
+echo
+
 exec .venv/bin/python main.py \
   --api-key "$API_KEY" \
   --key-file "$KEY_FILE" \
