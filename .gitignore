@@ -24,3 +24,4 @@ data/prewarn_alert.txt
 
 # Local Claude Code config
 .claude/
+data/whales/daily_thesis.jsonl
