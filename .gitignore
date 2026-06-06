@@ -22,6 +22,7 @@ data/entry_alert.txt
 data/exit_alert.txt
 data/prewarn_alert.txt
 
-# Local Claude Code config
-.claude/
+# Local Claude Code config (but DO track shared project slash commands)
+.claude/*
+!.claude/commands/
 data/whales/daily_thesis.jsonl
