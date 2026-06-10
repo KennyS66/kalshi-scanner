@@ -25,4 +25,7 @@ data/prewarn_alert.txt
 # Local Claude Code config (but DO track shared project slash commands)
 .claude/*
 !.claude/commands/
-data/whales/daily_thesis.jsonl
+
+# NOTE: data/whales/daily_thesis.jsonl is intentionally TRACKED (not ignored):
+# it is the shared daily-thesis journal synced between the cloud pre-market
+# routine (writes + pushes) and the local /marketloop (pulls via start.sh).
