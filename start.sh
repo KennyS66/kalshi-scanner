@@ -3,6 +3,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Sync the latest daily thesis (pushed by the cloud pre-market routine) so
+# day_plan.py / the /marketloop configures from today's bias, not a stale one.
+# Best-effort and non-blocking: a sync problem must never stop the scanner.
+# --autostash tucks the constantly-rewritten data/*.json picks aside during the
+# rebase; GIT_TERMINAL_PROMPT=0 keeps it from hanging on an auth prompt.
+echo "Syncing repo (latest daily thesis)..."
+GIT_TERMINAL_PROMPT=0 git pull --rebase --autostash 2>&1 | tail -3 \
+  || echo "  (git pull skipped/failed — continuing with the local thesis)"
+
 # Pull Kalshi creds from the daedalus-mm .env (single source of truth).
 DAEDALUS_ENV="$HOME/bots/daedalus-mm/.env"
 if [[ -f "$DAEDALUS_ENV" ]]; then

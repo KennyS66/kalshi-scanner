@@ -15,6 +15,7 @@ Prints a human summary plus a machine line: "PLAN: bias=.. key=.. spot=.. pos=..
 """
 import json
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backtest_gate import DATA
@@ -55,6 +56,16 @@ def current_spot():
     return None
 
 
+def thesis_age_days(t):
+    """Whole UTC days between the thesis date and today; None if unparseable."""
+    d = str(t.get("date", "")).strip()
+    try:
+        td = datetime.strptime(d, "%Y-%m-%d").date()
+    except Exception:
+        return None
+    return (datetime.now(timezone.utc).date() - td).days
+
+
 def parse_level(s):
     digits = "".join(c for c in str(s) if c.isdigit() or c == ".")
     try:
@@ -74,8 +85,26 @@ def main():
     bias = t.get("bias", "WAIT")
     key = parse_level(t.get("level")) or 0
     note = t.get("note", "")
+
+    # Staleness guard: a thesis only configures today's loop if it is today's
+    # (UTC). An older directional call is degraded to WAIT so the loop keeps
+    # watching the level but does NOT trade a stale bias. Key level is retained.
+    age = thesis_age_days(t)
+    stale = age is None or age >= 1
+    orig_bias = bias
+    if stale:
+        bias = "WAIT"
+        age_txt = "unknown age" if age is None else f"{age}d old"
+        print("!" * 56)
+        print(f"!! STALE THESIS ({age_txt}) — dated {t.get('date','?')}, today is "
+              f"{datetime.now(timezone.utc).date()} (UTC).")
+        print(f"!! Original bias {orig_bias} DEGRADED to WAIT. Record a fresh thesis:")
+        print(f"!!   python3 daily_thesis.py record BIAS <spot> --conviction N --level {int(key) if key else 60000}")
+        print("!" * 56)
+
     print(f"=== DAY PLAN  ({t.get('date','?')}) ===")
-    print(f"Bias       : {bias}  (conviction {t.get('conviction','?')})")
+    conv = "n/a (stale→WAIT)" if stale else t.get("conviction", "?")
+    print(f"Bias       : {bias}  (conviction {conv})")
     print(f"Thesis     : {note}")
     print(f"Key level  : ${key:,.0f}" if key else "Key level  : (none parsed)")
     if spot:
@@ -107,7 +136,7 @@ def main():
         print(f"Watch      : key level ${key:,.0f} only; flag a confirmed break either way. Stay quiet in the range.")
     print("Cadence    : ~5min in chop; tighten near the key level; faster only on a confirmed break.")
 
-    print(f"\nPLAN: bias={bias} key={int(key)} spot={int(spot) if spot else 0} pos={pos}")
+    print(f"\nPLAN: bias={bias} key={int(key)} spot={int(spot) if spot else 0} pos={pos} stale={'yes' if stale else 'no'}")
 
 
 if __name__ == "__main__":
