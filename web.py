@@ -12,17 +12,19 @@ from pathlib import Path
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 _scanner = None
 _alpha_engine = None
 
-# BTC spot price history — filled by background poller every 5s
+# BTC/ETH spot price history — filled by background poller every 5s
 _btc_spot_history: collections.deque = collections.deque(maxlen=40)
+_eth_spot_latest: float | None = None   # single latest ETH price
 _btc_spot_lock = threading.Lock()
 # Kalshi floor_strike per ticker — fetched once per market
 _market_floor_strike: dict[str, float] = {}
+_market_floor_strike_inflight: set = set()  # prevent concurrent duplicate fetches
 # Whale flow history per ticker — (ts, yes_pct) pairs
 _whale_flow_history: dict[str, collections.deque] = {}
 # Signal decision log — last 20 market calls with outcomes
@@ -41,6 +43,9 @@ _SIGNAL_FEATURE_LOG = _DATA_DIR / "signal_feature_log.jsonl"
 _feature_log_lock = threading.Lock()
 _feature_log_last_ts: dict[str, float] = {}
 _FEATURE_LOG_MIN_GAP_S = 4.0
+
+_LOOP_LOG_FILE = _DATA_DIR / "loop_log.jsonl"
+_loop_log_lock = threading.Lock()
 
 
 def _log_signal_features(row: dict) -> None:
@@ -94,8 +99,35 @@ def _is_15m_or_1h(ticker: str) -> bool:
     return "15M" in t or "1H" in t
 
 
+def _floor_strike_poller_loop() -> None:
+    """Background thread: fetch floor_strike for the active market every 10s."""
+    import urllib.request as ur
+    while True:
+        time.sleep(10)
+        with contextlib.suppress(Exception):
+            if _scanner is None:
+                continue
+            for ticker in list(_scanner.market_snapshots.keys()):
+                if "KXBTC15M" not in ticker.upper():
+                    continue
+                if _market_floor_strike.get(ticker) is not None:
+                    continue
+                req = ur.Request(
+                    f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}",
+                    headers={"User-Agent": "kalshi-scanner/1.0"},
+                )
+                with ur.urlopen(req, timeout=8) as resp:
+                    mkt = json.loads(resp.read()).get("market", {})
+                    fs = mkt.get("floor_strike")
+                    if fs is not None:
+                        _market_floor_strike[ticker] = float(fs)
+                        _market_floor_strike_inflight.discard(ticker)
+
+
 def _btc_spot_poller_loop(interval: float = 5.0) -> None:
-    """Background thread: poll BTC spot from Coinbase every 5s."""
+    """Background thread: poll BTC+ETH spot from Coinbase every 5s. Caches results so
+    the /api/crypto/spot route never needs to make its own outbound HTTP calls."""
+    global _eth_spot_latest
     import urllib.request as ur
     while True:
         time.sleep(interval)
@@ -107,6 +139,12 @@ def _btc_spot_poller_loop(interval: float = 5.0) -> None:
                 price = float(data["price"])
                 with _btc_spot_lock:
                     _btc_spot_history.append((time.time(), price))
+        with contextlib.suppress(Exception):
+            req = ur.Request("https://api.exchange.coinbase.com/products/ETH-USD/ticker",
+                             headers={"User-Agent": "kalshi-scanner/1.0"})
+            with ur.urlopen(req, timeout=4) as r:
+                data = json.loads(r.read())
+                _eth_spot_latest = float(data["price"])
 
 
 def _outcome_checker_loop(interval: float = 30.0) -> None:
@@ -155,6 +193,7 @@ def _calibration_loop(interval: int = 600) -> None:
 
 def start_background(port: int = 9050) -> threading.Thread:
     threading.Thread(target=_pick_writer_loop, daemon=True).start()
+    threading.Thread(target=_floor_strike_poller_loop, daemon=True).start()
     threading.Thread(target=_btc_spot_poller_loop, daemon=True).start()
     threading.Thread(target=_outcome_checker_loop, daemon=True).start()
     threading.Thread(target=_calibration_loop, daemon=True).start()
@@ -199,20 +238,20 @@ def _whale_rows(limit: int = 200) -> list[dict]:
     return rows
 
 
+@app.get("/api/debug/strike")
+async def api_debug_strike() -> JSONResponse:
+    return JSONResponse({"_market_floor_strike": {k: v for k, v in _market_floor_strike.items()}, "inflight": list(_market_floor_strike_inflight)})
+
 @app.get("/api/crypto/spot")
 async def api_crypto_spot() -> JSONResponse:
-    try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            br, er = await asyncio.gather(
-                client.get("https://api.exchange.coinbase.com/products/BTC-USD/ticker"),
-                client.get("https://api.exchange.coinbase.com/products/ETH-USD/ticker"),
-            )
-        return JSONResponse({
-            "btc": float(br.json()["price"]),
-            "eth": float(er.json()["price"]),
-        })
-    except Exception:
-        return JSONResponse({"btc": None, "eth": None})
+    # Serve from the in-memory cache maintained by the background poller (runs every 5s).
+    # NEVER make outbound HTTP calls per-request — that blocks the event loop.
+    # If cache is cold (first few seconds after start), return null immediately;
+    # the poller will populate it within 5 seconds.
+    hist = list(_btc_spot_history)
+    btc = hist[-1][1] if hist else None
+    eth = _eth_spot_latest
+    return JSONResponse({"btc": btc, "eth": eth})
 
 
 @app.get("/api/crypto/strikes")
@@ -319,7 +358,8 @@ async def api_crypto_signal() -> JSONResponse:
         if active:
             break
 
-    # Fallback: scanner hasn't seen this market yet — fetch directly from Kalshi
+    # Fallback: scanner hasn't seen this market yet — fetch directly from Kalshi.
+    # Cached per-ticker for 20s so 5s frontend polls don't all slam the Kalshi API.
     _direct_mkt: dict | None = None
     if not active:
         with contextlib.suppress(Exception):
@@ -327,21 +367,49 @@ async def api_crypto_signal() -> JSONResponse:
             _dticker = f"KXBTC15M-{next_suffix}"
             _mins_rem = (next_ts - time.time()) / 60
             if 0 < _mins_rem <= 15:
-                async with httpx.AsyncClient(timeout=4) as client:
-                    r = await client.get(
-                        f"https://api.elections.kalshi.com/trade-api/v2/markets/{_dticker}"
-                    )
-                    mkt = r.json().get("market", {})
+                _cached = _between_markets_cache.get(_dticker)
+                if _cached and time.time() - _cached["ts"] < _BETWEEN_MARKETS_TTL:
+                    _direct_mkt = _cached["resp"]
+                else:
+                    # Fire-and-forget: kick off background fetch and return
+                    # immediately. On the next poll the cache will be warm.
+                    async def _bg_fetch_between(dt=_dticker):
+                        import urllib.request as _ur
+                        try:
+                            def _do():
+                                req = _ur.Request(
+                                    f"https://api.elections.kalshi.com/trade-api/v2/markets/{dt}",
+                                    headers={"User-Agent": "kalshi-scanner/1.0"},
+                                )
+                                with _ur.urlopen(req, timeout=3) as _r:
+                                    return json.loads(_r.read())
+                            _resp = await asyncio.get_running_loop().run_in_executor(None, _do)
+                            mkt = _resp.get("market", {})
+                            if mkt.get("status") == "active":
+                                _between_markets_cache[dt] = {"resp": {
+                                    "ticker": dt,
+                                    "price": float(mkt.get("last_price_dollars") or 0.5),
+                                    "floor_strike": float(mkt["floor_strike"]) if mkt.get("floor_strike") else None,
+                                    "yes_ask": float(mkt.get("yes_ask_dollars") or 0),
+                                    "no_ask": float(mkt.get("no_ask_dollars") or 0),
+                                }, "ts": time.time()}
+                        except Exception:
+                            pass
+                    asyncio.create_task(_bg_fetch_between())
+                    mkt = {}
+                    if False:  # never reached — kept for structure
+                        pass
                     if mkt.get("status") == "active":
-                        _direct_mkt = {
-                            "ticker": _dticker,
-                            "price": float(mkt.get("last_price_dollars") or 0.5),
-                            "floor_strike": float(mkt["floor_strike"]) if mkt.get("floor_strike") else None,
-                            "yes_ask": float(mkt.get("yes_ask_dollars") or 0),
-                            "no_ask": float(mkt.get("no_ask_dollars") or 0),
-                        }
-                        if _direct_mkt["floor_strike"]:
-                            _market_floor_strike[_dticker] = _direct_mkt["floor_strike"]
+                            _direct_mkt = {
+                                "ticker": _dticker,
+                                "price": float(mkt.get("last_price_dollars") or 0.5),
+                                "floor_strike": float(mkt["floor_strike"]) if mkt.get("floor_strike") else None,
+                                "yes_ask": float(mkt.get("yes_ask_dollars") or 0),
+                                "no_ask": float(mkt.get("no_ask_dollars") or 0),
+                            }
+                            if _direct_mkt["floor_strike"]:
+                                _market_floor_strike[_dticker] = _direct_mkt["floor_strike"]
+                            _between_markets_cache[_dticker] = {"resp": _direct_mkt, "ts": time.time()}
 
     if not active and _direct_mkt is None:
         try:
@@ -409,23 +477,38 @@ async def api_crypto_signal() -> JSONResponse:
                              int(mx.group(4)), int(mx.group(5)), tzinfo=_ET)
         mins_left = round((exp_dt.timestamp() - time.time()) / 60, 1)
 
-    # ── Floor strike (fetch from Kalshi once per market) ────────────────
-    if ticker not in _market_floor_strike:
-        with contextlib.suppress(Exception):
-            async with httpx.AsyncClient(timeout=4) as client:
-                r = await client.get(
-                    f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}"
-                )
-                mkt = r.json().get("market", {})
-                fs = mkt.get("floor_strike")
+    # ── Floor strike (fire-and-forget background fetch) ─────────────────
+    # Never await the Kalshi call inline — that blocks the route handler.
+    # Instead kick off an asyncio Task; the signal route returns immediately
+    # with floor_strike=None on the first poll, then hits the cache on retry.
+    if _market_floor_strike.get(ticker) is None and ticker not in _market_floor_strike_inflight:
+        _market_floor_strike_inflight.add(ticker)
+        async def _bg_fetch_fs(t=ticker):
+            import urllib.request as _ur
+            try:
+                def _do():
+                    req = _ur.Request(
+                        f"https://api.elections.kalshi.com/trade-api/v2/markets/{t}",
+                        headers={"User-Agent": "kalshi-scanner/1.0"},
+                    )
+                    with _ur.urlopen(req, timeout=3) as _r:
+                        return json.loads(_r.read())
+                _resp = await asyncio.get_running_loop().run_in_executor(None, _do)
+                fs = _resp.get("market", {}).get("floor_strike")
                 if fs is not None:
-                    _market_floor_strike[ticker] = float(fs)
+                    _market_floor_strike[t] = float(fs)
+            except Exception:
+                pass
+            finally:
+                _market_floor_strike_inflight.discard(t)
+        asyncio.create_task(_bg_fetch_fs())
 
     floor_strike = _market_floor_strike.get(ticker)
 
     # ── BTC spot + momentum from poller history ──────────────────────────
-    with _btc_spot_lock:
-        hist = list(_btc_spot_history)
+    # Read without lock — deque is GIL-safe for list() copy; avoids blocking
+    # the async event loop on a threading.Lock that background threads may hold.
+    hist = list(_btc_spot_history)
 
     spot = hist[-1][1] if hist else None
     momentum = None  # $/min, positive = BTC rising
@@ -739,6 +822,93 @@ async def api_crypto_whales() -> JSONResponse:
             "vs_spot": vs_spot,
         })
     return JSONResponse({"rows": rows[:80]})
+
+
+_between_markets_cache: dict = {}   # {"resp": dict, "ts": float}
+_BETWEEN_MARKETS_TTL = 20.0         # re-hit Kalshi at most once per 20s
+
+_BANNER_OFFSETS_FILE = _DATA_DIR / "banner_offsets.json"
+_BANNER_TARGETS_FILE = _DATA_DIR / "banner_targets.jsonl"
+_BANNER_CURRENT_FILE = _DATA_DIR / "banner_current.json"
+_DAILY_THESIS_FILE = _DATA_DIR / "daily_thesis.jsonl"
+
+
+@app.get("/api/crypto/banner_current")
+async def api_banner_current() -> JSONResponse:
+    try:
+        return JSONResponse(json.loads(_BANNER_CURRENT_FILE.read_text()))
+    except Exception:
+        return JSONResponse(None)
+
+
+@app.get("/api/crypto/daily_thesis")
+async def api_daily_thesis() -> JSONResponse:
+    try:
+        rows = [
+            json.loads(l)
+            for l in _DAILY_THESIS_FILE.read_text().splitlines()
+            if l.strip()
+        ]
+        if rows:
+            return JSONResponse(rows[-1])
+    except Exception:
+        pass
+    return JSONResponse({"bias": None, "level": None, "conviction": None, "date": None})
+
+
+@app.get("/api/crypto/banner_offsets")
+async def api_banner_offsets() -> JSONResponse:
+    try:
+        return JSONResponse(json.loads(_BANNER_OFFSETS_FILE.read_text()))
+    except Exception:
+        return JSONResponse({
+            "sell_low_offset_c": 0.0,
+            "sell_high_offset_c": 0.0,
+            "low_hit_rate": None,
+            "high_hit_rate": None,
+            "n": 0,
+        })
+
+
+@app.get("/api/crypto/banner_history")
+async def api_banner_history(limit: int = 20) -> JSONResponse:
+    try:
+        lines = _BANNER_TARGETS_FILE.read_text().splitlines()
+        rows = [json.loads(l) for l in lines if l.strip()][-limit:]
+        rows.reverse()  # newest first
+        return JSONResponse({"rows": rows})
+    except Exception:
+        return JSONResponse({"rows": []})
+
+
+@app.get("/api/loop_log")
+async def api_loop_log_get(limit: int = 200) -> JSONResponse:
+    try:
+        lines = _LOOP_LOG_FILE.read_text().splitlines()
+        rows = [json.loads(l) for l in lines if l.strip()][-limit:]
+        rows.reverse()
+        return JSONResponse({"rows": rows})
+    except Exception:
+        return JSONResponse({"rows": []})
+
+
+@app.post("/api/loop_log")
+async def api_loop_log_post(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        entry = {
+            "ts": body.get("ts", time.time()),
+            "type": str(body.get("type", "NOTE")),
+            "spot": body.get("spot"),
+            "msg": str(body.get("msg", "")),
+        }
+        with _loop_log_lock:
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with _LOOP_LOG_FILE.open("a") as f:
+                f.write(json.dumps(entry) + "\n")
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.get("/crypto", response_class=HTMLResponse)
@@ -1110,6 +1280,8 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .signal-banner.up   { border-bottom-color:var(--green); background:#0d1f10; }
 .signal-banner.down { border-bottom-color:var(--red);   background:#1f0d0d; }
 .signal-banner.flash { animation: flashpulse 0.6s ease-out; }
+.signal-banner.thesis-mute    { opacity:0.55; filter:grayscale(40%); }
+.signal-banner.thesis-counter { opacity:0.75; outline:1px dashed var(--red); outline-offset:-3px; }
 @keyframes flashpulse { 0%{opacity:0.2} 50%{opacity:1} 100%{opacity:1} }
 
 .sig-direction { font-size:28px; font-weight:900; letter-spacing:1px; line-height:1; }
@@ -1150,6 +1322,14 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .sig-reset-badge.t1 { background:#3a2e0a; color:var(--yellow); border-color:#5a4a10; }
 
 .layout { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:12px; height:calc(100vh - 45px - 64px - 62px); }
+/* ── BRS panel ── */
+.brs-card { border-color:var(--yellow) !important; }
+.brs-hdr  { border-bottom:2px solid var(--yellow) !important; background:#1a1600 !important; }
+.brs-title { color:var(--yellow) !important; font-size:13px !important; letter-spacing:1px !important; }
+.brs-stat  { display:flex; flex-direction:column; gap:2px; }
+.brs-stat-k { font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:0.5px; }
+.brs-stat-v { font-size:32px; font-weight:900; font-variant-numeric:tabular-nums; line-height:1; }
+.brs-stat-sub { font-size:11px; color:var(--mute); }
 .col { display:flex; flex-direction:column; gap:12px; min-height:0; }
 
 .card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
@@ -1220,6 +1400,30 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .flow-no  { background:var(--red); }
 
 footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; border-top:1px solid var(--border); }
+
+/* ── loop log panel ── */
+.log-panel { margin:12px; border:1px solid var(--border); border-radius:8px; background:var(--bg2); overflow:hidden; }
+.log-panel-header { display:flex; align-items:center; gap:10px; padding:8px 12px;
+                    border-bottom:1px solid var(--border); background:var(--bg3); }
+.log-panel-title { font-weight:700; font-size:12px; color:var(--blue); letter-spacing:1px; }
+.log-panel-meta  { font-size:11px; color:var(--mute); margin-left:auto; }
+.log-clear-btn   { font-size:10px; padding:2px 8px; border-radius:4px; border:1px solid var(--border);
+                   background:transparent; color:var(--mute); cursor:pointer; }
+.log-clear-btn:hover { color:var(--fg); border-color:var(--fg); }
+.log-entries { max-height:260px; overflow-y:auto; padding:6px 0; }
+.log-entry   { display:flex; gap:8px; align-items:baseline; padding:4px 12px; font-size:12px;
+               border-bottom:1px solid #1c2128; }
+.log-entry:last-child { border-bottom:none; }
+.log-ts   { color:var(--mute); font-size:11px; white-space:nowrap; flex-shrink:0; }
+.log-type { font-size:10px; font-weight:700; padding:1px 6px; border-radius:3px; white-space:nowrap; flex-shrink:0; }
+.log-type.BREAK_UP   { background:#0d2a0d; color:var(--green); border:1px solid #2d5a2d; }
+.log-type.REJECT     { background:#2a0d0d; color:var(--red);   border:1px solid #5a2d2d; }
+.log-type.LEVEL_TEST { background:#1a1600; color:var(--yellow); border:1px solid #3a3000; }
+.log-type.HOLD       { background:#0d1a2a; color:var(--blue);  border:1px solid #1a3a5a; }
+.log-type.SIGNAL     { background:#1a0d2a; color:var(--purple);border:1px solid #3a1a5a; }
+.log-type.NOTE       { background:var(--bg3); color:var(--mute); border:1px solid var(--border); }
+.log-spot { color:var(--orange); font-variant-numeric:tabular-nums; flex-shrink:0; }
+.log-msg  { color:var(--fg); line-height:1.4; }
 </style>
 </head>
 <body>
@@ -1250,19 +1454,12 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
 
 <div class="layout">
   <div class="col">
-    <div class="card grow" style="flex:2">
-      <div class="card-header">
-        <span class="card-title">Strike Ladder</span>
-        <span class="card-meta" id="strike-meta">—</span>
+    <div class="card grow brs-card">
+      <div class="card-header brs-hdr">
+        <span class="card-title brs-title">BUY / SELL RANGE HISTORY</span>
+        <span class="card-meta" id="brs-meta">—</span>
       </div>
-      <div class="card-body" id="strikes"><div class="empty">loading…</div></div>
-    </div>
-    <div class="card" style="flex:1;min-height:160px">
-      <div class="card-header">
-        <span class="card-title">15m / 1h Up-Down Markets</span>
-        <span class="card-meta" id="ud-meta">—</span>
-      </div>
-      <div class="card-body" id="updown"><div class="empty">loading…</div></div>
+      <div class="card-body" id="brs-body"><div class="empty">no settled markets yet — grader is watching</div></div>
     </div>
   </div>
   <div class="col">
@@ -1280,7 +1477,23 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
       </div>
       <div class="card-body" id="cwhales"><div class="empty">loading…</div></div>
     </div>
+    <div class="card" style="flex:1;min-height:160px">
+      <div class="card-header">
+        <span class="card-title">15m / 1h Up-Down Markets</span>
+        <span class="card-meta" id="ud-meta">—</span>
+      </div>
+      <div class="card-body" id="updown"><div class="empty">loading…</div></div>
+    </div>
   </div>
+</div>
+
+<div class="log-panel">
+  <div class="log-panel-header">
+    <span class="log-panel-title">LOOP ANALYSIS LOG</span>
+    <span class="log-panel-meta" id="log-meta">—</span>
+    <button class="log-clear-btn" onclick="clearLog()">clear local</button>
+  </div>
+  <div class="log-entries" id="log-entries"><div class="empty">no log entries yet</div></div>
 </div>
 
 <script>
@@ -1416,6 +1629,131 @@ function renderCWhales(rows) {
   }).join('');
 }
 
+// ── Buy/Sell Range History ───────────────────────────────────────────
+function renderBannerSuccess(rows, off, cur) {
+  rows = rows || [];
+  off = (off && off.yes && off.no) ? off : {yes: _EMPTY_SIDE, no: _EMPTY_SIDE};
+  const n = rows.length;
+  if(n === 0) {
+    $('brs-meta').textContent = 'n=0';
+    $('brs-body').innerHTML = '<div class="empty">no settled markets yet — grader is watching</div>';
+    return;
+  }
+  // Only markets where buy was actually touched count for win/loss math.
+  const tradeable = rows.filter(r => r.buy_touched);
+  const wins  = tradeable.filter(r => r.low_hit).length;
+  const stretches = tradeable.filter(r => r.high_hit).length;
+  const touchPct = (tradeable.length / n * 100).toFixed(0);
+  const winPct = tradeable.length ? (wins / tradeable.length * 100).toFixed(0) : '—';
+  const strPct = tradeable.length ? (stretches / tradeable.length * 100).toFixed(0) : '—';
+  const winCls = winPct === '—' ? 'dim' : (winPct >= 90 ? 'pos' : (winPct >= 70 ? '' : 'neg'));
+  const strCls = strPct === '—' ? 'dim' : (strPct >= 60 ? 'pos' : (strPct >= 40 ? '' : 'neg'));
+  $('brs-meta').textContent = `n=${n} · entered ${tradeable.length}`;
+
+  const sideRow = (label, side) => {
+    const lo = (side.sell_low_offset_c || 0).toFixed(1);
+    const hi = (side.sell_high_offset_c || 0).toFixed(1);
+    const lr = side.low_hit_rate != null ? (side.low_hit_rate*100).toFixed(0)+'%' : '—';
+    const hr = side.high_hit_rate != null ? (side.high_hit_rate*100).toFixed(0)+'%' : '—';
+    const tr = side.buy_touch_rate != null ? (side.buy_touch_rate*100).toFixed(0)+'%' : '—';
+    return `<div style="font-size:11px"><span class="dim">${label}</span> <span class="${label==='YES'?'yes':'no'}" style="font-weight:700">${label}</span> <span class="dim">n=${side.n||0} · low ${lr}/90% · high ${hr}/60% · touch ${tr} · off ${lo}¢/${hi}¢</span></div>`;
+  };
+
+  let thesisLine = '';
+  if(_dailyThesis.bias) {
+    const bcol = _dailyThesis.bias === 'UP' ? 'var(--green)' : (_dailyThesis.bias === 'DOWN' ? 'var(--red)' : 'var(--yellow)');
+    const lvl = _dailyThesis.level ? ` · key $${Number(_dailyThesis.level).toLocaleString()}` : '';
+    thesisLine = `<div style="font-size:11px;padding:0 4px 6px"><span class="dim">today's thesis</span> <span style="color:${bcol};font-weight:700">${_dailyThesis.bias}</span> <span class="dim">conv ${_dailyThesis.conviction||'?'}${lvl}</span></div>`;
+  }
+
+  const headline = `
+    ${thesisLine}
+    <div style="padding:10px 14px 8px;display:flex;gap:28px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:8px;align-items:flex-end">
+      <div class="brs-stat">
+        <span class="brs-stat-k">WIN RATE</span>
+        <span class="brs-stat-v ${winCls}">${winPct}${winPct==='—'?'':'%'}</span>
+        <span class="brs-stat-sub">${wins}/${tradeable.length} · goal 90%</span>
+      </div>
+      <div class="brs-stat">
+        <span class="brs-stat-k">STRETCH</span>
+        <span class="brs-stat-v ${strCls}">${strPct}${strPct==='—'?'':'%'}</span>
+        <span class="brs-stat-sub">${stretches}/${tradeable.length} · goal 60%</span>
+      </div>
+      <div class="brs-stat">
+        <span class="brs-stat-k">BUY TOUCHED</span>
+        <span class="brs-stat-v dim">${touchPct}%</span>
+        <span class="brs-stat-sub">${tradeable.length}/${n} markets</span>
+      </div>
+    </div>
+    <div style="padding:4px 14px 6px">
+      ${sideRow('YES', off.yes)}
+      ${sideRow('NO', off.no)}
+    </div>
+    <div style="border-top:1px solid var(--border);margin:2px 0 4px"></div>`;
+
+  // Pending rows for every in-flight snapshot the banner has flashed during the
+  // current market — each tracked independently until settle.
+  let pendingRows = '';
+  const curList = Array.isArray(cur) ? cur : (cur && cur.ticker ? [cur] : []);
+  if(curList.length) {
+    // Newest snapshot first so the latest recommendation is at the top
+    const sorted = curList.slice().sort((a,b) => (b.snap_idx||0) - (a.snap_idx||0));
+    pendingRows = sorted.map(sn => {
+      const tail = sn.ticker.split('-').slice(-2).join('-');
+      const side = sn.side === 'YES' ? '<span class="yes">YES</span>' : '<span class="no">NO</span>';
+      const max = (sn.max_buy_c || 0).toFixed(1);
+      const lo  = (sn.sell_low || 0).toFixed(1);
+      const hi  = (sn.sell_high || 0).toFixed(1);
+      const mins = sn.mins_left != null ? sn.mins_left.toFixed(1)+'m' : '—';
+      const idx = sn.snap_idx != null ? '#'+sn.snap_idx : '';
+      let liveLbl;
+      if(!sn.buy_touched) {
+        liveLbl = '<span class="dim" style="font-weight:700">no entry yet</span>';
+      } else if(sn.low_hit_so_far) {
+        liveLbl = '<span class="pos" style="font-weight:700">WIN ✓</span>';
+      } else {
+        liveLbl = '<span class="neg" style="font-weight:700">no win</span>';
+      }
+      const strLbl = sn.high_hit_so_far ? '<span class="pos">✓</span>' : '<span class="dim">·</span>';
+      return `<div class="wh-row" style="grid-template-columns:1fr 44px 64px 64px 80px 58px 26px;background:#1a1a0d;border-left:3px solid var(--yellow);padding-left:6px;padding-top:6px;padding-bottom:6px">
+        <span style="font-size:11px"><b style="color:var(--yellow);font-size:12px">LIVE</b> ${idx} <span class="ticker trunc" title="${sn.ticker}">${tail}</span> <span class="dim">${mins} · buy [${(sn.buy_low||0).toFixed(1)}-${(sn.buy_high||0).toFixed(1)}¢]</span></span>
+        <span style="font-size:13px;font-weight:800">${side}</span>
+        <span class="num dim" style="font-size:12px">max ${max}¢</span>
+        <span class="num dim" style="font-size:12px">≥${lo}¢?</span>
+        <span style="font-size:13px;font-weight:800">${liveLbl}</span>
+        <span class="num dim" style="font-size:12px">≥${hi}¢?</span>
+        ${strLbl}
+      </div>`;
+    }).join('');
+  }
+  const tableRows = rows.slice(0, 10).map(r => {
+    const tail = r.ticker ? r.ticker.split('-').slice(-2).join('-') : '';
+    const side = r.side === 'YES' ? '<span class="yes">YES</span>' : '<span class="no">NO</span>';
+    const max = (r.max_buy_c || 0).toFixed(1);
+    const lo  = (r.sell_low || 0).toFixed(1);
+    const hi  = (r.sell_high || 0).toFixed(1);
+    let resultLbl;
+    if(!r.buy_touched) {
+      resultLbl = '<span class="dim" style="font-weight:700">no entry</span>';
+    } else if(r.low_hit) {
+      resultLbl = '<span class="pos" style="font-weight:700">WIN</span>';
+    } else {
+      resultLbl = '<span class="neg" style="font-weight:700">loss</span>';
+    }
+    const strLbl = r.high_hit ? '<span class="pos">✓</span>' : '<span class="dim">·</span>';
+    return `<div class="wh-row" style="grid-template-columns:1fr 44px 64px 64px 80px 58px 26px;padding-top:5px;padding-bottom:5px">
+      <span class="ticker trunc" title="${r.ticker}" style="font-size:12px">${tail}</span>
+      <span style="font-size:13px;font-weight:800">${side}</span>
+      <span class="num dim" style="font-size:12px">max ${max}¢</span>
+      <span class="num dim" style="font-size:12px">≥${lo}¢?</span>
+      <span style="font-size:13px;font-weight:800">${resultLbl}</span>
+      <span class="num dim" style="font-size:12px">≥${hi}¢?</span>
+      ${strLbl}
+    </div>`;
+  }).join('');
+  $('brs-body').innerHTML = headline + pendingRows + tableRows;
+}
+
 // ── Signal history strip ─────────────────────────────────────────────
 function renderHistory(rows) {
   if(!rows||!rows.length) return;
@@ -1479,23 +1817,25 @@ function playAlert(isUp) {
 // ── Main refresh ─────────────────────────────────────────────────────
 async function refresh() {
   try {
-    const [spotR, strikesR, udR, sigsR, whR, histR] = await Promise.all([
+    const [spotR, udR, sigsR, whR, histR, brsR, brsOff, brsCur] = await Promise.all([
       fetch('/api/crypto/spot').then(r=>r.json()),
-      fetch('/api/crypto/strikes').then(r=>r.json()),
       fetch('/api/crypto/updown').then(r=>r.json()),
       fetch('/api/crypto/signals').then(r=>r.json()),
       fetch('/api/crypto/whales').then(r=>r.json()),
       fetch('/api/crypto/history').then(r=>r.json()),
+      fetch('/api/crypto/banner_history?limit=20').then(r=>r.json()).catch(()=>({rows:[]})),
+      fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
+      fetch('/api/crypto/banner_current').then(r=>r.json()).catch(()=>null),
     ]);
 
     if(spotR.btc) $('spot-btc').textContent = 'BTC ' + fmt$(spotR.btc);
     if(spotR.eth) $('spot-eth').textContent = 'ETH ' + fmt$(spotR.eth);
 
-    renderStrikes(strikesR.rows, strikesR.btc_spot, strikesR.eth_spot);
     renderUpDown(udR.rows);
     renderSignals(sigsR.rows);
     renderCWhales(whR.rows);
     renderHistory(histR.rows);
+    renderBannerSuccess(brsR.rows, brsOff, brsCur);
   } catch(e) { console.error('refresh error', e); }
 }
 
@@ -1505,6 +1845,12 @@ refresh(); setInterval(refresh, 3000);
 
 // ── Signal banner ────────────────────────────────────────────────────
 let _lastTicker = null;
+const _EMPTY_SIDE = {sell_low_offset_c: 0, sell_high_offset_c: 0, low_hit_rate: null, high_hit_rate: null, buy_touch_rate: null, n: 0};
+let _bannerOffsets = {yes: {..._EMPTY_SIDE}, no: {..._EMPTY_SIDE}};
+let _dailyThesis = {bias: null, level: null, conviction: null};
+// Frozen-at-open snapshot of the banner ranges so the displayed recommendation
+// stays consistent across polls (and matches what the grader logged).
+let _bannerSnap = null; // {ticker, buySide, buyPriceC, flowFairC, buyLowC, buyHighC, sellLowC, sellHighC}
 let _t1Timer = null;
 let _lastAlertTicker = null;
 let _lastConfAbove50 = false;
@@ -1529,8 +1875,47 @@ function renderSignalBanner(s, isT1=false) {
   banner.className = 'signal-banner ' + dirCls + ' flash';
   setTimeout(() => banner.classList.remove('flash'), 700);
 
-  // Label line: show buy side + spot vs strike if available
-  const edgeCents = Math.round(Math.abs((isUp ? s.yes_pct/100 : (100-s.yes_pct)/100) - s.price) * 100);
+  // Tradeability gate: if the market is already decided or too late, don't
+  // show a BUY/SELL recommendation — match the grader, which skips these.
+  const tradeable = s.price >= 0.05 && s.price <= 0.95 && s.mins_left != null && s.mins_left >= 2;
+  if(!tradeable) {
+    banner.classList.add('thesis-mute');
+    $('sig-label').innerHTML = `<span style="background:var(--mute);color:#000;font-weight:700;padding:1px 6px;border-radius:3px;font-size:10px">NOT TRADEABLE</span> market decided or &lt;2 min left — wait for next 15m`;
+    _bannerSnap = null;
+    $('sig-conf-val').textContent = s.confidence + '%';
+    $('conf-bar').style.width = s.confidence + '%';
+    $('sig-components').innerHTML = '';
+    $('sig-stats').innerHTML = '';
+    return;
+  }
+  // Live BUY/SELL ranges — every poll recomputes. Each meaningful change becomes
+  // a new logged snapshot in the grader (>= 2c move on any range edge).
+  const buySide   = isUp ? 'YES' : 'NO';
+  const sideKey   = isUp ? 'yes' : 'no';
+  const sideOff   = (_bannerOffsets && _bannerOffsets[sideKey]) || _EMPTY_SIDE;
+  const buyPriceC = isUp ? (s.price*100) : ((1-s.price)*100);
+  const flowFairC = isUp ? s.yes_pct : (100 - s.yes_pct);
+  const buyLowC   = Math.max(1, buyPriceC - 3);
+  const buyHighC  = Math.min(95, buyPriceC + 2);
+  const sellLowC  = Math.max(buyHighC + 2, Math.min(95, buyHighC + 10 - (sideOff.sell_low_offset_c || 0)));
+  const sellHighC = Math.max(sellLowC + 2, Math.min(95, flowFairC - (sideOff.sell_high_offset_c || 0)));
+  const minEdge   = Math.round(sellLowC - buyHighC);
+  _bannerSnap = null;  // no longer freezing
+
+  // Daily thesis gating: WAIT mutes, counter-trend warns, aligned passes through
+  const bias = (_dailyThesis.bias || '').toUpperCase();
+  let thesisFlag = '';
+  let thesisClass = '';
+  if(bias === 'WAIT') {
+    thesisClass = 'thesis-mute';
+    thesisFlag = ` <span style="background:var(--yellow);color:#000;font-weight:700;padding:1px 6px;border-radius:3px;font-size:10px">THESIS: WAIT — stay flat</span>`;
+  } else if(bias === 'UP' && !isUp) {
+    thesisClass = 'thesis-counter';
+    thesisFlag = ` <span style="background:var(--red);color:#fff;font-weight:700;padding:1px 6px;border-radius:3px;font-size:10px">COUNTER-TREND (thesis: UP)</span>`;
+  } else if(bias === 'DOWN' && isUp) {
+    thesisClass = 'thesis-counter';
+    thesisFlag = ` <span style="background:var(--red);color:#fff;font-weight:700;padding:1px 6px;border-radius:3px;font-size:10px">COUNTER-TREND (thesis: DOWN)</span>`;
+  }
   let spotStr = '';
   if(s.spot != null && s.floor_strike != null) {
     const dist = s.distance;
@@ -1539,10 +1924,20 @@ function renderSignalBanner(s, isT1=false) {
     spotStr = ` · spot ${fmt$2(s.spot)} vs ${fmt$2(s.floor_strike)} (<span class="${distCls}">${sign}$${Math.round(Math.abs(dist)).toLocaleString()}</span>)`;
   }
   const flowSrc = s.has_whale_data ? 'whales' : 'retail flow';
-  $('sig-label').innerHTML = (isUp
-    ? `BUY YES — ${flowSrc} ${s.yes_pct}% YES at ${(s.price*100).toFixed(1)}¢`
-    : `BUY NO  — ${flowSrc} ${(100-s.yes_pct).toFixed(1)}% NO at ${((1-s.price)*100).toFixed(1)}¢`)
-    + ` (edge ~${edgeCents}¢)` + spotStr;
+  let calibStr = '';
+  if(sideOff.n && sideOff.n > 0) {
+    const lowR = sideOff.low_hit_rate != null ? (sideOff.low_hit_rate*100).toFixed(0)+'%' : '—';
+    const highR = sideOff.high_hit_rate != null ? (sideOff.high_hit_rate*100).toFixed(0)+'%' : '—';
+    const touchR = sideOff.buy_touch_rate != null ? (sideOff.buy_touch_rate*100).toFixed(0)+'%' : '—';
+    calibStr = ` <span class="dim" style="font-size:10px">· ${buySide} calib n=${sideOff.n} low ${lowR}/90% high ${highR}/60% touch ${touchR}</span>`;
+  }
+  $('sig-label').innerHTML =
+      thesisFlag
+    + ` BUY <b>${buySide}</b> [<b>${buyLowC.toFixed(1)}¢ – ${buyHighC.toFixed(1)}¢</b>]`
+    + ` &rarr; SELL [<b>${sellLowC.toFixed(1)}¢ – ${sellHighC.toFixed(1)}¢</b>]`
+    + ` <span class="dim">(min edge +${minEdge}¢ · ${flowSrc} ${flowFairC.toFixed(1)}% ${buySide})</span>`
+    + spotStr + calibStr;
+  if(thesisClass) banner.classList.add(thesisClass);
 
   $('sig-conf-val').textContent = s.confidence + '%';
   const bar = $('conf-bar');
@@ -1593,11 +1988,18 @@ function renderSignalBanner(s, isT1=false) {
 
 async function pollSignal() {
   try {
-    const s = await fetch('/api/crypto/signal').then(r=>r.json());
+    const [s, off, th] = await Promise.all([
+      fetch('/api/crypto/signal').then(r=>r.json()),
+      fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
+      fetch('/api/crypto/daily_thesis').then(r=>r.json()).catch(()=>null),
+    ]);
+    if(off && off.yes && off.no) _bannerOffsets = off;
+    if(th) _dailyThesis = th;
 
     if(s.status === 'between_markets' || s.status === 'no_active_market') {
       const banner = $('signal-banner');
       banner.className = 'signal-banner';
+      _bannerSnap = null;
       $('sig-dir').textContent = '—';
       $('sig-dir').className = 'sig-direction';
       const mins = s.mins_to_open != null ? ` (opens in ${s.mins_to_open}m)` : '';
@@ -1641,6 +2043,73 @@ async function pollSignal() {
 
 pollSignal();
 setInterval(pollSignal, 5000);
+
+// ── Loop analysis log ─────────────────────────────────────────────────
+const LOG_LS_KEY = 'kalshi_loop_log_v1';
+let _logEntries = [];
+
+function loadLogFromLS() {
+  try { _logEntries = JSON.parse(localStorage.getItem(LOG_LS_KEY) || '[]'); } catch(e) { _logEntries = []; }
+}
+
+function saveLogToLS() {
+  try { localStorage.setItem(LOG_LS_KEY, JSON.stringify(_logEntries.slice(0, 300))); } catch(e) {}
+}
+
+function clearLog() {
+  _logEntries = [];
+  saveLogToLS();
+  renderLog();
+}
+
+function mergeLogEntries(serverRows) {
+  const seen = new Set(_logEntries.map(e => e.ts + '|' + e.msg));
+  let added = 0;
+  for (const r of serverRows) {
+    const key = r.ts + '|' + r.msg;
+    if (!seen.has(key)) { _logEntries.push(r); seen.add(key); added++; }
+  }
+  if (added) {
+    _logEntries.sort((a, b) => b.ts - a.ts);
+    _logEntries = _logEntries.slice(0, 300);
+    saveLogToLS();
+  }
+}
+
+function renderLog() {
+  const el = $('log-entries');
+  const meta = $('log-meta');
+  if (!_logEntries.length) {
+    el.innerHTML = '<div class="empty">no log entries yet</div>';
+    meta.textContent = '—';
+    return;
+  }
+  meta.textContent = `${_logEntries.length} entries · last: ${new Date(_logEntries[0].ts * 1000).toISOString().slice(11,19)} UTC`;
+  el.innerHTML = _logEntries.map(e => {
+    const t = new Date(e.ts * 1000).toISOString().slice(11,19);
+    const typeCls = (e.type || 'NOTE').replace(/[^A-Z_]/g, '');
+    const spotStr = e.spot != null ? `<span class="log-spot">$${Math.round(e.spot).toLocaleString()}</span>` : '';
+    return `<div class="log-entry">
+      <span class="log-ts">${t}</span>
+      <span class="log-type ${typeCls}">${e.type || 'NOTE'}</span>
+      ${spotStr}
+      <span class="log-msg">${e.msg || ''}</span>
+    </div>`;
+  }).join('');
+}
+
+async function refreshLog() {
+  try {
+    const { rows } = await fetch('/api/loop_log?limit=300').then(r => r.json());
+    mergeLogEntries(rows);
+    renderLog();
+  } catch(e) {}
+}
+
+loadLogFromLS();
+renderLog();
+refreshLog();
+setInterval(refreshLog, 10000);
 </script>
 </body>
 </html>"""

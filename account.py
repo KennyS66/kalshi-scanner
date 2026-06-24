@@ -20,7 +20,7 @@ import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-HOST = "https://external-api.kalshi.com"
+HOST = "https://api.elections.kalshi.com"
 ENV_FILE = Path.home() / ".kalshi" / "trading.env"
 
 
@@ -44,7 +44,7 @@ def _get(key_id, pk, full_path):
     ts = str(int(time.time() * 1000))
     sig = pk.sign(f"{ts}GET{full_path}".encode(),
                   padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
-                              salt_length=padding.PSS.DIGEST_LENGTH),
+                              salt_length=padding.PSS.MAX_LENGTH),
                   hashes.SHA256())
     headers = {
         "KALSHI-ACCESS-KEY": key_id,
