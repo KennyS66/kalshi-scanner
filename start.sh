@@ -3,6 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Resolve the venv interpreter. Local checkouts use .venv; the cloud env uses
+# venv. Prefer whichever exists so one start.sh works on every machine.
+PY=".venv/bin/python"
+[[ -x "$PY" ]] || PY="venv/bin/python"
+
 # Sync the latest daily thesis (pushed by the cloud pre-market routine) so
 # day_plan.py / the /marketloop configures from today's bias, not a stale one.
 # Best-effort and non-blocking: a sync problem must never stop the scanner.
@@ -13,7 +18,9 @@ GIT_TERMINAL_PROMPT=0 git pull --rebase --autostash 2>&1 | tail -3 \
   || echo "  (git pull skipped/failed — continuing with the local thesis)"
 
 # Pull Kalshi creds from the daedalus-mm .env (single source of truth).
-DAEDALUS_ENV="$HOME/daedalus-mm/.env"
+# bots/ layout is the local checkout; ~/daedalus-mm is the cloud layout.
+DAEDALUS_ENV="$HOME/bots/daedalus-mm/.env"
+[[ -f "$DAEDALUS_ENV" ]] || DAEDALUS_ENV="$HOME/daedalus-mm/.env"
 if [[ -f "$DAEDALUS_ENV" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -47,8 +54,8 @@ start_bg() {  # <name> <pgrep-pattern> <command...>
 }
 echo "Starting data collectors..."
 start_bg btc_monitor    "btc_monitor.sh"   ./btc_monitor.sh
-start_bg exit_watcher   "exit_watcher.py"  venv/bin/python -u exit_watcher.py
-start_bg target_grader  "target_grader.py" venv/bin/python -u target_grader.py
+start_bg exit_watcher   "exit_watcher.py"  "$PY" -u exit_watcher.py
+start_bg target_grader  "target_grader.py" "$PY" -u target_grader.py
 
 echo
 echo "Scanner: http://localhost:9050  (dashboards: /whales, /crypto)"
@@ -56,10 +63,10 @@ echo
 
 # Check if today's thesis is set — warn loudly if not.
 TODAY=$(date +%Y-%m-%d)
-THESIS_CHECK=$(venv/bin/python day_plan.py 2>/dev/null | grep "^PLAN:" | head -1)
+THESIS_CHECK=$("$PY" day_plan.py 2>/dev/null | grep "^PLAN:" | head -1)
 if [[ -z "$THESIS_CHECK" ]]; then
   echo "⚠️  WARNING: No daily thesis set for $TODAY"
-  echo "   Run:  venv/bin/python daily_thesis.py record <UP|DOWN|WAIT> <spot> --level <key> --conviction <1-5> --note '...' --date $TODAY"
+  echo "   Run:  $PY daily_thesis.py record <UP|DOWN|WAIT> <spot> --level <key> --conviction <1-5> --note '...' --date $TODAY"
   echo
 elif echo "$THESIS_CHECK" | grep -q "bias=NONE\|bias=WAIT"; then
   echo "ℹ️  Thesis for $TODAY: $(echo "$THESIS_CHECK" | grep -o 'bias=[^ ]*')"
@@ -74,7 +81,7 @@ echo ">> VITAL: start /marketloop in Claude Code to arm the analysis loop."
 echo "   (Claude must be active — type /marketloop in the Claude Code terminal)"
 echo
 
-exec venv/bin/python main.py \
+exec "$PY" main.py \
   --api-key "$API_KEY" \
   --key-file "$KEY_FILE" \
   --web \
