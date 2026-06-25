@@ -820,6 +820,8 @@ async def api_crypto_whales() -> JSONResponse:
         if not _is_crypto(alert.ticker):
             continue
         strike, _ = _extract_strike(alert.ticker)
+        if strike is None:
+            strike = _market_floor_strike.get(alert.ticker)
         vs_spot = round(btc_spot - strike, 0) if strike and btc_spot else None
         rows.append({
             "ticker": alert.ticker,
@@ -1322,6 +1324,25 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .nav-link { color:var(--mute); font-size:11px; text-decoration:none; }
 .nav-link:hover { color:var(--blue); }
 
+/* ── daily thesis bar ── */
+.thesis-bar {
+  display:flex; align-items:center; gap:18px; padding:0 18px;
+  height:44px; border-bottom:2px solid var(--border);
+  font-family:inherit; user-select:none;
+}
+.thesis-bar.up   { background:#071510; border-bottom-color:var(--green); }
+.thesis-bar.down { background:#150707; border-bottom-color:var(--red); }
+.thesis-bar.wait { background:#141007; border-bottom-color:var(--yellow); }
+.thesis-bar-label { font-size:10px; font-weight:700; letter-spacing:1.5px; color:var(--mute); text-transform:uppercase; }
+.thesis-bar-bias  { font-size:22px; font-weight:900; line-height:1; letter-spacing:-1px; }
+.thesis-bar-bias.up   { color:var(--green); }
+.thesis-bar-bias.down { color:var(--red); }
+.thesis-bar-bias.wait { color:var(--yellow); }
+.thesis-bar-meta  { font-size:13px; color:var(--mute); }
+.thesis-bar-spot  { margin-left:auto; font-size:13px; font-weight:700; font-variant-numeric:tabular-nums; }
+.thesis-bar-spot.above { color:var(--green); }
+.thesis-bar-spot.below { color:var(--red); }
+
 /* ── signal banner ── */
 .signal-banner {
   display:grid; grid-template-columns:100px 1fr auto;
@@ -1518,6 +1539,8 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
   <a href="/whales" class="nav-link">→ whales</a>
   <span class="clock" id="clock">--:--:--</span>
 </header>
+
+<div class="thesis-bar" id="thesis-bar" style="display:none"></div>
 
 <div class="signal-banner" id="signal-banner">
   <div class="sig-dir-block">
@@ -1909,9 +1932,10 @@ async function refresh() {
       fetch('/api/crypto/banner_current').then(r=>r.json()).catch(()=>null),
     ]);
 
-    if(spotR.btc) $('spot-btc').textContent = 'BTC ' + fmt$(spotR.btc);
+    if(spotR.btc) { $('spot-btc').textContent = 'BTC ' + fmt$(spotR.btc); _btcSpot = spotR.btc; }
     if(spotR.eth) $('spot-eth').textContent = 'ETH ' + fmt$(spotR.eth);
 
+    renderThesisBar(_btcSpot);
     renderSignals(sigsR.rows);
     renderHistory(histR.rows);
     renderBannerSuccess(brsR.rows, brsOff, brsCur);
@@ -1927,10 +1951,35 @@ let _lastTicker = null;
 const _EMPTY_SIDE = {sell_low_offset_c: 0, sell_high_offset_c: 0, low_hit_rate: null, high_hit_rate: null, buy_touch_rate: null, n: 0};
 let _bannerOffsets = {yes: {..._EMPTY_SIDE}, no: {..._EMPTY_SIDE}};
 let _dailyThesis = {bias: null, level: null, conviction: null};
+let _btcSpot = null;
 let _bannerSnap = null;
 let _t1Timer = null;
 let _lastAlertTicker = null;
 let _lastConfAbove50 = false;
+
+function renderThesisBar(btcSpot) {
+  const bar = $('thesis-bar');
+  const t = _dailyThesis;
+  if(!t || !t.bias || t.bias === 'NONE') { bar.style.display = 'none'; return; }
+  const bias = t.bias.toUpperCase();
+  const cls = bias === 'UP' ? 'up' : bias === 'DOWN' ? 'down' : 'wait';
+  const arrow = bias === 'UP' ? '▲' : bias === 'DOWN' ? '▼' : '◆';
+  const lvl = t.level ? parseFloat(t.level) : null;
+  const keyStr = lvl ? ` · key $${lvl.toLocaleString()}` : '';
+  const convStr = t.conviction ? `conv ${t.conviction}` : '';
+  let spotHtml = '';
+  if(btcSpot && lvl) {
+    const diff = Math.round(btcSpot - lvl);
+    const spotCls = diff >= 0 ? 'above' : 'below';
+    const diffStr = (diff >= 0 ? '+' : '') + diff.toLocaleString();
+    spotHtml = `<span class="thesis-bar-spot ${spotCls}">BTC $${Math.round(btcSpot).toLocaleString()} <span style="font-size:11px;opacity:0.7">(${diffStr} vs key)</span></span>`;
+  } else if(btcSpot) {
+    spotHtml = `<span class="thesis-bar-spot">BTC $${Math.round(btcSpot).toLocaleString()}</span>`;
+  }
+  bar.className = `thesis-bar ${cls}`;
+  bar.style.display = 'flex';
+  bar.innerHTML = `<span class="thesis-bar-label">Today's Thesis</span><span class="thesis-bar-bias ${cls}">${arrow} ${bias}</span><span class="thesis-bar-meta">${convStr}${keyStr}</span>${spotHtml}`;
+}
 
 function fmt$2(n) { return n==null?'—':'$'+Math.round(n).toLocaleString(); }
 function sigComp(label, val, suffix='') {
@@ -2077,6 +2126,7 @@ async function pollSignal() {
     ]);
     if(off && off.yes && off.no) _bannerOffsets = off;
     if(th) _dailyThesis = th;
+    renderThesisBar(_btcSpot);
 
     if(s.status === 'between_markets' || s.status === 'no_active_market') {
       const banner = $('signal-banner');
