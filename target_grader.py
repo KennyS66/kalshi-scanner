@@ -281,7 +281,7 @@ def main():
             side = "YES" if is_up else "NO"
             if (
                 len(snaps) < MAX_SNAPS_PER_MARKET
-                and ranges_changed(snaps[-1], bl, bh, sl, sh, side)
+                and (not snaps or ranges_changed(snaps[-1], bl, bh, sl, sh, side))
             ):
                 snap = make_snapshot(s, side_offsets, len(snaps))
                 snaps.append(snap)
