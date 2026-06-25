@@ -197,6 +197,7 @@ def start_background(port: int = 9050) -> threading.Thread:
     threading.Thread(target=_btc_spot_poller_loop, daemon=True).start()
     threading.Thread(target=_outcome_checker_loop, daemon=True).start()
     threading.Thread(target=_calibration_loop, daemon=True).start()
+    threading.Thread(target=_next_market_poller_loop, daemon=True).start()
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error")
     server = uvicorn.Server(config)
     t = threading.Thread(target=server.run, daemon=True)
@@ -359,20 +360,32 @@ async def api_crypto_signal() -> JSONResponse:
             break
 
     # Fallback: scanner hasn't seen this market yet — fetch directly from Kalshi.
-    # Cached per-ticker for 20s so 5s frontend polls don't all slam the Kalshi API.
+    # Uses _next_market_cache (real scheduled times) instead of clock arithmetic.
     _direct_mkt: dict | None = None
     if not active:
-        with contextlib.suppress(Exception):
-            next_suffix, next_ts = _next_15m_expiry()
-            _dticker = f"KXBTC15M-{next_suffix}"
-            _mins_rem = (next_ts - time.time()) / 60
-            if 0 < _mins_rem <= 15:
+        nm = _next_market_cache
+        nm_fresh = nm and time.time() - nm.get("ts", 0) < _NEXT_MARKET_CACHE_TTL
+        if nm_fresh:
+            _dticker = nm["ticker"]
+            _open_ts = nm["open_ts"]
+            _close_ts = nm["close_ts"]
+            _market_is_open = _open_ts <= time.time() < _close_ts
+        else:
+            # Cold start: no cache yet — fall back to clock arithmetic briefly
+            _dticker = _market_is_open = None
+            try:
+                next_suffix, next_ts = _next_15m_expiry()
+                _dticker = f"KXBTC15M-{next_suffix}"
+                _market_is_open = 0 < (next_ts - time.time()) / 60 <= 15
+            except Exception:
+                pass
+
+        if _dticker and _market_is_open:
+            with contextlib.suppress(Exception):
                 _cached = _between_markets_cache.get(_dticker)
                 if _cached and time.time() - _cached["ts"] < _BETWEEN_MARKETS_TTL:
                     _direct_mkt = _cached["resp"]
                 else:
-                    # Fire-and-forget: kick off background fetch and return
-                    # immediately. On the next poll the cache will be warm.
                     async def _bg_fetch_between(dt=_dticker):
                         import urllib.request as _ur
                         try:
@@ -385,7 +398,7 @@ async def api_crypto_signal() -> JSONResponse:
                                     return json.loads(_r.read())
                             _resp = await asyncio.get_running_loop().run_in_executor(None, _do)
                             mkt = _resp.get("market", {})
-                            if mkt.get("status") == "active":
+                            if mkt.get("status") in ("active", "open"):
                                 _between_markets_cache[dt] = {"resp": {
                                     "ticker": dt,
                                     "price": float(mkt.get("last_price_dollars") or 0.5),
@@ -393,36 +406,32 @@ async def api_crypto_signal() -> JSONResponse:
                                     "yes_ask": float(mkt.get("yes_ask_dollars") or 0),
                                     "no_ask": float(mkt.get("no_ask_dollars") or 0),
                                 }, "ts": time.time()}
+                                # Also kick the next-market cache refresh so it
+                                # advances past this ticker on the next poll.
+                                _refresh_next_market_cache()
                         except Exception:
                             pass
                     asyncio.create_task(_bg_fetch_between())
-                    mkt = {}
-                    if False:  # never reached — kept for structure
-                        pass
-                    if mkt.get("status") == "active":
-                            _direct_mkt = {
-                                "ticker": _dticker,
-                                "price": float(mkt.get("last_price_dollars") or 0.5),
-                                "floor_strike": float(mkt["floor_strike"]) if mkt.get("floor_strike") else None,
-                                "yes_ask": float(mkt.get("yes_ask_dollars") or 0),
-                                "no_ask": float(mkt.get("no_ask_dollars") or 0),
-                            }
-                            if _direct_mkt["floor_strike"]:
-                                _market_floor_strike[_dticker] = _direct_mkt["floor_strike"]
-                            _between_markets_cache[_dticker] = {"resp": _direct_mkt, "ts": time.time()}
 
     if not active and _direct_mkt is None:
-        try:
-            next_suffix, next_ts = _next_15m_expiry()
-            next_ticker = f"KXBTC15M-{next_suffix}"
-            mins_to_open = round((next_ts - time.time()) / 60, 1)
-            return JSONResponse({
-                "status": "between_markets",
-                "next_ticker": next_ticker,
-                "mins_to_open": mins_to_open,
-            })
-        except Exception:
-            return JSONResponse({"status": "no_active_market"})
+        # Return the real next market time from cache, or fall back to arithmetic
+        nm = _next_market_cache
+        nm_fresh = nm and time.time() - nm.get("ts", 0) < _NEXT_MARKET_CACHE_TTL
+        if nm_fresh:
+            next_ticker = nm["ticker"]
+            mins_to_open = round((nm["open_ts"] - time.time()) / 60, 1)
+        else:
+            try:
+                next_suffix, next_ts = _next_15m_expiry()
+                next_ticker = f"KXBTC15M-{next_suffix}"
+                mins_to_open = round((next_ts - time.time()) / 60, 1)
+            except Exception:
+                return JSONResponse({"status": "no_active_market"})
+        return JSONResponse({
+            "status": "between_markets",
+            "next_ticker": next_ticker,
+            "mins_to_open": max(0.0, mins_to_open),
+        })
 
     if active is not None:
         ticker, snap = active
@@ -826,6 +835,45 @@ async def api_crypto_whales() -> JSONResponse:
 
 _between_markets_cache: dict = {}   # {"resp": dict, "ts": float}
 _BETWEEN_MARKETS_TTL = 20.0         # re-hit Kalshi at most once per 20s
+
+# Cache for the REAL next scheduled KXBTC15M market (polled every 5 min)
+_next_market_cache: dict = {}  # {"ticker", "open_ts", "close_ts", "ts"}
+_NEXT_MARKET_CACHE_TTL = 300.0
+
+
+def _refresh_next_market_cache() -> None:
+    """Fetch the earliest upcoming KXBTC15M market from Kalshi and cache open/close times."""
+    import urllib.request as _ur
+    from datetime import datetime, timezone
+    try:
+        req = _ur.Request(
+            "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=KXBTC15M&limit=10",
+            headers={"User-Agent": "kalshi-scanner/1.0"},
+        )
+        with _ur.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read())
+        mkts = [m for m in data.get("markets", []) if m.get("close_time")]
+        mkts.sort(key=lambda m: m["close_time"])
+        for m in mkts:
+            close_ts = datetime.fromisoformat(m["close_time"].replace("Z", "+00:00")).timestamp()
+            open_ts = close_ts - 900  # 15 min before close
+            # Use the market currently open, or the next one to open
+            if time.time() < close_ts:
+                _next_market_cache.update({
+                    "ticker": m["ticker"],
+                    "open_ts": open_ts,
+                    "close_ts": close_ts,
+                    "ts": time.time(),
+                })
+                return
+    except Exception:
+        pass
+
+
+def _next_market_poller_loop() -> None:
+    while True:
+        _refresh_next_market_cache()
+        time.sleep(300)
 
 _BANNER_OFFSETS_FILE = _DATA_DIR / "banner_offsets.json"
 _BANNER_TARGETS_FILE = _DATA_DIR / "banner_targets.jsonl"
@@ -2036,9 +2084,22 @@ async function pollSignal() {
       _bannerSnap = null;
       $('sig-dir').textContent = '—'; $('sig-dir').className = 'sig-direction waiting';
       $('sig-range-buy').textContent = '—'; $('sig-range-sell').textContent = '—';
-      const mins = s.mins_to_open != null ? ` (opens in ${s.mins_to_open}m)` : '';
-      $('sig-label').textContent = `Waiting for next 15m candle${mins}`;
-      $('sig-stats').innerHTML = s.next_ticker ? `<div class="sig-stat"><span class="k">Next</span><span class="v dim">${s.next_ticker}</span></div>` : '';
+      const mins = s.mins_to_open != null ? s.mins_to_open : null;
+      let waitLabel;
+      if (mins != null && mins > 90) {
+        const hrs = Math.floor(mins / 60), rm = Math.round(mins % 60);
+        waitLabel = `OFF HOURS — next session in ${hrs}h ${rm}m`;
+      } else if (mins != null && mins > 2) {
+        waitLabel = `Between markets — opens in ${mins.toFixed(1)}m`;
+      } else {
+        waitLabel = 'Market opening…';
+      }
+      $('sig-label').textContent = waitLabel;
+      const tickerShort = s.next_ticker ? s.next_ticker.split('-').slice(-2).join('-') : '';
+      $('sig-stats').innerHTML = s.next_ticker
+        ? `<div class="sig-stat"><span class="k">Next</span><span class="v dim">${tickerShort}</span></div>`
+        + (mins != null && mins > 90 ? `<div class="sig-stat"><span class="k">Session opens</span><span class="v dim">${new Date(Date.now()+(mins*60000)).toISOString().slice(11,16)} UTC</span></div>` : '')
+        : '';
       $('sig-ticker').textContent = ''; $('sig-badge').style.display = 'none';
       $('sig-trade-type').style.display = 'none';
       return;
