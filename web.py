@@ -130,7 +130,6 @@ def _btc_spot_poller_loop(interval: float = 5.0) -> None:
     global _eth_spot_latest
     import urllib.request as ur
     while True:
-        time.sleep(interval)
         with contextlib.suppress(Exception):
             req = ur.Request("https://api.exchange.coinbase.com/products/BTC-USD/ticker",
                              headers={"User-Agent": "kalshi-scanner/1.0"})
@@ -145,6 +144,7 @@ def _btc_spot_poller_loop(interval: float = 5.0) -> None:
             with ur.urlopen(req, timeout=4) as r:
                 data = json.loads(r.read())
                 _eth_spot_latest = float(data["price"])
+        time.sleep(interval)
 
 
 def _outcome_checker_loop(interval: float = 30.0) -> None:
@@ -1329,6 +1329,9 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .sig-reset-badge  { font-size:10px; padding:2px 7px; border-radius:3px; background:#1a3a2a; color:var(--green);
                     border:1px solid #2d5a3d; white-space:nowrap; display:inline-block; }
 .sig-reset-badge.t1 { background:#3a2e0a; color:var(--yellow); border-color:#5a4a10; }
+.trade-badge { font-size:11px; font-weight:900; padding:2px 9px; border-radius:3px; letter-spacing:1px; margin-top:5px; display:inline-block; }
+.trade-badge.swing { background:#2a1500; color:var(--orange); border:1px solid #5a3200; }
+.trade-badge.hold  { background:#0d1a2a; color:var(--blue);   border:1px solid #1a4a8a; }
 
 /* ── signal history strip ── */
 .history-strip { display:flex; gap:8px; padding:6px 16px; overflow-x:auto;
@@ -1472,6 +1475,7 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
   <div class="sig-dir-block">
     <div class="sig-direction waiting" id="sig-dir">—</div>
     <div class="sig-conf-pct" id="sig-conf-pct">—</div>
+    <div id="sig-trade-type" style="display:none"></div>
   </div>
   <div class="sig-center">
     <div class="sig-range-row" id="sig-range-row">
@@ -1491,6 +1495,8 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
     </div>
   </div>
 </div>
+
+<div class="history-strip" id="history-strip"></div>
 
 <div class="layout">
   <div class="col">
@@ -1739,7 +1745,7 @@ function renderBannerSuccess(rows, off, cur) {
         liveLbl = '<span class="neg" style="font-weight:700">no win</span>';
       }
       const strLbl = sn.high_hit_so_far ? '<span class="pos">✓</span>' : '<span class="dim">·</span>';
-      return `<div class="wh-row" style="grid-template-columns:1fr 44px 64px 64px 80px 58px 26px;background:#211e00;border-left:4px solid var(--yellow);padding-left:8px;padding-top:7px;padding-bottom:7px;box-shadow:inset 2px 0 8px rgba(210,153,34,0.08)"
+      return `<div class="wh-row" style="grid-template-columns:1fr 44px 64px 64px 80px 58px 26px;background:#211e00;border-left:4px solid var(--yellow);padding-left:8px;padding-top:7px;padding-bottom:7px;box-shadow:inset 2px 0 8px rgba(210,153,34,0.08)">
         <span style="font-size:11px"><b style="color:var(--yellow);font-size:12px">LIVE</b> ${idx} <span class="ticker trunc" title="${sn.ticker}">${tail}</span> <span class="dim">${mins} · buy [${(sn.buy_low||0).toFixed(1)}-${(sn.buy_high||0).toFixed(1)}¢]</span></span>
         <span style="font-size:13px;font-weight:800">${side}</span>
         <span class="num dim" style="font-size:12px">max ${max}¢</span>
@@ -1886,6 +1892,22 @@ function sigComp(label, val, suffix='') {
   return `<span class="sig-comp ${cls}">${arrow} ${label}${suffix}</span>`;
 }
 
+function tradeType(s) {
+  if (!s || s.status !== 'ok' || s.mins_left == null || s.mins_left < 2) return null;
+  const isUp = s.direction === 'YES';
+  const price = s.price;
+  const bias = (_dailyThesis.bias || '').toUpperCase();
+  const keyLevel = _dailyThesis.level ? parseFloat(_dailyThesis.level) : null;
+  const nearKey = keyLevel && s.spot ? Math.abs(s.spot - keyLevel) < 350 : false;
+  const counterThesis = (bias === 'UP' && !isUp) || (bias === 'DOWN' && isUp);
+  const extreme = (isUp && price > 0.73) || (!isUp && (1 - price) > 0.73);
+  if (nearKey || (counterThesis && extreme)) return 'SWING';
+  const thesisAligned = !counterThesis && bias && bias !== 'WAIT' && bias !== 'NONE';
+  const midRange = price >= 0.28 && price <= 0.72;
+  if (thesisAligned && midRange && s.mins_left >= 5) return 'HOLD';
+  return null;
+}
+
 function renderSignalBanner(s, isT1=false) {
   if(!s || s.status !== 'ok') return;
   const banner = $('signal-banner');
@@ -1907,6 +1929,7 @@ function renderSignalBanner(s, isT1=false) {
     $('conf-bar').style.width = s.confidence + '%';
     $('sig-components').innerHTML = '';
     $('sig-stats').innerHTML = '';
+    $('sig-trade-type').style.display = 'none';
     _bannerSnap = null;
     return;
   }
@@ -1956,16 +1979,32 @@ function renderSignalBanner(s, isT1=false) {
     + spotStr
     + (minsStr ? ` · <span class="dim">${minsStr}</span>` : '');
 
-  // Stats
+  // Trade type badge
+  const tt = tradeType(s);
+  const ttEl = $('sig-trade-type');
+  if (tt) {
+    ttEl.innerHTML = `<span class="trade-badge ${tt.toLowerCase()}">${tt}</span>`;
+    ttEl.style.display = '';
+  } else {
+    ttEl.style.display = 'none';
+  }
+
+  // Stats — include thesis key level
   const trendStr = s.whale_trend!=null && Math.abs(s.whale_trend)>2
     ? ` <span class="${s.whale_trend>0?'pos':'neg'}">${s.whale_trend>0?'↑':'↓'}${Math.abs(s.whale_trend).toFixed(0)}</span>` : '';
   const spreadStr = s.spread!=null ? `<span class="${s.spread>0.05?'neg':s.spread<0?'pos':'dim'}">${(s.spread*100).toFixed(1)}¢</span>` : '—';
   const flowLabel = s.has_whale_data ? 'Whales' : 'Flow';
+  const keyLevel = _dailyThesis.level ? parseFloat(_dailyThesis.level) : null;
+  const nearKey = keyLevel && s.spot ? Math.abs(s.spot - keyLevel) < 350 : false;
+  const keyLvlStat = keyLevel
+    ? `<div class="sig-stat"><span class="k">KEY LVL</span><span class="v ${nearKey?'':'dim'}" style="${nearKey?'color:var(--orange)':''}">$${Number(keyLevel).toLocaleString()}${nearKey?' ⚡':''}</span></div>`
+    : '';
   $('sig-stats').innerHTML = `
     <div class="sig-stat"><span class="k">${flowLabel}</span><span class="v" style="color:${isUp?'var(--green)':'var(--red)'}">${s.yes_pct}%${trendStr}</span></div>
     <div class="sig-stat"><span class="k">YES/NO</span><span class="v"><span class="pos">${(s.yes_contracts/1000).toFixed(1)}K</span>/<span class="neg">${(s.no_contracts/1000).toFixed(1)}K</span></span></div>
     ${s.momentum!=null?`<div class="sig-stat"><span class="k">Momo</span><span class="v ${s.momentum>=0?'pos':'neg'}">${s.momentum>=0?'+':''}${s.momentum.toFixed(0)}/m</span></div>`:''}
     <div class="sig-stat"><span class="k">Spread</span><span class="v">${spreadStr}</span></div>
+    ${keyLvlStat}
   `;
   $('sig-components').innerHTML =
     sigComp('Whale', s.sig_whale) + sigComp('Spot', s.sig_spot) + sigComp('Momo', s.sig_momentum) +
@@ -2001,6 +2040,7 @@ async function pollSignal() {
       $('sig-label').textContent = `Waiting for next 15m candle${mins}`;
       $('sig-stats').innerHTML = s.next_ticker ? `<div class="sig-stat"><span class="k">Next</span><span class="v dim">${s.next_ticker}</span></div>` : '';
       $('sig-ticker').textContent = ''; $('sig-badge').style.display = 'none';
+      $('sig-trade-type').style.display = 'none';
       return;
     }
     if(s.status !== 'ok') return;

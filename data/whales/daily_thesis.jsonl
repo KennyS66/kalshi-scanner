@@ -2,3 +2,4 @@
 {"date": "2026-06-05", "bias": "DOWN", "spot": 61296.0, "conviction": 2, "level": "60000", "note": "trend-follow: down-trend below all MAs; weak entry (oversold at $60k floor)"}
 {"date": "2026-06-10", "bias": "DOWN", "spot": 61387.0, "conviction": 3, "level": "60000", "note": "trend-follow DOWN: below all MAs, broke $63k channel floor, ~$5.4B ETF outflows, hot CPI + hawkish FOMC; BUT deeply oversold (RSI 16-26) so high bounce-risk at $60k. Hold $60k = range $59-63k; break <$59.1k opens $57k/$55k."}
 {"date": "2026-06-24", "bias": "WAIT", "spot": 60690.0, "conviction": 2, "level": "60000", "note": "hovering at key support, no directional edge \u2014 range day"}
+{"date": "2026-06-25", "bias": "UP", "spot": 61500.0, "conviction": 3, "level": "61500", "note": ""}
