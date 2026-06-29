@@ -61,16 +61,29 @@ echo
 echo "Scanner: http://localhost:9050  (dashboards: /whales, /crypto)"
 echo
 
-# Check if today's thesis is set — warn loudly if not.
-TODAY=$(date +%Y-%m-%d)
+# Check if today's thesis is set; auto-run daily_research.py if stale/missing.
+TODAY=$(date -u +%Y-%m-%d)
 THESIS_CHECK=$("$PY" day_plan.py 2>/dev/null | grep "^PLAN:" | head -1)
+NEEDS_RESEARCH=false
+if [[ -z "$THESIS_CHECK" ]] || echo "$THESIS_CHECK" | grep -q "bias=NONE\|stale=yes"; then
+  NEEDS_RESEARCH=true
+fi
+
+if $NEEDS_RESEARCH; then
+  echo "📡 No fresh thesis for $TODAY — running daily_research.py..."
+  "$PY" daily_research.py 2>&1 | tail -20
+  echo
+  # Re-read plan after research
+  THESIS_CHECK=$("$PY" day_plan.py 2>/dev/null | grep "^PLAN:" | head -1)
+fi
+
 if [[ -z "$THESIS_CHECK" ]]; then
-  echo "⚠️  WARNING: No daily thesis set for $TODAY"
-  echo "   Run:  $PY daily_thesis.py record <UP|DOWN|WAIT> <spot> --level <key> --conviction <1-5> --note '...' --date $TODAY"
+  echo "⚠️  WARNING: Research failed — no thesis for $TODAY. Set manually:"
+  echo "   $PY daily_thesis.py record <UP|DOWN|WAIT> <spot> --level <key> --conviction <1-5> --date $TODAY"
   echo
 elif echo "$THESIS_CHECK" | grep -q "bias=NONE\|bias=WAIT"; then
   echo "ℹ️  Thesis for $TODAY: $(echo "$THESIS_CHECK" | grep -o 'bias=[^ ]*')"
-  echo "   WAIT/NONE bias — no directional trade today."
+  echo "   WAIT bias — no directional trade today."
   echo
 else
   echo "✅ Thesis for $TODAY: $THESIS_CHECK"

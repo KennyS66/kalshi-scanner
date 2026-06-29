@@ -790,8 +790,21 @@ async def api_crypto_signals() -> JSONResponse:
         sigs = _alpha_engine.get_top_signals(80)
         rows = []
         for s in sigs:
-            if not _is_crypto(s.ticker) and "btc_" not in s.signal_type and "ladder" not in s.signal_type:
+            is_15m_btc = "KXBTC15M" in s.ticker.upper()
+            is_btc_context = (
+                "KXBTC" in s.ticker.upper()
+                or "btc_" in s.signal_type
+                or "ladder" in s.signal_type
+                or "btcarb" in s.signal_type
+            )
+            if not is_15m_btc and not is_btc_context:
                 continue
+            # Non-15m BTC signals: only surface when they have real signal strength
+            if not is_15m_btc and is_btc_context:
+                strength = s.strength or 0
+                edge = abs(s.edge_pct or 0)
+                if strength < 0.5 and edge < 5:
+                    continue
             rows.append({
                 "ticker": s.ticker,
                 "title": s.title,
@@ -802,6 +815,7 @@ async def api_crypto_signals() -> JSONResponse:
                 "kalshi_price": s.kalshi_price,
                 "fair_value": s.fair_value,
                 "detail": s.detail,
+                "context": not is_15m_btc,
             })
         return JSONResponse({"rows": rows[:30]})
     return JSONResponse({"rows": []})
@@ -1326,10 +1340,12 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 
 /* ── daily thesis bar ── */
 .thesis-bar {
-  display:flex; align-items:center; gap:18px; padding:0 18px;
-  height:44px; border-bottom:2px solid var(--border);
-  font-family:inherit; user-select:none;
+  display:flex; flex-direction:column; justify-content:center; gap:2px;
+  padding:6px 18px; border-bottom:2px solid var(--border);
+  font-family:inherit; user-select:none; min-height:52px;
 }
+.thesis-bar-row1 { display:flex; align-items:center; gap:18px; }
+.thesis-bar-note { font-size:10px; color:var(--mute); opacity:0.7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
 .thesis-bar.up   { background:#071510; border-bottom-color:var(--green); }
 .thesis-bar.down { background:#150707; border-bottom-color:var(--red); }
 .thesis-bar.wait { background:#141007; border-bottom-color:var(--yellow); }
@@ -1522,10 +1538,15 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
 .log-ts   { color:var(--mute); font-size:11px; white-space:nowrap; flex-shrink:0; }
 .log-type { font-size:10px; font-weight:700; padding:1px 6px; border-radius:3px; white-space:nowrap; flex-shrink:0; }
 .log-type.BREAK_UP   { background:#0d2a0d; color:var(--green); border:1px solid #2d5a2d; }
+.log-type.BREAK_DOWN { background:#0d2a0d; color:var(--green); border:1px solid #2d5a2d; }
 .log-type.REJECT     { background:#2a0d0d; color:var(--red);   border:1px solid #5a2d2d; }
+.log-type.CROSS_ABOVE{ background:#2a0d0d; color:var(--red);   border:1px solid #5a2d2d; }
 .log-type.LEVEL_TEST { background:#1a1600; color:var(--yellow); border:1px solid #3a3000; }
 .log-type.HOLD       { background:#0d1a2a; color:var(--blue);  border:1px solid #1a3a5a; }
 .log-type.SIGNAL     { background:#1a0d2a; color:var(--purple);border:1px solid #3a1a5a; }
+.log-type.RESEARCH   { background:#0a1a2a; color:var(--blue);  border:1px solid #1a4a6a; }
+.log-type.STATUS     { background:var(--bg3); color:var(--mute); border:1px solid var(--border); }
+.log-type.RE_ARM     { background:var(--bg3); color:var(--mute); border:1px solid var(--border); }
 .log-type.NOTE       { background:var(--bg3); color:var(--mute); border:1px solid var(--border); }
 .log-spot { color:var(--orange); font-variant-numeric:tabular-nums; flex-shrink:0; }
 .log-msg  { color:var(--fg); line-height:1.4; }
@@ -1582,10 +1603,22 @@ footer { text-align:center; padding:8px; color:var(--mute); font-size:11px; bord
   <div class="col">
     <div class="card grow">
       <div class="card-header">
-        <span class="card-title">Crypto Alpha Signals</span>
+        <span class="card-title">BTC 15m · Alpha</span>
         <span class="card-meta" id="sig-meta">—</span>
       </div>
       <div class="card-body" id="signals"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="layout" style="margin-top:0">
+  <div class="col" style="max-width:100%">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">BTC 15m · Whale Flow</span>
+        <span class="card-meta" id="whale-meta">—</span>
+      </div>
+      <div class="card-body" style="max-height:220px;overflow-y:auto;padding:0" id="cwhales"><div class="empty">loading…</div></div>
     </div>
   </div>
 </div>
@@ -1686,28 +1719,61 @@ function _renderUpDownOld(rows) {
 
 // ── Alpha Signals ────────────────────────────────────────────────────
 function renderSignals(rows) {
-  if(!rows||!rows.length){$('signals').innerHTML='<div class="empty">no crypto signals yet</div>';return;}
-  $('sig-meta').textContent = rows.length + ' signals';
-  $('signals').innerHTML = rows.map(r => {
+  if(!rows||!rows.length){$('signals').innerHTML='<div class="empty">no 15m BTC signals yet</div>';$('sig-meta').textContent='0';return;}
+  const primary = rows.filter(r => !r.context);
+  const ctx     = rows.filter(r =>  r.context);
+  $('sig-meta').textContent = primary.length + (ctx.length ? ` · +${ctx.length} ctx` : '');
+  const toRow = r => {
     const dirCls = r.direction==='yes'?'dir-yes':'dir-no';
     const dirLabel = r.direction==='yes'?'▲YES':'▼NO';
-    const barW = Math.round(r.strength*40);
+    const barW = Math.round((r.strength||0)*40);
     const edgeSign = r.fair_value > r.kalshi_price ? '+' : '';
     const edgeCents = Math.round((r.fair_value - r.kalshi_price)*100);
     const edgeCls = edgeCents > 0 ? 'pos' : 'neg';
-    return `<div class="sig-row" title="${r.detail||''}">
-      ${typeBadge(r.type)}
+    const ctxStyle = r.context ? ' style="opacity:0.55"' : '';
+    const ctxLabel = r.context ? '<span class="dim" style="font-size:9px;letter-spacing:.5px">CTX</span>' : '';
+    return `<div class="sig-row"${ctxStyle} title="${r.detail||''}">
+      ${typeBadge(r.type)}${ctxLabel}
       <span class="trunc dim" title="${r.title||r.ticker}">${shortTicker(r.title||r.ticker,28)}</span>
       <span class="${dirCls}">${dirLabel}</span>
       <span class="num dim">${fmtP(r.kalshi_price)}</span>
       <span class="num ${edgeCls}">${edgeSign}${edgeCents}¢</span>
       <div style="display:flex;align-items:center"><div class="str-bar" style="width:${barW}px"></div></div>
     </div>`;
-  }).join('');
+  };
+  $('signals').innerHTML = primary.map(toRow).join('') +
+    (ctx.length ? `<div class="dim" style="font-size:9px;padding:4px 6px;letter-spacing:.8px">── BTC CONTEXT ──</div>` + ctx.map(toRow).join('') : '');
 }
 
-// ── Crypto Whale Feed (backend kept, UI removed) ─────────────────────
-function renderCWhales(rows) { /* panel removed */ }
+// ── BTC 15m Whale Flow ───────────────────────────────────────────────
+function renderCWhales(rows) {
+  const el = $('cwhales'), meta = $('whale-meta');
+  if(!rows||!rows.length){ el.innerHTML='<div class="empty">no whale activity</div>'; meta.textContent='—'; return; }
+  const btc15m = rows.filter(r => r.ticker.includes('KXBTC15M'));
+  const btcd   = rows.filter(r => r.ticker.includes('KXBTCD') && !r.ticker.includes('15M'));
+  meta.textContent = btc15m.length + (btcd.length ? ` · +${btcd.length} daily ctx` : '');
+  const toRow = (r, ctx) => {
+    const ts = r.ts_ms ? new Date(r.ts_ms).toISOString().slice(11,19) : '?';
+    const side = r.side==='yes'?'<span class="yes">YES</span>':'<span class="no">NO</span>';
+    const label = r.ticker.split('-').slice(-2).join('-') || r.ticker;
+    const big = r.notional >= 200;
+    const vs = r.vs_spot != null
+      ? `<span class="${r.vs_spot>=0?'pos':'neg'}">${r.vs_spot>=0?'+':'-'}$${Math.abs(r.vs_spot).toLocaleString()}</span>`
+      : '<span class="dim">—</span>';
+    const ctxStyle = ctx ? 'opacity:0.5' : '';
+    return `<div class="wh-row${big?' big':''}" style="${ctxStyle}" title="${r.ticker}">
+      <span class="dim">${ts}</span>
+      <span class="ticker trunc">${label}</span>
+      ${side}
+      <span class="num dim">${fmtN(r.contracts)}</span>
+      <span class="num dim">${fmtP(r.price)}</span>
+      <span class="num" style="color:var(--yellow)">$${Math.round(r.notional)}</span>
+      ${vs}
+    </div>`;
+  };
+  el.innerHTML = btc15m.map(r=>toRow(r,false)).join('')
+    + (btcd.length ? `<div class="dim" style="font-size:9px;padding:3px 10px;letter-spacing:.8px">── DAILY BTC CONTEXT ──</div>` + btcd.map(r=>toRow(r,true)).join('') : '');
+}
 function _renderCWhalesOld(rows) {
   return rows.map(r => {
     const ts = r.ts_ms ? new Date(r.ts_ms).toISOString().slice(11,19) : '?';
@@ -1923,13 +1989,14 @@ function playAlert(isUp) {
 // ── Main refresh ─────────────────────────────────────────────────────
 async function refresh() {
   try {
-    const [spotR, sigsR, histR, brsR, brsOff, brsCur] = await Promise.all([
+    const [spotR, sigsR, histR, brsR, brsOff, brsCur, whalesR] = await Promise.all([
       fetch('/api/crypto/spot').then(r=>r.json()),
       fetch('/api/crypto/signals').then(r=>r.json()),
       fetch('/api/crypto/history').then(r=>r.json()),
       fetch('/api/crypto/banner_history?limit=50').then(r=>r.json()).catch(()=>({rows:[]})),
       fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
       fetch('/api/crypto/banner_current').then(r=>r.json()).catch(()=>null),
+      fetch('/api/crypto/whales').then(r=>r.json()).catch(()=>({rows:[]})),
     ]);
 
     if(spotR.btc) { $('spot-btc').textContent = 'BTC ' + fmt$(spotR.btc); _btcSpot = spotR.btc; }
@@ -1939,6 +2006,7 @@ async function refresh() {
     renderSignals(sigsR.rows);
     renderHistory(histR.rows);
     renderBannerSuccess(brsR.rows, brsOff, brsCur);
+    renderCWhales(whalesR.rows);
   } catch(e) { console.error('refresh error', e); }
 }
 
@@ -1976,9 +2044,12 @@ function renderThesisBar(btcSpot) {
   } else if(btcSpot) {
     spotHtml = `<span class="thesis-bar-spot">BTC $${Math.round(btcSpot).toLocaleString()}</span>`;
   }
+  // Strip the redundant "key $X" suffix from note since it's already shown in meta
+  const rawNote = (t.note || '').replace(/;\s*key \$[\d,]+\.?/g, '').replace(/\.\s*$/, '');
+  const noteHtml = rawNote ? `<div class="thesis-bar-note" title="${rawNote}">${rawNote}</div>` : '';
   bar.className = `thesis-bar ${cls}`;
-  bar.style.display = 'flex';
-  bar.innerHTML = `<span class="thesis-bar-label">Today's Thesis</span><span class="thesis-bar-bias ${cls}">${arrow} ${bias}</span><span class="thesis-bar-meta">${convStr}${keyStr}</span>${spotHtml}`;
+  bar.style.display = '';
+  bar.innerHTML = `<div class="thesis-bar-row1"><span class="thesis-bar-label">Thesis</span><span class="thesis-bar-bias ${cls}">${arrow} ${bias}</span><span class="thesis-bar-meta">${convStr}${keyStr}</span>${spotHtml}</div>${noteHtml}`;
 }
 
 function fmt$2(n) { return n==null?'—':'$'+Math.round(n).toLocaleString(); }
