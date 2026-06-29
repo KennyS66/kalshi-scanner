@@ -4,3 +4,8 @@
 {"date": "2026-06-24", "bias": "WAIT", "spot": 60690.0, "conviction": 2, "level": "60000", "note": "hovering at key support, no directional edge \u2014 range day"}
 {"date": "2026-06-25", "bias": "UP", "spot": 61500.0, "conviction": 3, "level": "61500", "note": ""}
 {"date": "2026-06-25", "bias": "UP", "spot": 59605.0, "conviction": 3, "level": "61500", "note": "UP conv 3 \u00b7 key $61,500"}
+{"date": "2026-06-25", "bias": "WAIT", "spot": 60150.0, "conviction": 1, "level": "61500", "note": "night session \u2014 WAIT conv 1, lower volume"}
+{"date": "2026-06-25", "bias": "UP", "spot": 60150.0, "conviction": 3, "level": "61500", "note": "UP conv 3 \u00b7 key $61,500"}
+{"date": "2026-06-27", "bias": "UP", "spot": 60116.0, "conviction": 2, "level": "61500", "note": "UP conv 2 \u00b7 key $61,500"}
+{"date": "2026-06-28", "bias": "WAIT", "spot": 60082.0, "conviction": 1, "level": "60000", "note": "BTC fell below 61500 key overnight \u2014 now at 60k support. Whale trend negative (-25). WAIT for structure at 60k before taking direction."}
+{"date": "2026-06-28", "bias": "UP", "spot": 59481.0, "conviction": 2, "level": "60000", "note": "UP conv 2 \u00b7 key $60,000 \u2014 spot below at 59.5k, watching for reclaim of 60k as launch pad"}
