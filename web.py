@@ -1100,11 +1100,24 @@ async def api_banner_offsets() -> JSONResponse:
 async def api_banner_history(limit: int = 20) -> JSONResponse:
     try:
         lines = _BANNER_TARGETS_FILE.read_text().splitlines()
-        rows = [json.loads(l) for l in lines if l.strip()][-limit:]
-        rows.reverse()  # newest first
-        return JSONResponse({"rows": rows})
+        all_rows = [json.loads(l) for l in lines if l.strip()]
+        # aggregate stats over the full history
+        entered   = [r for r in all_rows if r.get("buy_touched")]
+        wins      = [r for r in entered  if r.get("low_hit")]
+        stretches = [r for r in entered  if r.get("high_hit")]
+        stats = {
+            "total":    len(all_rows),
+            "entered":  len(entered),
+            "wins":     len(wins),
+            "stretches": len(stretches),
+            "win_pct":  round(len(wins) / len(entered) * 100, 1) if entered else 0,
+            "str_pct":  round(len(stretches) / len(entered) * 100, 1) if entered else 0,
+        }
+        recent = all_rows[-limit:]
+        recent.reverse()  # newest first
+        return JSONResponse({"rows": recent, "stats": stats})
     except Exception:
-        return JSONResponse({"rows": []})
+        return JSONResponse({"rows": [], "stats": {}})
 
 
 @app.get("/api/loop_log")
@@ -1113,9 +1126,9 @@ async def api_loop_log_get(limit: int = 200) -> JSONResponse:
         lines = _LOOP_LOG_FILE.read_text().splitlines()
         rows = [json.loads(l) for l in lines if l.strip()][-limit:]
         rows.reverse()
-        return JSONResponse({"rows": rows})
+        return JSONResponse({"entries": rows})  # frontend expects "entries"
     except Exception:
-        return JSONResponse({"rows": []})
+        return JSONResponse({"entries": []})
 
 
 @app.post("/api/loop_log")
@@ -1919,22 +1932,24 @@ function renderCWhales(rows){
 }
 
 // ── BRS history ──────────────────────────────────────────────────────────────
-function renderBRS(rows, off, cur){
+function renderBRS(rows, off, cur, stats){
   rows=rows||[];
-  const n=rows.length;
-  if(!n){$('brs-body').innerHTML='<div class="empty">no settled markets yet</div>';return;}
-  const tradeable=rows.filter(r=>r.buy_touched);
-  const wins=tradeable.filter(r=>r.low_hit).length;
-  const winPct=tradeable.length?(wins/tradeable.length*100).toFixed(0):'—';
+  // prefer backend-computed stats over full history; fall back to subset
+  const st=stats&&stats.total?stats:null;
+  const totN   = st?st.total:rows.length;
+  const entered= st?st.entered:rows.filter(r=>r.buy_touched).length;
+  const wins   = st?st.wins:rows.filter(r=>r.buy_touched&&r.low_hit).length;
+  const stretches=st?st.stretches:rows.filter(r=>r.buy_touched&&r.high_hit).length;
+  const winPct = entered?(st?st.win_pct:(wins/entered*100)).toFixed(0):'—';
+  const strPct = entered?(st?st.str_pct:(stretches/entered*100)).toFixed(0):'—';
   const wCls=winPct==='—'?'dim':winPct>=90?'pos':winPct>=70?'':' neg';
-  $('brs-meta').textContent=`n=${n} · ${tradeable.length} entered`;
-  const stretches=tradeable.filter(r=>r.high_hit).length;
-  const strPct=tradeable.length?(stretches/tradeable.length*100).toFixed(0):'—';
   const sCls=strPct==='—'?'dim':strPct>=60?'pos':strPct>=40?'':'neg';
+  $('brs-meta').textContent=st?`all-time · ${totN} settled · ${entered} entered`:`n=${totN} · ${entered} entered`;
+  if(!rows.length){$('brs-body').innerHTML='<div class="empty">no settled markets yet</div>';return;}
   let headline=`<div class="brs-stat-row">
-    <div class="brs-stat"><span class="brs-stat-k">Win Rate</span><span class="brs-stat-v ${wCls}">${winPct==='—'?'—':winPct+'%'}</span><span class="brs-stat-sub">${wins}/${tradeable.length} · goal 90%</span></div>
-    <div class="brs-stat"><span class="brs-stat-k">Stretch</span><span class="brs-stat-v ${sCls}">${strPct==='—'?'—':strPct+'%'}</span><span class="brs-stat-sub">${stretches}/${tradeable.length} · goal 60%</span></div>
-    <div class="brs-stat"><span class="brs-stat-k">Entered</span><span class="brs-stat-v dim" style="font-size:32px">${tradeable.length}<span style="font-size:18px;opacity:.5">/${n}</span></span><span class="brs-stat-sub">markets with entry</span></div>
+    <div class="brs-stat"><span class="brs-stat-k">Win Rate</span><span class="brs-stat-v ${wCls}">${winPct==='—'?'—':winPct+'%'}</span><span class="brs-stat-sub">${wins}/${entered} · goal 90%</span></div>
+    <div class="brs-stat"><span class="brs-stat-k">Stretch</span><span class="brs-stat-v ${sCls}">${strPct==='—'?'—':strPct+'%'}</span><span class="brs-stat-sub">${stretches}/${entered} · goal 60%</span></div>
+    <div class="brs-stat"><span class="brs-stat-k">All-time</span><span class="brs-stat-v dim" style="font-size:32px">${entered}<span style="font-size:18px;opacity:.5">/${totN}</span></span><span class="brs-stat-sub">entries / settled</span></div>
   </div>`;
   const curList=Array.isArray(cur)?cur:(cur&&cur.ticker?[cur]:[]);
   let pending='';
@@ -1952,7 +1967,7 @@ function renderBRS(rows, off, cur){
         <span class="num dim">≥${(sn.sell_high||0).toFixed(1)}?</span><span class="dim">·</span></div>`;
     }).join('');
   }
-  const tableRows=rows.slice(0,30).map(r=>{
+  const tableRows=rows.slice(0,60).map(r=>{
     const tail=r.ticker?r.ticker.split('-').slice(-2).join('-'):'';
     const side=r.side==='YES'?'<span class="yes">YES</span>':'<span class="no">NO</span>';
     let lbl,cls;
@@ -2219,7 +2234,7 @@ async function pollSlow(){
       fetch('/api/crypto/spot').then(r=>r.json()).catch(()=>({})),
       fetch('/api/crypto/whales').then(r=>r.json()).catch(()=>({rows:[]})),
       fetch('/api/crypto/history').then(r=>r.json()).catch(()=>({rows:[]})),
-      fetch('/api/crypto/banner_history?limit=50').then(r=>r.json()).catch(()=>({rows:[]})),
+      fetch('/api/crypto/banner_history?limit=60').then(r=>r.json()).catch(()=>({rows:[],stats:{}})),
       fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
       fetch('/api/crypto/banner_current').then(r=>r.json()).catch(()=>null),
       fetch('/api/account').then(r=>r.json()).catch(()=>null),
@@ -2231,7 +2246,7 @@ async function pollSlow(){
     renderThesisBar();
     renderCWhales(whalesR.rows);
     renderHistory(histR.rows);
-    renderBRS(brsR.rows, brsOff, brsCur);
+    renderBRS(brsR.rows, brsOff, brsCur, brsR.stats);
     if(acctR){renderAccount(acctR);renderDebug(_lastSignal,acctR);}
     if(logR.entries)renderLog(logR.entries);
   }catch(e){console.error('pollSlow',e);}
