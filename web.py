@@ -1328,6 +1328,27 @@ header {
 .guidance-bar.neutral { border-color:var(--border); background:var(--bg2); color:var(--mute); }
 .guidance-icon { font-size:20px; flex-shrink:0; }
 
+/* ── history strip ── */
+.history-strip {
+  display:flex; gap:8px; padding:8px 16px; overflow-x:auto;
+  border-bottom:1px solid var(--border); background:var(--bg);
+  min-height:70px; align-items:center; flex-shrink:0;
+}
+.hist-card {
+  flex-shrink:0; padding:7px 12px; border-radius:6px; min-width:110px;
+  border:1px solid var(--border); background:var(--bg2); font-size:11px;
+  display:flex; flex-direction:column; gap:3px; cursor:default;
+}
+.hist-card.correct { border-color:var(--green); background:#0a1a0c; }
+.hist-card.wrong   { border-color:var(--red);   background:#1a0a0a; }
+.hist-card.pending { opacity:.65; }
+.hc-dir   { font-weight:900; font-size:13px; }
+.hc-conf  { color:var(--mute); font-size:10px; }
+.hc-out   { font-weight:800; font-size:12px; }
+.hc-out.ok  { color:var(--green); }
+.hc-out.bad { color:var(--red); }
+.hc-time  { color:var(--mute); font-size:10px; }
+
 /* ── limit order panel ── */
 .limit-wrap { padding:12px 20px 0; }
 .limit-card { border:1px solid var(--border); border-radius:10px; background:var(--bg2); overflow:hidden; }
@@ -1481,8 +1502,11 @@ header {
 .ticker { color:var(--blue); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .trunc  { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .empty  { padding:12px; color:var(--mute); font-size:12px; }
-.score-pill { display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px;
-              font-weight:700; border:1px solid var(--border); background:var(--bg3); }
+.score-pill { display:inline-flex; align-items:center; gap:6px; padding:3px 12px;
+              border-radius:12px; font-size:12px; font-weight:700;
+              border:1px solid var(--border); background:var(--bg3); }
+.score-pill.pos { border-color:var(--green); background:#0a1a0c; color:var(--green); }
+.score-pill.neg { border-color:var(--red);   background:#1a0808; color:var(--red); }
 </style>
 </head>
 <body>
@@ -1547,6 +1571,11 @@ header {
     <span class="guidance-icon" id="guidance-icon">—</span>
     <span id="guidance-text">set your position above</span>
   </div>
+</div>
+
+<!-- ── history strip ── -->
+<div class="history-strip" id="history-strip">
+  <div class="dim" style="font-size:11px;padding:4px">loading…</div>
 </div>
 
 <!-- ── limit order targets ── -->
@@ -1942,11 +1971,45 @@ function renderBRS(rows, off, cur){
 
 // ── call history ─────────────────────────────────────────────────────────────
 function renderHistory(rows){
-  if(!rows||!rows.length){$('hist-grid').innerHTML='<div class="empty dim">no history yet</div>';return;}
+  const strip=$('history-strip');
+  const grid=$('hist-grid');
+  if(!rows||!rows.length){
+    strip.innerHTML='<div class="dim" style="font-size:11px;padding:4px">no history yet</div>';
+    grid.innerHTML='';
+    return;
+  }
   const wins=rows.filter(r=>r.correct===true).length;
   const settled=rows.filter(r=>r.outcome!=null).length;
-  $('score-label').innerHTML=settled>0?`<span class="score-pill">${wins}/${settled} (${Math.round(wins/settled*100)}%)</span>`:'';
-  $('hist-grid').innerHTML=rows.slice().reverse().map(r=>{
+  const pct=settled>0?Math.round(wins/settled*100):0;
+  const pCls=pct>=55?'pos':pct<=45?'neg':'';
+  $('score-label').innerHTML=settled>0
+    ?`<span class="score-pill ${pCls}">${wins}/${settled} &nbsp;<span style="font-size:14px;font-weight:900">${pct}%</span></span>`:'';
+
+  const reversed=rows.slice().reverse();
+
+  // ── horizontal strip (most recent first, newest on left) ──
+  strip.innerHTML=reversed.map(r=>{
+    const isUp=r.direction==='YES', dCls=isUp?'yes':'no', dLabel=isUp?'▲ YES':'▼ NO';
+    const ts=r.ts?new Date(r.ts*1000).toISOString().slice(11,16):'?';
+    const label=r.ticker?r.ticker.split('-').slice(-2).join('-'):'';
+    let outHtml,outCls,cardCls;
+    if(r.outcome){
+      outHtml=(r.correct?'✓ ':'✗ ')+r.outcome;
+      outCls=r.correct?'ok':'bad';
+      cardCls=r.correct?'correct':'wrong';
+    } else {
+      outHtml='pending…'; outCls=''; cardCls='pending';
+    }
+    return `<div class="hist-card ${cardCls}" title="${r.ticker||''}">
+      <span class="hc-dir ${dCls}">${dLabel}</span>
+      <span class="hc-conf">${r.conf!=null?r.conf+'% conf':''}</span>
+      <span class="hc-out ${outCls}">${outHtml}</span>
+      <span class="hc-time">${label} · ${ts}</span>
+    </div>`;
+  }).join('');
+
+  // ── vertical detail list at bottom ──
+  grid.innerHTML=reversed.map(r=>{
     const isUp=r.direction==='YES', dCls=isUp?'yes':'no', dLabel=isUp?'▲ YES':'▼ NO';
     const ts=r.ts?new Date(r.ts*1000).toISOString().slice(11,16):'?';
     const label=r.ticker?r.ticker.split('-').slice(-2).join('-'):'';
@@ -1955,10 +2018,11 @@ function renderHistory(rows){
     else{outHtml='pending…';outCls='pending';}
     const cardCls=r.outcome?(r.correct?'correct':'wrong'):'pending';
     return `<div class="hcard ${cardCls}">
-      <span class="hcard-dir ${dCls}">${dLabel}</span>
-      <span class="hcard-conf dim">${r.conf!=null?r.conf+'% conf':''}</span>
-      <span class="hcard-out ${outCls}">${outHtml}</span>
-      <span class="hcard-time">${label} · ${ts} UTC</span></div>`;
+      <span class="hcard-dir ${dCls}" style="font-size:14px">${dLabel}</span>
+      <span class="hcard-conf dim">${r.conf!=null?r.conf+'%':''}</span>
+      <span class="hcard-out ${outCls}" style="font-size:13px">${outHtml}</span>
+      <span class="hcard-time">${label} · ${ts} UTC</span>
+    </div>`;
   }).join('');
 }
 
