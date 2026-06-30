@@ -200,11 +200,13 @@ def _calibration_loop(interval: int = 600) -> None:
 # ── Kalshi account poller ─────────────────────────────────────────────────────
 _KALSHI_HOST  = "https://api.elections.kalshi.com"
 _KALSHI_ENV   = Path.home() / ".kalshi" / "trading.env"
-_account_cache: dict = {"balance": None, "positions": [], "fills": [], "ts": 0, "error": None}
+_account_cache: dict = {"balance": None, "positions": [], "fills": [], "ts": 0, "error": None,
+                        "fills_enabled": True, "fills_key_configured": False}
 _account_lock = threading.Lock()
+_fills_enabled = True
 
 
-def _kalshi_creds():
+def _read_env() -> dict[str, str]:
     env: dict[str, str] = {}
     if _KALSHI_ENV.exists():
         for line in _KALSHI_ENV.read_text().splitlines():
@@ -213,8 +215,22 @@ def _kalshi_creds():
                 continue
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip()
+    return env
+
+
+def _kalshi_creds():
+    env = _read_env()
     kid = env.get("KALSHI_API_KEY_ID") or os.environ.get("KALSHI_API_KEY_ID", "")
     kp  = env.get("KALSHI_PRIVATE_KEY_PATH") or os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+    return kid or None, kp or None
+
+
+def _kalshi_fills_creds():
+    """Separate fills key (KALSHI_FILLS_KEY_ID + KALSHI_FILLS_KEY_PATH in trading.env).
+    Falls back to None/None if not configured — caller will skip fills or use main key."""
+    env = _read_env()
+    kid = env.get("KALSHI_FILLS_KEY_ID") or os.environ.get("KALSHI_FILLS_KEY_ID", "")
+    kp  = env.get("KALSHI_FILLS_KEY_PATH") or os.environ.get("KALSHI_FILLS_KEY_PATH", "")
     return kid or None, kp or None
 
 
@@ -236,6 +252,7 @@ def _kalshi_get(kid: str, pk, path: str) -> dict:
 
 
 def _account_poller_loop(interval: float = 20.0) -> None:
+    global _fills_enabled
     kid, kp = _kalshi_creds()
     if not kid or not kp:
         with _account_lock:
@@ -249,9 +266,25 @@ def _account_poller_loop(interval: float = 20.0) -> None:
             _account_cache["error"] = f"key error: {e}"
         return
 
+    # Load fills-specific key (optional; falls back to main key if not configured)
+    fills_kid, fills_kp = _kalshi_fills_creds()
+    fills_pk = None
+    fills_key_ok = False
+    if fills_kid and fills_kp:
+        try:
+            with open(fills_kp, "rb") as f:
+                fills_pk = _serialization.load_pem_private_key(f.read(), password=None)
+            fills_key_ok = True
+        except Exception as e:
+            fills_kid = None
+    with _account_lock:
+        _account_cache["fills_key_configured"] = fills_key_ok
+
     while True:
         errors = []
         update: dict = {"ts": time.time(), "error": None}
+        update["fills_enabled"] = _fills_enabled
+        update["fills_key_configured"] = fills_key_ok
 
         # Balance
         try:
@@ -281,26 +314,33 @@ def _account_poller_loop(interval: float = 20.0) -> None:
         except Exception as e:
             errors.append(f"positions: {e}")
 
-        # Fills (best-effort — some keys lack this permission; 401 is silent)
-        try:
-            fls = _kalshi_get(kid, pk, "/trade-api/v2/portfolio/fills?limit=20")
-            fills = []
-            for f in fls.get("fills", []):
-                fills.append({
-                    "ticker": f.get("ticker", ""),
-                    "side":   f.get("side", ""),
-                    "qty":    f.get("count") or 0,
-                    "price":  round((f.get("yes_price") or 0) / 100, 4),
-                    "ts":     f.get("created_time", ""),
-                    "action": f.get("action", "buy"),
-                })
-            update["fills"] = fills[:20]
-        except Exception as e:
-            err_str = str(e)
-            # 401 on fills = key lacks permission; don't surface as a UI error
-            if "401" not in err_str:
-                errors.append(f"fills: {e}")
-            update.setdefault("fills_note", "fills: key lacks permission")
+        # Fills — use fills-specific key if configured; skip entirely if disabled
+        if _fills_enabled:
+            f_kid = fills_kid if fills_key_ok else kid
+            f_pk  = fills_pk  if fills_key_ok else pk
+            try:
+                fls = _kalshi_get(f_kid, f_pk, "/trade-api/v2/portfolio/fills?limit=20")
+                fills = []
+                for f in fls.get("fills", []):
+                    fills.append({
+                        "ticker": f.get("ticker", ""),
+                        "side":   f.get("side", ""),
+                        "qty":    f.get("count") or 0,
+                        "price":  round((f.get("yes_price") or 0) / 100, 4),
+                        "ts":     f.get("created_time", ""),
+                        "action": f.get("action", "buy"),
+                    })
+                update["fills"] = fills[:20]
+                update.pop("fills_note", None)
+            except Exception as e:
+                err_str = str(e)
+                if "401" not in err_str:
+                    errors.append(f"fills: {e}")
+                else:
+                    update["fills_note"] = "fills key lacks permission (401)"
+        else:
+            update["fills"] = []
+            update["fills_note"] = "fills polling disabled"
 
         if errors:
             update["error"] = " | ".join(errors)
@@ -1131,6 +1171,15 @@ async def api_account() -> JSONResponse:
         return JSONResponse(dict(_account_cache))
 
 
+@app.post("/api/fills_toggle")
+async def fills_toggle() -> JSONResponse:
+    global _fills_enabled
+    _fills_enabled = not _fills_enabled
+    with _account_lock:
+        _account_cache["fills_enabled"] = _fills_enabled
+    return JSONResponse({"fills_enabled": _fills_enabled})
+
+
 _TRADE_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -1530,7 +1579,11 @@ header {
   </div>
   <div class="acct-section-lbl">Open positions</div>
   <div id="pos-grid"><div class="acct-empty">loading…</div></div>
-  <div class="acct-section-lbl">Recent fills</div>
+  <div class="acct-section-lbl" style="display:flex;align-items:center;gap:10px;margin-top:10px">
+    Recent fills
+    <span id="fills-key-badge" style="font-size:10px;display:none"></span>
+    <button id="fills-toggle-btn" onclick="toggleFills()" style="font-size:10px;padding:2px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--mute);cursor:pointer;font-family:inherit">ON</button>
+  </div>
   <div id="fill-grid"><div class="acct-empty">loading…</div></div>
 </div>
 
@@ -1909,11 +1962,40 @@ function renderHistory(rows){
   }).join('');
 }
 
+// ── fills toggle ─────────────────────────────────────────────────────────────
+async function toggleFills(){
+  const btn=$('fills-toggle-btn');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/fills_toggle',{method:'POST'}).then(r=>r.json());
+    btn.textContent=r.fills_enabled?'ON':'OFF';
+    btn.style.color=r.fills_enabled?'var(--green)':'var(--mute)';
+    btn.style.borderColor=r.fills_enabled?'var(--green)':'var(--border)';
+  }catch(e){console.error('toggle fills',e);}
+  finally{btn.disabled=false;}
+}
+
 // ── account ──────────────────────────────────────────────────────────────────
 function renderAccount(a){
   if(!a)return;
   if(a.balance!=null) $('acct-balance').textContent='$'+parseFloat(a.balance).toFixed(2);
   if(a.ts){ const age=Math.round(Date.now()/1000-a.ts); $('acct-age').textContent=age<5?'live':age+'s ago'; }
+
+  // sync fills toggle button state
+  const btn=$('fills-toggle-btn');
+  const enabled=a.fills_enabled!==false;
+  btn.textContent=enabled?'ON':'OFF';
+  btn.style.color=enabled?'var(--green)':'var(--mute)';
+  btn.style.borderColor=enabled?'var(--green)':'var(--border)';
+
+  // fills key badge
+  const badge=$('fills-key-badge');
+  if(a.fills_key_configured){
+    badge.textContent='fills key ✓'; badge.style.color='var(--green)'; badge.style.display='';
+  } else {
+    badge.textContent='no fills key'; badge.style.color='var(--mute)'; badge.style.display='';
+  }
+
   if(a.error){$('pos-grid').innerHTML=`<div class="acct-error">${a.error}</div>`;$('fill-grid').innerHTML='';return;}
   if(!a.positions||!a.positions.length){
     $('pos-grid').innerHTML='<div class="acct-empty">no open positions</div>';
@@ -2056,7 +2138,9 @@ function renderDebug(s, acct){
   if(acct){
     const err=acct.error?`<span class="neg">${acct.error}</span>`:'<span class="pos">OK</span>';
     const bal=acct.balance!=null?` · $${parseFloat(acct.balance).toFixed(2)}`:'';
-    $('dbg-acct').innerHTML=err+bal;
+    const fk=acct.fills_key_configured?'<span class="pos"> · fills key ✓</span>':'<span class="dim"> · no fills key</span>';
+    const fe=acct.fills_enabled===false?'<span class="neg"> fills OFF</span>':'';
+    $('dbg-acct').innerHTML=err+bal+fk+fe;
   }
   const t=_dailyThesis;
   $('dbg-thesis').innerHTML=t.bias
