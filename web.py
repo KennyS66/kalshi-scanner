@@ -236,8 +236,11 @@ def _kalshi_fills_creds():
 
 def _kalshi_get(kid: str, pk, path: str) -> dict:
     ts = str(int(time.time() * 1000))
+    # Kalshi signs the bare path only — query params must be stripped before
+    # signing (they still go out on the actual request URL below).
+    sign_path = path.split("?", 1)[0]
     sig = pk.sign(
-        f"{ts}GET{path}".encode(),
+        f"{ts}GET{sign_path}".encode(),
         _padding.PSS(mgf=_padding.MGF1(_hashes.SHA256()), salt_length=_padding.PSS.MAX_LENGTH),
         _hashes.SHA256(),
     )
@@ -322,11 +325,13 @@ def _account_poller_loop(interval: float = 20.0) -> None:
                 fls = _kalshi_get(f_kid, f_pk, "/trade-api/v2/portfolio/fills?limit=20")
                 fills = []
                 for f in fls.get("fills", []):
+                    side = f.get("side", "")
+                    price_key = "yes_price_dollars" if side == "yes" else "no_price_dollars"
                     fills.append({
                         "ticker": f.get("ticker", ""),
-                        "side":   f.get("side", ""),
-                        "qty":    f.get("count") or 0,
-                        "price":  round((f.get("yes_price") or 0) / 100, 4),
+                        "side":   side,
+                        "qty":    float(f.get("count_fp") or 0),
+                        "price":  round(float(f.get(price_key) or 0), 4),
                         "ts":     f.get("created_time", ""),
                         "action": f.get("action", "buy"),
                     })
