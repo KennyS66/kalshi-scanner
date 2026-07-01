@@ -10,3 +10,4 @@
 {"date": "2026-06-28", "bias": "WAIT", "spot": 60082.0, "conviction": 1, "level": "60000", "note": "BTC fell below 61500 key overnight \u2014 now at 60k support. Whale trend negative (-25). WAIT for structure at 60k before taking direction."}
 {"date": "2026-06-28", "bias": "UP", "spot": 59481.0, "conviction": 2, "level": "60000", "note": "UP conv 2 \u00b7 key $60,000 \u2014 spot below at 59.5k, watching for reclaim of 60k as launch pad"}
 {"date": "2026-06-29", "bias": "WAIT", "spot": 60267.0, "conviction": 1, "level": "60000", "note": "WAIT conv 1 \u00b7 BTC reclaimed $60k overnight, now testing above \u2014 need confirmed structure before directional bias"}
+{"date": "2026-07-01", "bias": "DOWN", "spot": 58500.0, "conviction": 2, "level": "60000", "note": "DOWN conv 2 \u00b7 $60k broke \u2014 now overhead resistance; spot at 58.5k, watching for any rally toward $60k as NO entry, confirmed break lower as trend continuation"}

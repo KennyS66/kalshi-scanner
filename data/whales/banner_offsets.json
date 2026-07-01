@@ -3,7 +3,7 @@
     "sell_low_offset_c": 8.0,
     "sell_high_offset_c": 8.0,
     "low_hit_rate": 0.4,
-    "high_hit_rate": 0.2,
+    "high_hit_rate": 0.3,
     "buy_touch_rate": 1.0,
     "n": 10
   },
@@ -11,7 +11,7 @@
     "sell_low_offset_c": 0.0,
     "sell_high_offset_c": 0.0,
     "low_hit_rate": 1.0,
-    "high_hit_rate": 0.8,
+    "high_hit_rate": 1.0,
     "buy_touch_rate": 1.0,
     "n": 10
   }
