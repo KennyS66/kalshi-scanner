@@ -33,7 +33,22 @@ def record(bias, spot, conviction, level, note, date):
         "note": note or "",
     }
     DATA.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a") as f:
+    # Upsert: replace any existing entry for the same date, then append the new one.
+    existing = []
+    if LOG.exists():
+        for line in LOG.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                if row.get("date") != date:
+                    existing.append(line)
+            except Exception:
+                existing.append(line)
+    with LOG.open("w") as f:
+        for line in existing:
+            f.write(line + "\n")
         f.write(json.dumps(rec) + "\n")
     print(f"Logged {date}: {bias} (conv {conviction}) @ spot ${float(spot):,.0f}"
           f"{' | ' + note if note else ''}")

@@ -2,6 +2,8 @@ venv/
 __pycache__/
 *.pyc
 .env
+gh_2.49.0_linux_amd64/
+logs/
 
 # Calibration runtime state — accumulated locally, not part of repo
 data/whales/picks_log.jsonl
