@@ -844,7 +844,7 @@ async def api_crypto_signal() -> JSONResponse:
 
 @app.get("/api/analyze")
 async def api_analyze() -> JSONResponse:
-    """Call Claude Opus 4.7 with adaptive thinking to analyze the current BTC 15m signal."""
+    """Call Claude Opus 4.8 with adaptive thinking to analyze the current BTC 15m signal."""
     import os
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -887,7 +887,7 @@ Be concise. Give a clear trade recommendation with reasoning."""
 
     try:
         response = client.messages.create(
-            model="claude-opus-4-7",
+            model="claude-opus-4-8",
             max_tokens=600,
             thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
@@ -2719,28 +2719,6 @@ function renderCWhales(rows) {
   el.innerHTML = btc15m.map(r=>toRow(r,false)).join('')
     + (btcd.length ? `<div class="dim" style="font-size:9px;padding:3px 10px;letter-spacing:.8px">── DAILY BTC CONTEXT ──</div>` + btcd.map(r=>toRow(r,true)).join('') : '');
 }
-function _renderCWhalesOld(rows) {
-  return rows.map(r => {
-    const ts = r.ts_ms ? new Date(r.ts_ms).toISOString().slice(11,19) : '?';
-    const side = r.side==='yes'?'<span class="yes">YES</span>':'<span class="no">NO</span>';
-    const parts = r.ticker.split('-');
-    const label = parts.slice(1).join('-') || r.ticker;
-    const big = r.notional >= 500;
-    const vs = r.vs_spot != null
-      ? `<span class="${r.vs_spot>=0?'pos':'neg'}">${r.vs_spot>=0?'+$':'−$'}${Math.abs(r.vs_spot).toLocaleString()}</span>`
-      : '<span class="dim">—</span>';
-    return `<div class="wh-row${big?' big':''}">
-      <span class="dim">${ts}</span>
-      <span class="ticker trunc" title="${r.ticker}">${label}</span>
-      ${side}
-      <span class="num dim">${fmtN(r.contracts)}</span>
-      <span class="num dim">${fmtP(r.price)}</span>
-      <span class="num" style="color:var(--yellow)">$${Math.round(r.notional)}</span>
-      ${vs}
-    </div>`;
-  }).join('');
-}
-
 // ── Buy/Sell Range History ───────────────────────────────────────────
 function renderBannerSuccess(rows, off, cur) {
   rows = rows || [];
@@ -3387,11 +3365,12 @@ function parseExpiry15m(ticker) {
   const m = ticker.match(/(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})-/);
   if (!m) return null;
   const months = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
-  // Ticker times are US Eastern — convert ET to UTC by building a local date string
   const etStr = `20${m[1]}-${String(months[m[2]]+1).padStart(2,'0')}-${m[3].padStart(2,'0')}T${m[4]}:${m[5]}:00`;
-  // Use Intl to get ET offset then adjust
-  const etDate = new Date(etStr + ' GMT-0400'); // EDT (May = summer, UTC-4)
-  return etDate;
+  // Determine whether EDT (-4) or EST (-5) is in effect at this date via Intl
+  const probe = new Date(etStr + '-04:00');
+  const tzAbbr = new Intl.DateTimeFormat('en-US', {timeZone:'America/New_York',timeZoneName:'short'})
+    .formatToParts(probe).find(p => p.type === 'timeZoneName')?.value ?? 'EDT';
+  return new Date(etStr + (tzAbbr === 'EDT' ? '-04:00' : '-05:00'));
 }
 
 function expiryStr(ticker, is15m) {

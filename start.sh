@@ -28,6 +28,19 @@ if [[ -f "$DAEDALUS_ENV" ]]; then
   set +a
 fi
 
+# Also source a local .env in this directory (ANTHROPIC_API_KEY, etc.) if present.
+if [[ -f ".env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source ".env"
+  set +a
+fi
+
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  echo "  ⚠️  ANTHROPIC_API_KEY not set — /api/analyze will return 503"
+  echo "     Add it to $DAEDALUS_ENV or $(pwd)/.env"
+fi
+
 API_KEY="${KALSHI_API_KEY:-${KALSHI_API_KEY_ID:-}}"
 KEY_FILE="${KALSHI_PRIVATE_KEY_PATH:-$HOME/.kalshi/private_key.pem}"
 
