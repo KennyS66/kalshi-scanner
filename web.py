@@ -201,9 +201,30 @@ def _calibration_loop(interval: int = 600) -> None:
 _KALSHI_HOST  = "https://api.elections.kalshi.com"
 _KALSHI_ENV   = Path.home() / ".kalshi" / "trading.env"
 _account_cache: dict = {"balance": None, "positions": [], "fills": [], "ts": 0, "error": None,
-                        "fills_enabled": True, "fills_key_configured": False}
+                        "fills_enabled": True, "fills_key_configured": False,
+                        "total_realized_pnl": 0.0, "total_unrealized_pnl": 0.0}
 _account_lock = threading.Lock()
 _fills_enabled = True
+
+_TRADE_LOG_FILE = _DATA_DIR / "trade_log.jsonl"
+_seen_fill_ids: set = set()
+
+
+def _load_seen_fill_ids() -> set:
+    ids = set()
+    if _TRADE_LOG_FILE.exists():
+        for line in _TRADE_LOG_FILE.read_text().splitlines():
+            with contextlib.suppress(Exception):
+                ids.add(json.loads(line)["fill_id"])
+    return ids
+
+
+def _append_trade_log(new_fills: list) -> None:
+    if not new_fills:
+        return
+    with open(_TRADE_LOG_FILE, "a") as f:
+        for rec in new_fills:
+            f.write(json.dumps(rec) + "\n")
 
 
 def _read_env() -> dict[str, str]:
@@ -261,6 +282,8 @@ def _account_poller_loop(interval: float = 20.0) -> None:
         with _account_lock:
             _account_cache["error"] = "no credentials (~/.kalshi/trading.env)"
         return
+
+    _seen_fill_ids.update(_load_seen_fill_ids())
     try:
         with open(kp, "rb") as f:
             pk = _serialization.load_pem_private_key(f.read(), password=None)
@@ -301,19 +324,38 @@ def _account_poller_loop(interval: float = 20.0) -> None:
             pos = _kalshi_get(kid, pk, "/trade-api/v2/portfolio/positions")
             positions = []
             for p in pos.get("market_positions", []):
-                qty = p.get("position") or 0
+                qty = float(p.get("position_fp") or 0)
                 if qty == 0:
                     continue
+                side = "yes" if qty > 0 else "no"
+                ticker = p.get("ticker", "")
+                exposure = round(float(p.get("market_exposure_dollars") or 0), 4)
+                last_price = None
+                unrealized_pnl = None
+                try:
+                    mkt = _requests.get(
+                        f"{_KALSHI_HOST}/trade-api/v2/markets/{ticker}", timeout=5
+                    ).json().get("market", {})
+                    yes_price = float(mkt.get("last_price_dollars") or 0)
+                    last_price = yes_price if side == "yes" else round(1 - yes_price, 4)
+                    market_value = abs(qty) * last_price
+                    unrealized_pnl = round(market_value - exposure, 4)
+                except Exception:
+                    pass
                 positions.append({
-                    "ticker":         p.get("ticker", ""),
-                    "qty":            qty,
-                    "exposure":       round((p.get("market_exposure") or 0) / 100, 2),
-                    "realized_pnl":   round((p.get("realized_pnl") or 0) / 100, 2),
-                    "unrealized_pnl": round((p.get("unrealized_pnl") or 0) / 100, 2)
-                                      if p.get("unrealized_pnl") is not None else None,
-                    "last_price":     round((p.get("last_price") or 0) / 100, 4),
+                    "ticker":         ticker,
+                    "side":           side,
+                    "qty":            abs(qty),
+                    "exposure":       exposure,
+                    "realized_pnl":   round(float(p.get("realized_pnl_dollars") or 0), 4),
+                    "unrealized_pnl": unrealized_pnl,
+                    "last_price":     last_price,
                 })
             update["positions"] = positions
+            update["total_realized_pnl"] = round(sum(p["realized_pnl"] for p in positions), 4)
+            update["total_unrealized_pnl"] = round(
+                sum(p["unrealized_pnl"] for p in positions if p["unrealized_pnl"] is not None), 4
+            )
         except Exception as e:
             errors.append(f"positions: {e}")
 
@@ -324,17 +366,25 @@ def _account_poller_loop(interval: float = 20.0) -> None:
             try:
                 fls = _kalshi_get(f_kid, f_pk, "/trade-api/v2/portfolio/fills?limit=20")
                 fills = []
+                new_journal_recs = []
                 for f in fls.get("fills", []):
                     side = f.get("side", "")
                     price_key = "yes_price_dollars" if side == "yes" else "no_price_dollars"
-                    fills.append({
+                    fill_id = f.get("fill_id", "")
+                    rec = {
+                        "fill_id": fill_id,
                         "ticker": f.get("ticker", ""),
                         "side":   side,
                         "qty":    float(f.get("count_fp") or 0),
                         "price":  round(float(f.get(price_key) or 0), 4),
                         "ts":     f.get("created_time", ""),
                         "action": f.get("action", "buy"),
-                    })
+                    }
+                    fills.append(rec)
+                    if fill_id and fill_id not in _seen_fill_ids:
+                        _seen_fill_ids.add(fill_id)
+                        new_journal_recs.append(rec)
+                _append_trade_log(new_journal_recs)
                 update["fills"] = fills[:20]
                 update.pop("fills_note", None)
             except Exception as e:
@@ -1329,6 +1379,7 @@ header {
 .acct-wrap { padding:12px 20px; border-bottom:1px solid var(--border); }
 .acct-head { display:flex; align-items:baseline; gap:14px; margin-bottom:8px; }
 .acct-balance { font-size:28px; font-weight:900; color:var(--fg); font-variant-numeric:tabular-nums; }
+.acct-pnl { font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; }
 .acct-age     { font-size:10px; color:var(--mute); }
 .acct-error   { color:var(--red); font-size:12px; }
 .acct-empty   { color:var(--mute); font-size:12px; padding:4px 0; }
@@ -1552,6 +1603,7 @@ header {
 <div class="acct-wrap">
   <div class="acct-head">
     <span class="acct-balance" id="acct-balance">$—</span>
+    <span class="acct-pnl" id="acct-pnl"></span>
     <span class="acct-age" id="acct-age">—</span>
   </div>
   <div class="acct-section-lbl">Open positions</div>
@@ -1994,6 +2046,14 @@ function renderAccount(a){
   if(!a)return;
   if(a.balance!=null) $('acct-balance').textContent='$'+parseFloat(a.balance).toFixed(2);
   if(a.ts){ const age=Math.round(Date.now()/1000-a.ts); $('acct-age').textContent=age<5?'live':age+'s ago'; }
+  const totalPnl=(a.total_realized_pnl||0)+(a.total_unrealized_pnl||0);
+  const pnlEl=$('acct-pnl');
+  if(a.positions&&a.positions.length){
+    pnlEl.textContent=(totalPnl>=0?'+':'-')+'$'+Math.abs(totalPnl).toFixed(2)+' pnl';
+    pnlEl.style.color=totalPnl>=0?'var(--green)':'var(--red)';
+  } else {
+    pnlEl.textContent='';
+  }
 
   // sync fills toggle button state
   const btn=$('fills-toggle-btn');
@@ -2015,7 +2075,7 @@ function renderAccount(a){
     $('pos-grid').innerHTML='<div class="acct-empty">no open positions</div>';
   } else {
     $('pos-grid').innerHTML=a.positions.map(p=>{
-      const isYes=p.qty>0, qty=Math.abs(p.qty), side=isYes?'YES':'NO', sCls=isYes?'yes':'no';
+      const isYes=p.side==='yes', qty=Math.abs(p.qty), side=isYes?'YES':'NO', sCls=isYes?'yes':'no';
       const pnl=(p.realized_pnl||0)+(p.unrealized_pnl!=null?p.unrealized_pnl:0);
       const pCls=pnl>=0?'pos':'neg', cCls=pnl>=0?'profit':'loss';
       const short=p.ticker.split('-').slice(-2).join('-');
