@@ -1127,6 +1127,28 @@ async def api_banner_current() -> JSONResponse:
         return JSONResponse(None)
 
 
+_INTRADAY_REGIME_FILE = _DATA_DIR / "intraday_regime.jsonl"
+
+
+def _latest_regime_today() -> dict | None:
+    """Most recent intraday regime entry for today (UTC), or None."""
+    try:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rows = _read_jsonl_cached(_INTRADAY_REGIME_FILE)
+        for row in reversed(rows):
+            if row.get("date") == today:
+                return row
+    except Exception:
+        pass
+    return None
+
+
+@app.get("/api/crypto/intraday_regime")
+async def api_intraday_regime() -> JSONResponse:
+    return JSONResponse(_latest_regime_today())
+
+
 @app.get("/api/crypto/daily_thesis")
 async def api_daily_thesis() -> JSONResponse:
     try:
@@ -1136,10 +1158,16 @@ async def api_daily_thesis() -> JSONResponse:
             if l.strip()
         ]
         if rows:
-            return JSONResponse(rows[-1])
+            out = dict(rows[-1])
+            # Attach the live intraday regime overlay so the dashboards'
+            # thesis bar reflects what the loop is actually watching, not
+            # just the frozen morning call.
+            out["regime"] = _latest_regime_today()
+            return JSONResponse(out)
     except Exception:
         pass
-    return JSONResponse({"bias": None, "level": None, "conviction": None, "date": None})
+    return JSONResponse({"bias": None, "level": None, "conviction": None, "date": None,
+                         "regime": _latest_regime_today()})
 
 
 @app.get("/api/crypto/banner_offsets")
@@ -1801,9 +1829,15 @@ function renderThesisBar(){
   }
   const rawNote=esc((t.note||'').replace(/;\s*key \$[\d,]+\.?/g,'').replace(/\.\s*$/,''));
   const noteHtml=rawNote?`<div class="thesis-bar-note" title="${rawNote}">${rawNote}</div>`:'';
+  let regHtml='';
+  const rg=t.regime;
+  if(rg&&rg.regime){
+    const rng=(rg.range_lo&&rg.range_hi)?` $${Math.round(rg.range_lo).toLocaleString()}–$${Math.round(rg.range_hi).toLocaleString()}`:'';
+    regHtml=`<span class="thesis-bar-meta" style="color:var(--blue)" title="${esc(rg.note||'')}">⟳ ${esc(rg.regime)}${rng} · ${esc(rg.session||'')}</span>`;
+  }
   bar.className=`thesis-bar ${cls}`;
   bar.style.display='';
-  bar.innerHTML=`<span style="font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:.8px">Thesis</span><span class="thesis-bar-bias ${cls}">${arrow} ${bias}</span><span class="thesis-bar-meta">${convStr}${keyStr}</span>${spotHtml}${noteHtml}`;
+  bar.innerHTML=`<span style="font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:.8px">Thesis</span><span class="thesis-bar-bias ${cls}">${arrow} ${bias}</span><span class="thesis-bar-meta">${convStr}${keyStr}</span>${regHtml}${spotHtml}${noteHtml}`;
 }
 
 // ── flush alert ──────────────────────────────────────────────────────────────
@@ -3049,9 +3083,15 @@ function renderThesisBar(btcSpot) {
   // Strip the redundant "key $X" suffix from note since it's already shown in meta
   const rawNote = esc((t.note || '').replace(/;\s*key \$[\d,]+\.?/g, '').replace(/\.\s*$/, ''));
   const noteHtml = rawNote ? `<div class="thesis-bar-note" title="${rawNote}">${rawNote}</div>` : '';
+  let regHtml = '';
+  const rg = t.regime;
+  if(rg && rg.regime) {
+    const rng = (rg.range_lo && rg.range_hi) ? ` $${Math.round(rg.range_lo).toLocaleString()}–$${Math.round(rg.range_hi).toLocaleString()}` : '';
+    regHtml = `<span class="thesis-bar-meta" style="color:var(--blue)" title="${esc(rg.note||'')}">⟳ ${esc(rg.regime)}${rng} · ${esc(rg.session||'')}</span>`;
+  }
   bar.className = `thesis-bar ${cls}`;
   bar.style.display = '';
-  bar.innerHTML = `<div class="thesis-bar-row1"><span class="thesis-bar-label">Thesis</span><span class="thesis-bar-bias ${cls}">${arrow} ${bias}</span><span class="thesis-bar-meta">${convStr}${keyStr}</span>${spotHtml}</div>${noteHtml}`;
+  bar.innerHTML = `<div class="thesis-bar-row1"><span class="thesis-bar-label">Thesis</span><span class="thesis-bar-bias ${cls}">${arrow} ${bias}</span><span class="thesis-bar-meta">${convStr}${keyStr}</span>${regHtml}${spotHtml}</div>${noteHtml}`;
 }
 
 function fmt$2(n) { return n==null?'—':'$'+Math.round(n).toLocaleString(); }
