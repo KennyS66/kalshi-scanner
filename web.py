@@ -277,13 +277,14 @@ def _kalshi_get(kid: str, pk, path: str) -> dict:
 
 def _account_poller_loop(interval: float = 20.0) -> None:
     global _fills_enabled
+    # Account/positions/fills always come from ~/.kalshi/trading.env — this is
+    # the user's real manual-trading account, deliberately separate from
+    # whatever key the scanner uses for market data (e.g. daedalus-mm's).
     kid, kp = _kalshi_creds()
     if not kid or not kp:
         with _account_lock:
             _account_cache["error"] = "no credentials (~/.kalshi/trading.env)"
         return
-
-    _seen_fill_ids.update(_load_seen_fill_ids())
     try:
         with open(kp, "rb") as f:
             pk = _serialization.load_pem_private_key(f.read(), password=None)
@@ -291,6 +292,8 @@ def _account_poller_loop(interval: float = 20.0) -> None:
         with _account_lock:
             _account_cache["error"] = f"key error: {e}"
         return
+
+    _seen_fill_ids.update(_load_seen_fill_ids())
 
     # Load fills-specific key (optional; falls back to main key if not configured)
     fills_kid, fills_kp = _kalshi_fills_creds()
@@ -364,7 +367,15 @@ def _account_poller_loop(interval: float = 20.0) -> None:
             f_kid = fills_kid if fills_key_ok else kid
             f_pk  = fills_pk  if fills_key_ok else pk
             try:
-                fls = _kalshi_get(f_kid, f_pk, "/trade-api/v2/portfolio/fills?limit=20")
+                try:
+                    fls = _kalshi_get(f_kid, f_pk, "/trade-api/v2/portfolio/fills?limit=20")
+                except Exception as e:
+                    # Fills-specific key lacks permission — retry with the main
+                    # (working) key rather than leaving fills permanently empty.
+                    if "401" in str(e) and f_kid is not kid:
+                        fls = _kalshi_get(kid, pk, "/trade-api/v2/portfolio/fills?limit=20")
+                    else:
+                        raise
                 fills = []
                 new_journal_recs = []
                 for f in fls.get("fills", []):
@@ -623,7 +634,11 @@ async def api_crypto_signal() -> JSONResponse:
                                 }, "ts": time.time()}
                                 # Also kick the next-market cache refresh so it
                                 # advances past this ticker on the next poll.
-                                _refresh_next_market_cache()
+                                # Blocking urlopen (up to 6s) — must run off the event loop,
+                                # same as the market fetch above.
+                                await asyncio.get_running_loop().run_in_executor(
+                                    None, _refresh_next_market_cache
+                                )
                         except Exception:
                             pass
                     asyncio.create_task(_bg_fetch_between())
@@ -934,7 +949,11 @@ async def api_crypto_signals() -> JSONResponse:
     if _alpha_engine is None:
         return JSONResponse({"rows": []})
     with contextlib.suppress(Exception):
-        sigs = _alpha_engine.get_top_signals(80)
+        # scan() runs 8 detectors synchronously over all market snapshots (~140ms) —
+        # offload it so it doesn't block the single event loop for every poller.
+        sigs = await asyncio.get_running_loop().run_in_executor(
+            None, _alpha_engine.get_top_signals, 80
+        )
         rows = []
         for s in sigs:
             is_15m_btc = "KXBTC15M" in s.ticker.upper()
@@ -1347,8 +1366,13 @@ header {
 .hc-out.bad { color:var(--red); }
 .hc-time  { color:var(--mute); font-size:10px; }
 
+/* ── 3-col row: limit targets / account / BRS ── */
+.trade-3col { display:grid; grid-template-columns:1.1fr 1fr 1fr; border-bottom:1px solid var(--border); align-items:start; }
+.trade-3col > div { border-right:1px solid var(--border); min-width:0; }
+.trade-3col > div:last-child { border-right:none; }
+
 /* ── limit order panel ── */
-.limit-wrap { padding:12px 20px 0; }
+.limit-wrap { padding:12px 16px; max-height:480px; overflow-y:auto; }
 .limit-card { border:1px solid var(--border); border-radius:10px; background:var(--bg2); overflow:hidden; }
 .limit-hdr  { padding:7px 14px; background:var(--bg3); border-bottom:1px solid var(--border);
               font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--mute);
@@ -1373,10 +1397,8 @@ header {
 .limit-row.best    .limit-price { color:var(--green); }
 .limit-note { font-size:10px; color:var(--mute); padding-top:8px; line-height:1.5; }
 
-/* ── BRS full-width panel ── */
-
 /* ── account panel ── */
-.acct-wrap { padding:12px 20px; border-bottom:1px solid var(--border); }
+.acct-wrap { padding:12px 16px; max-height:480px; overflow-y:auto; }
 .acct-head { display:flex; align-items:baseline; gap:14px; margin-bottom:8px; }
 .acct-balance { font-size:28px; font-weight:900; color:var(--fg); font-variant-numeric:tabular-nums; }
 .acct-pnl { font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; }
@@ -1407,16 +1429,6 @@ header {
              display:flex; justify-content:space-between; position:sticky; top:0; z-index:1; font-weight:700; }
 .panel-body { padding:0; overflow-y:auto; max-height:480px; }
 
-/* ── whale flow ── */
-.wh-row { display:grid; grid-template-columns:52px 1fr 36px 50px 56px 68px 72px;
-          gap:4px; padding:5px 10px; border-bottom:1px solid #1c2128; align-items:center; font-size:12px; }
-.wh-row:last-child { border-bottom:none; }
-.wh-row:hover { background:#1c2128; }
-.wh-row.big { border-left:2px solid var(--yellow); background:#1a1600; }
-.flow-bar-wrap { width:60px; height:6px; background:#1c2128; border-radius:3px; display:inline-block; vertical-align:middle; }
-.flow-bar  { height:6px; border-radius:3px; }
-.flow-yes  { background:var(--green); }
-.flow-no   { background:var(--red); }
 
 /* ── BRS history ── */
 .brs-stat-row { display:flex; gap:32px; padding:14px 18px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
@@ -1479,17 +1491,6 @@ header {
 .log-type.NOTE       { background:var(--bg3); color:var(--mute); border:1px solid var(--border); }
 .log-spot { color:var(--orange); font-variant-numeric:tabular-nums; flex-shrink:0; }
 .log-msg  { color:var(--fg); line-height:1.4; }
-
-/* ── debug monitor ── */
-.debug-panel { border-top:1px solid var(--border); }
-.debug-hdr { padding:7px 20px; background:var(--bg2); border-bottom:1px solid var(--border);
-             font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--mute);
-             display:flex; justify-content:space-between; }
-.debug-body { display:grid; grid-template-columns:1fr 1fr; padding:4px 0; }
-.dbg-row { display:flex; gap:10px; align-items:center; padding:4px 20px; font-size:12px;
-           border-bottom:1px solid #1c2128; }
-.dbg-row:nth-child(even) { border-left:1px solid var(--border); }
-.dbg-k { color:var(--mute); font-size:11px; min-width:130px; flex-shrink:0; }
 
 /* ── shared ── */
 .yes { color:var(--green); font-weight:700; }
@@ -1577,73 +1578,51 @@ header {
   <div class="dim" style="font-size:11px;padding:4px">loading…</div>
 </div>
 
-<!-- ── limit order targets ── -->
-<div class="limit-wrap">
-  <div class="limit-card">
-    <div class="limit-hdr">
-      <span>LIMIT ORDER TARGETS</span>
-      <span id="limit-spread-note" style="color:var(--mute)"></span>
-    </div>
-    <div class="limit-grid">
-      <div class="limit-col" id="limit-yes-col">
-        <div class="limit-col-title yes">BUY YES</div>
-        <div id="limit-yes-rows"><div class="dim" style="font-size:11px">—</div></div>
-        <div class="limit-note" id="limit-yes-note"></div>
+<!-- ── limit targets / account / BRS, side by side ── -->
+<div class="trade-3col">
+  <div class="limit-wrap">
+    <div class="limit-card">
+      <div class="limit-hdr">
+        <span>LIMIT ORDER TARGETS</span>
+        <span id="limit-spread-note" style="color:var(--mute)"></span>
       </div>
-      <div class="limit-col" id="limit-no-col">
-        <div class="limit-col-title no">BUY NO</div>
-        <div id="limit-no-rows"><div class="dim" style="font-size:11px">—</div></div>
-        <div class="limit-note" id="limit-no-note"></div>
+      <div class="limit-grid">
+        <div class="limit-col" id="limit-yes-col">
+          <div class="limit-col-title yes">BUY YES</div>
+          <div id="limit-yes-rows"><div class="dim" style="font-size:11px">—</div></div>
+          <div class="limit-note" id="limit-yes-note"></div>
+        </div>
+        <div class="limit-col" id="limit-no-col">
+          <div class="limit-col-title no">BUY NO</div>
+          <div id="limit-no-rows"><div class="dim" style="font-size:11px">—</div></div>
+          <div class="limit-note" id="limit-no-note"></div>
+        </div>
       </div>
     </div>
   </div>
-</div>
 
-<!-- ── account ── -->
-<div class="acct-wrap">
-  <div class="acct-head">
-    <span class="acct-balance" id="acct-balance">$—</span>
-    <span class="acct-pnl" id="acct-pnl"></span>
-    <span class="acct-age" id="acct-age">—</span>
+  <div class="acct-wrap">
+    <div class="acct-head">
+      <span class="acct-balance" id="acct-balance">$—</span>
+      <span class="acct-pnl" id="acct-pnl"></span>
+      <span class="acct-age" id="acct-age">—</span>
+    </div>
+    <div class="acct-section-lbl">Open positions</div>
+    <div id="pos-grid"><div class="acct-empty">loading…</div></div>
+    <div class="acct-section-lbl" style="display:flex;align-items:center;gap:10px;margin-top:10px">
+      Recent fills
+      <span id="fills-key-badge" style="font-size:10px;display:none"></span>
+      <button id="fills-toggle-btn" onclick="toggleFills()" style="font-size:10px;padding:2px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--mute);cursor:pointer;font-family:inherit">ON</button>
+    </div>
+    <div id="fill-grid"><div class="acct-empty">loading…</div></div>
   </div>
-  <div class="acct-section-lbl">Open positions</div>
-  <div id="pos-grid"><div class="acct-empty">loading…</div></div>
-  <div class="acct-section-lbl" style="display:flex;align-items:center;gap:10px;margin-top:10px">
-    Recent fills
-    <span id="fills-key-badge" style="font-size:10px;display:none"></span>
-    <button id="fills-toggle-btn" onclick="toggleFills()" style="font-size:10px;padding:2px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--mute);cursor:pointer;font-family:inherit">ON</button>
-  </div>
-  <div id="fill-grid"><div class="acct-empty">loading…</div></div>
-</div>
 
-<!-- ── BRS full width ── -->
-<div style="border-top:1px solid var(--border)">
-  <div class="panel-hdr">
-    <span>Buy / Sell Range History</span>
-    <span id="brs-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
-  </div>
-  <div class="panel-body" id="brs-body"><div class="empty">no settled markets yet</div></div>
-</div>
-
-<!-- ── debug monitor ── -->
-<div class="debug-panel">
-  <div class="debug-hdr">
-    <span>Debug Monitor</span>
-    <span id="dbg-age" class="dim">—</span>
-  </div>
-  <div class="debug-body" id="dbg-body">
-    <div class="dbg-row"><span class="dbg-k">Scanner</span><span id="dbg-scanner">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Signal status</span><span id="dbg-signal-status">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Active ticker</span><span id="dbg-ticker">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Spot source</span><span id="dbg-spot-src">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">yes_ask / no_ask</span><span id="dbg-asks">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Whale data</span><span id="dbg-whale">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Flush</span><span id="dbg-flush">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Momentum</span><span id="dbg-momo">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">sig_combined</span><span id="dbg-combined">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Last signal poll</span><span id="dbg-poll-ts">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Account</span><span id="dbg-acct">—</span></div>
-    <div class="dbg-row"><span class="dbg-k">Thesis</span><span id="dbg-thesis">—</span></div>
+  <div>
+    <div class="panel-hdr">
+      <span>Buy / Sell Range History</span>
+      <span id="brs-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
+    </div>
+    <div class="panel-body" id="brs-body"><div class="empty">no settled markets yet</div></div>
   </div>
 </div>
 
@@ -1891,31 +1870,6 @@ function renderSignalBanner(s, isT1=false){
   if(isT1){badge.textContent='T+1 UPDATE';badge.className='sig-reset-badge t1';badge.style.display='';setTimeout(()=>{badge.style.display='none';},8000);}
 
   renderFlush(s); renderGuidance(s); renderLimits(s);
-}
-
-// ── whale flow ───────────────────────────────────────────────────────────────
-function renderCWhales(rows){
-  const el=$('cwhales'), meta=$('whale-meta');
-  if(!rows||!rows.length){el.innerHTML='<div class="empty">no whale activity</div>';meta.textContent='—';return;}
-  const btc15m=rows.filter(r=>r.ticker.includes('KXBTC15M'));
-  const btcd  =rows.filter(r=>r.ticker.includes('KXBTCD')&&!r.ticker.includes('15M'));
-  meta.textContent=btc15m.length+(btcd.length?` · +${btcd.length} daily ctx`:'');
-  const toRow=(r,ctx)=>{
-    const ts=r.ts_ms?new Date(r.ts_ms).toISOString().slice(11,19):'?';
-    const side=r.side==='yes'?'<span class="yes">YES</span>':'<span class="no">NO</span>';
-    const label=r.ticker.split('-').slice(-2).join('-')||r.ticker;
-    const big=r.notional>=200;
-    const vs=r.vs_spot!=null
-      ?`<span class="${r.vs_spot>=0?'pos':'neg'}">${r.vs_spot>=0?'+$':'−$'}${Math.abs(r.vs_spot).toLocaleString()}</span>`
-      :'<span class="dim">—</span>';
-    return `<div class="wh-row${big?' big':''}" style="${ctx?'opacity:.5':''}" title="${r.ticker}">
-      <span class="dim">${ts}</span><span class="ticker trunc">${label}</span>${side}
-      <span class="num dim">${fmtN(r.contracts)}</span>
-      <span class="num dim">${fmtC(r.price)}</span>
-      <span class="num" style="color:var(--yellow)">$${Math.round(r.notional)}</span>${vs}</div>`;
-  };
-  el.innerHTML=btc15m.map(r=>toRow(r,false)).join('')
-    +(btcd.length?`<div class="dim" style="font-size:9px;padding:3px 10px;letter-spacing:.8px">── DAILY BTC CONTEXT ──</div>`+btcd.map(r=>toRow(r,true)).join(''):'');
 }
 
 // ── BRS history ──────────────────────────────────────────────────────────────
@@ -2167,10 +2121,9 @@ async function pollSignal(){
       $('sig-ticker').textContent=''; $('sig-badge').style.display='none'; $('sig-trade-type').style.display='none';
       $('sig-conf-pct').textContent='—'; $('conf-bar').style.width='0%';
       renderFlush(null); renderGuidance(null);
-    renderDebug(s, null);
       return;
     }
-    if(s.status!=='ok'){renderDebug(s,null);return;}
+    if(s.status!=='ok'){return;}
 
     const isNew=_lastTicker!==null&&s.ticker!==_lastTicker;
     if(isNew){
@@ -2181,53 +2134,14 @@ async function pollSignal(){
     }
     _lastTicker=s.ticker;
     renderSignalBanner(s,false);
-    renderDebug(s, null);
   }catch(e){console.error('pollSignal',e);}
-}
-
-// ── debug monitor ────────────────────────────────────────────────────────────
-function renderDebug(s, acct){
-  const now=new Date().toISOString().slice(11,19);
-  $('dbg-age').textContent='updated '+now+' UTC';
-  if(!s){ $('dbg-scanner').innerHTML='<span class="neg">no response</span>'; return; }
-  const ok=s.status==='ok';
-  $('dbg-scanner').innerHTML=ok?'<span class="pos">OK</span>':'<span class="neg">'+s.status+'</span>';
-  $('dbg-signal-status').textContent=s.status+(s.status==='between_markets'&&s.mins_to_open!=null?' ('+s.mins_to_open.toFixed(1)+'m to open)':'');
-  $('dbg-ticker').textContent=s.ticker||s.next_ticker||'—';
-  $('dbg-spot-src').textContent=s.spot!=null?'$'+Math.round(s.spot).toLocaleString()+' (signal)':'—';
-  $('dbg-asks').innerHTML=s.yes_ask!=null
-    ?`<span class="pos">YES ${(s.yes_ask*100).toFixed(1)}¢</span> / <span class="neg">NO ${(s.no_ask*100).toFixed(1)}¢</span>`
-    :'<span class="dim">none (between markets)</span>';
-  $('dbg-whale').innerHTML=s.has_whale_data?'<span class="pos">live whale data</span>':'<span class="dim">retail only</span>';
-  $('dbg-flush').innerHTML=s.is_flush
-    ?`<span class="neg" style="color:var(--yellow)">YES — score ${s.flush_score} / buy_pressure ${s.buy_pressure!=null?Math.round(s.buy_pressure):'-'}</span>`
-    :'<span class="dim">no</span>';
-  $('dbg-momo').innerHTML=s.momentum!=null
-    ?`<span class="${s.momentum>=0?'pos':'neg'}">${s.momentum>=0?'+':''}${s.momentum.toFixed(0)} $/min</span>`
-    :'<span class="dim">—</span>';
-  $('dbg-combined').innerHTML=s.sig_combined!=null
-    ?`<span class="${s.sig_combined>8?'pos':s.sig_combined<-8?'neg':'dim'}">${s.sig_combined>0?'+':''}${s.sig_combined}</span>`
-    :'<span class="dim">—</span>';
-  $('dbg-poll-ts').textContent=now+' UTC';
-  if(acct){
-    const err=acct.error?`<span class="neg">${acct.error}</span>`:'<span class="pos">OK</span>';
-    const bal=acct.balance!=null?` · $${parseFloat(acct.balance).toFixed(2)}`:'';
-    const fk=acct.fills_key_configured?'<span class="pos"> · fills key ✓</span>':'<span class="dim"> · no fills key</span>';
-    const fe=acct.fills_enabled===false?'<span class="neg"> fills OFF</span>':'';
-    $('dbg-acct').innerHTML=err+bal+fk+fe;
-  }
-  const t=_dailyThesis;
-  $('dbg-thesis').innerHTML=t.bias
-    ?`<span class="${t.bias==='UP'?'pos':t.bias==='DOWN'?'neg':'dim'}">${t.bias}</span> conv ${t.conviction||'?'} key ${t.level?'$'+Number(t.level).toLocaleString():'?'}`
-    :'<span class="dim">none loaded</span>';
 }
 
 // ── slow refresh (whales, history, BRS, account, log) ────────────────────────
 async function pollSlow(){
   try{
-    const [spotR, whalesR, histR, brsR, brsOff, brsCur, acctR, logR]=await Promise.all([
+    const [spotR, histR, brsR, brsOff, brsCur, acctR, logR]=await Promise.all([
       fetch('/api/crypto/spot').then(r=>r.json()).catch(()=>({})),
-      fetch('/api/crypto/whales').then(r=>r.json()).catch(()=>({rows:[]})),
       fetch('/api/crypto/history').then(r=>r.json()).catch(()=>({rows:[]})),
       fetch('/api/crypto/banner_history?limit=60').then(r=>r.json()).catch(()=>({rows:[],stats:{}})),
       fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
@@ -2239,10 +2153,9 @@ async function pollSlow(){
     if(spotR.eth)$('spot-eth').textContent='ETH '+fmt$(spotR.eth,0);
     if(brsOff&&brsOff.yes&&brsOff.no)_bannerOffsets=brsOff;
     renderThesisBar();
-    renderCWhales(whalesR.rows);
     renderHistory(histR.rows);
     renderBRS(brsR.rows, brsOff, brsCur, brsR.stats);
-    if(acctR){renderAccount(acctR);renderDebug(_lastSignal,acctR);}
+    if(acctR){renderAccount(acctR);}
     if(logR.entries)renderLog(logR.entries);
   }catch(e){console.error('pollSlow',e);}
 }
