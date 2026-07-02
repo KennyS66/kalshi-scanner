@@ -28,9 +28,15 @@ _alpha_engine = None
 _btc_spot_history: collections.deque = collections.deque(maxlen=40)
 _eth_spot_latest: float | None = None   # single latest ETH price
 _btc_spot_lock = threading.Lock()
+# Spot poller health — lets /api/crypto/spot report staleness instead of
+# serving a frozen last-known price with no warning (the collector is flaky).
+_spot_last_ok_ts: float = 0.0
+_spot_consec_errors: int = 0
+_SPOT_ERR_LOG_THRESHOLD = 3
 # Kalshi floor_strike per ticker — fetched once per market
 _market_floor_strike: dict[str, float] = {}
 _market_floor_strike_inflight: set = set()  # prevent concurrent duplicate fetches
+_floor_strike_absent: set = set()  # tickers Kalshi reports with null floor_strike — don't refetch
 # Whale flow history per ticker — (ts, yes_pct) pairs
 _whale_flow_history: dict[str, collections.deque] = {}
 # Signal decision log — last 20 market calls with outcomes
@@ -110,14 +116,20 @@ def _floor_strike_poller_loop() -> None:
     import urllib.request as ur
     while True:
         time.sleep(10)
-        with contextlib.suppress(Exception):
-            if _scanner is None:
-                continue
-            for ticker in list(_scanner.market_snapshots.keys()):
-                if "KXBTC15M" not in ticker.upper():
-                    continue
-                if _market_floor_strike.get(ticker) is not None:
-                    continue
+        if _scanner is None:
+            continue
+        try:
+            live = [t for t in list(_scanner.market_snapshots.keys())
+                    if "KXBTC15M" in t.upper()]
+        except Exception:
+            continue
+        pending = [t for t in live
+                   if _market_floor_strike.get(t) is None
+                   and t not in _floor_strike_absent
+                   and t not in _market_floor_strike_inflight]
+        for ticker in pending:
+            # suppress per ticker: one failed fetch must not skip the rest
+            with contextlib.suppress(Exception):
                 req = ur.Request(
                     f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}",
                     headers={"User-Agent": "kalshi-scanner/1.0"},
@@ -127,16 +139,26 @@ def _floor_strike_poller_loop() -> None:
                     fs = mkt.get("floor_strike")
                     if fs is not None:
                         _market_floor_strike[ticker] = float(fs)
-                        _market_floor_strike_inflight.discard(ticker)
+                    else:
+                        _floor_strike_absent.add(ticker)
+                    _market_floor_strike_inflight.discard(ticker)
+        # Prune per-ticker state for expired markets (a new 15m ticker every
+        # 15 min otherwise grows these until restart).
+        if len(_market_floor_strike) > 200:
+            keep = set(live)
+            for d in (_market_floor_strike, _whale_flow_history, _feature_log_last_ts):
+                for k in [k for k in d if k not in keep]:
+                    d.pop(k, None)
+            _floor_strike_absent.intersection_update(keep)
 
 
 def _btc_spot_poller_loop(interval: float = 5.0) -> None:
     """Background thread: poll BTC+ETH spot from Coinbase every 5s. Caches results so
     the /api/crypto/spot route never needs to make its own outbound HTTP calls."""
-    global _eth_spot_latest
+    global _eth_spot_latest, _spot_last_ok_ts, _spot_consec_errors
     import urllib.request as ur
     while True:
-        with contextlib.suppress(Exception):
+        try:
             req = ur.Request("https://api.exchange.coinbase.com/products/BTC-USD/ticker",
                              headers={"User-Agent": "kalshi-scanner/1.0"})
             with ur.urlopen(req, timeout=4) as r:
@@ -144,6 +166,15 @@ def _btc_spot_poller_loop(interval: float = 5.0) -> None:
                 price = float(data["price"])
                 with _btc_spot_lock:
                     _btc_spot_history.append((time.time(), price))
+            if _spot_consec_errors >= _SPOT_ERR_LOG_THRESHOLD:
+                print(f"[spot-poller] recovered after {_spot_consec_errors} consecutive failures", flush=True)
+            _spot_consec_errors = 0
+            _spot_last_ok_ts = time.time()
+        except Exception as e:
+            _spot_consec_errors += 1
+            if _spot_consec_errors == _SPOT_ERR_LOG_THRESHOLD:
+                print(f"[spot-poller] BTC spot failing ({type(e).__name__}: {e}); "
+                      f"last success {time.time() - _spot_last_ok_ts:.0f}s ago", flush=True)
         with contextlib.suppress(Exception):
             req = ur.Request("https://api.exchange.coinbase.com/products/ETH-USD/ticker",
                              headers={"User-Agent": "kalshi-scanner/1.0"})
@@ -280,18 +311,26 @@ def _account_poller_loop(interval: float = 20.0) -> None:
     # Account/positions/fills always come from ~/.kalshi/trading.env — this is
     # the user's real manual-trading account, deliberately separate from
     # whatever key the scanner uses for market data (e.g. daedalus-mm's).
-    kid, kp = _kalshi_creds()
-    if not kid or not kp:
-        with _account_lock:
-            _account_cache["error"] = "no credentials (~/.kalshi/trading.env)"
-        return
-    try:
-        with open(kp, "rb") as f:
-            pk = _serialization.load_pem_private_key(f.read(), password=None)
-    except Exception as e:
-        with _account_lock:
-            _account_cache["error"] = f"key error: {e}"
-        return
+    # Retry credential/key loading forever instead of exiting: the thread is
+    # started once at boot, and this box powers on with ~/.kalshi sometimes
+    # briefly unavailable — a permanent bail here means /api/account serves an
+    # error until the whole scanner is restarted.
+    while True:
+        kid, kp = _kalshi_creds()
+        if not kid or not kp:
+            with _account_lock:
+                _account_cache["error"] = "no credentials (~/.kalshi/trading.env)"
+            time.sleep(60)
+            continue
+        try:
+            with open(kp, "rb") as f:
+                pk = _serialization.load_pem_private_key(f.read(), password=None)
+        except Exception as e:
+            with _account_lock:
+                _account_cache["error"] = f"key error: {e}"
+            time.sleep(60)
+            continue
+        break
 
     _seen_fill_ids.update(_load_seen_fill_ids())
 
@@ -339,10 +378,14 @@ def _account_poller_loop(interval: float = 20.0) -> None:
                     mkt = _requests.get(
                         f"{_KALSHI_HOST}/trade-api/v2/markets/{ticker}", timeout=5
                     ).json().get("market", {})
-                    yes_price = float(mkt.get("last_price_dollars") or 0)
-                    last_price = yes_price if side == "yes" else round(1 - yes_price, 4)
-                    market_value = abs(qty) * last_price
-                    unrealized_pnl = round(market_value - exposure, 4)
+                    lp = mkt.get("last_price_dollars")
+                    # No recent trade → leave PnL unmarked; marking against 0
+                    # shows a fake 100% loss (and values the NO side at $1.00).
+                    if lp:
+                        yes_price = float(lp)
+                        last_price = yes_price if side == "yes" else round(1 - yes_price, 4)
+                        market_value = abs(qty) * last_price
+                        unrealized_pnl = round(market_value - exposure, 4)
                 except Exception:
                     pass
                 positions.append({
@@ -478,7 +521,10 @@ async def api_crypto_spot() -> JSONResponse:
     hist = list(_btc_spot_history)
     btc = hist[-1][1] if hist else None
     eth = _eth_spot_latest
-    return JSONResponse({"btc": btc, "eth": eth})
+    ts = hist[-1][0] if hist else None
+    age = round(time.time() - ts, 1) if ts else None
+    return JSONResponse({"btc": btc, "eth": eth, "ts": ts, "age_s": age,
+                         "stale": bool(age is None or age > 15)})
 
 
 @app.get("/api/crypto/strikes")
@@ -903,11 +949,16 @@ async def api_crypto_signal() -> JSONResponse:
         "sig_combined": round(combined * 100),
         "mins_left": mins_left,
         "ts": time.time(),
+        # Age of the spot price feeding this payload — "ts" above is when the
+        # payload was built, which makes a frozen spot look fresh otherwise.
+        "spot_age_s": round(time.time() - _spot_last_ok_ts, 1) if _spot_last_ok_ts else None,
     }
 
     # Persist the full feature snapshot so the real entry signals become
     # backtestable later (joined against settled outcomes per ticker).
-    _log_signal_features(payload)
+    # Off the event loop: the append hits a multi-MB jsonl and a slow disk
+    # would stall every route.
+    asyncio.get_running_loop().run_in_executor(None, _log_signal_features, payload)
 
     return JSONResponse(payload)
 
@@ -1039,14 +1090,19 @@ def _refresh_next_market_cache() -> None:
         for m in mkts:
             close_ts = datetime.fromisoformat(m["close_time"].replace("Z", "+00:00")).timestamp()
             open_ts = close_ts - 900  # 15 min before close
-            # Use the market currently open, or the next one to open
+            # Use the market currently open, or the next one to open.
+            # Rebind atomically rather than .update() in place: this runs from
+            # two threads while the event loop reads several keys — an in-place
+            # update can expose the new ticker with the old open/close times
+            # right at the market-roll boundary.
             if time.time() < close_ts:
-                _next_market_cache.update({
+                global _next_market_cache
+                _next_market_cache = {
                     "ticker": m["ticker"],
                     "open_ts": open_ts,
                     "close_ts": close_ts,
                     "ts": time.time(),
-                })
+                }
                 return
     except Exception:
         pass
@@ -1100,11 +1156,31 @@ async def api_banner_offsets() -> JSONResponse:
         })
 
 
+# Parsed-jsonl cache keyed on (mtime, size): banner_targets.jsonl is >1MB and
+# the dashboards poll it every few seconds — re-parsing it per request inside
+# an async handler stalls the event loop (this stalled /spot in the past).
+_jsonl_cache: dict[str, tuple[tuple[float, int], list]] = {}
+_jsonl_cache_lock = threading.Lock()
+
+
+def _read_jsonl_cached(path: Path) -> list:
+    st = path.stat()
+    key = (st.st_mtime, st.st_size)
+    with _jsonl_cache_lock:
+        hit = _jsonl_cache.get(str(path))
+        if hit and hit[0] == key:
+            return hit[1]
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    with _jsonl_cache_lock:
+        _jsonl_cache[str(path)] = (key, rows)
+    return rows
+
+
 @app.get("/api/crypto/banner_history")
 async def api_banner_history(limit: int = 20) -> JSONResponse:
     try:
-        lines = _BANNER_TARGETS_FILE.read_text().splitlines()
-        all_rows = [json.loads(l) for l in lines if l.strip()]
+        loop = asyncio.get_running_loop()
+        all_rows = await loop.run_in_executor(None, _read_jsonl_cached, _BANNER_TARGETS_FILE)
         # aggregate stats over the full history
         entered   = [r for r in all_rows if r.get("buy_touched")]
         wins      = [r for r in entered  if r.get("low_hit")]
@@ -1117,7 +1193,7 @@ async def api_banner_history(limit: int = 20) -> JSONResponse:
             "win_pct":  round(len(wins) / len(entered) * 100, 1) if entered else 0,
             "str_pct":  round(len(stretches) / len(entered) * 100, 1) if entered else 0,
         }
-        recent = all_rows[-limit:]
+        recent = list(all_rows[-limit:])
         recent.reverse()  # newest first
         return JSONResponse({"rows": recent, "stats": stats})
     except Exception:
@@ -1127,12 +1203,21 @@ async def api_banner_history(limit: int = 20) -> JSONResponse:
 @app.get("/api/loop_log")
 async def api_loop_log_get(limit: int = 200) -> JSONResponse:
     try:
-        lines = _LOOP_LOG_FILE.read_text().splitlines()
-        rows = [json.loads(l) for l in lines if l.strip()][-limit:]
+        loop = asyncio.get_running_loop()
+        all_rows = await loop.run_in_executor(None, _read_jsonl_cached, _LOOP_LOG_FILE)
+        rows = list(all_rows[-limit:])
         rows.reverse()
-        return JSONResponse({"entries": rows})  # frontend expects "entries"
+        # Both keys: /trade reads .entries, /crypto reads .rows.
+        return JSONResponse({"entries": rows, "rows": rows})
     except Exception:
-        return JSONResponse({"entries": []})
+        return JSONResponse({"entries": [], "rows": []})
+
+
+def _append_loop_log(entry: dict) -> None:
+    with _loop_log_lock:
+        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with _LOOP_LOG_FILE.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
 
 
 @app.post("/api/loop_log")
@@ -1145,10 +1230,7 @@ async def api_loop_log_post(request: Request) -> JSONResponse:
             "spot": body.get("spot"),
             "msg": str(body.get("msg", "")),
         }
-        with _loop_log_lock:
-            _DATA_DIR.mkdir(parents=True, exist_ok=True)
-            with _LOOP_LOG_FILE.open("a") as f:
-                f.write(json.dumps(entry) + "\n")
+        await asyncio.get_running_loop().run_in_executor(None, _append_loop_log, entry)
         return JSONResponse({"ok": True})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
@@ -1265,6 +1347,7 @@ header {
 .signal-banner.flash { animation:flashpulse .5s ease-out; }
 .signal-banner.thesis-mute    { opacity:.5; filter:grayscale(50%); }
 .signal-banner.thesis-counter { outline:2px dashed var(--red); outline-offset:-2px; }
+.signal-banner.stale-data     { opacity:.45; filter:grayscale(80%); }
 @keyframes flashpulse { 0%{opacity:.1} 40%{opacity:1} 100%{opacity:1} }
 
 .sig-dir-block {
@@ -1658,11 +1741,19 @@ let _audioCtx    = null;
 let _t1Timer     = null;
 let _lastAlertTicker = null;
 let myPos        = null;
+let _lastDir     = null;
+let _lastGoodSignalTs = 0;
 
 // ── utils ────────────────────────────────────────────────────────────────────
 function fmt$(n,d=0){ return n==null?'—':'$'+n.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d}); }
 function fmtC(n)    { return n==null?'—':(n*100).toFixed(1)+'¢'; }
 function fmtN(n)    { if(n==null)return'—'; if(n>=1000)return(n/1000).toFixed(1)+'K'; return Math.round(n).toString(); }
+function esc(s)     { return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// Guarded fetch: timeout + fallback so one dead endpoint can't hang a poll.
+const fj=(u,fb)=>fetch(u,{signal:AbortSignal.timeout(4000)}).then(r=>r.json()).catch(()=>fb);
+// Pause polling in hidden tabs — but only after the first load, so a page
+// opened in a background tab still populates.
+let _firstLoadDone=false;
 function sigComp(label,val){
   if(val==null)return'';
   const cls=val>8?'bull':val<-8?'bear':'neut';
@@ -1708,7 +1799,7 @@ function renderThesisBar(){
   } else if(_btcSpot){
     spotHtml=`<span class="thesis-bar-spot">${fmt$(_btcSpot,0)}</span>`;
   }
-  const rawNote=(t.note||'').replace(/;\s*key \$[\d,]+\.?/g,'').replace(/\.\s*$/,'');
+  const rawNote=esc((t.note||'').replace(/;\s*key \$[\d,]+\.?/g,'').replace(/\.\s*$/,''));
   const noteHtml=rawNote?`<div class="thesis-bar-note" title="${rawNote}">${rawNote}</div>`:'';
   bar.className=`thesis-bar ${cls}`;
   bar.style.display='';
@@ -1795,8 +1886,13 @@ function renderSignalBanner(s, isT1=false){
   const isUp=s.direction==='YES', dirCls=isUp?'up':'down';
   $('sig-dir').textContent=isUp?'▲':'▼';
   $('sig-dir').className='sig-direction '+dirCls;
-  banner.className='signal-banner '+dirCls+' flash';
-  setTimeout(()=>banner.classList.remove('flash'),600);
+  // Flash only when the market or direction actually changed — replaying the
+  // opacity-dip keyframe on every 4s poll makes the banner blink constantly.
+  const flashKey=s.ticker+'|'+s.direction;
+  const changed=flashKey!==_lastDir;
+  _lastDir=flashKey;
+  banner.className='signal-banner '+dirCls+(changed?' flash':'');
+  if(changed)setTimeout(()=>banner.classList.remove('flash'),600);
 
   // big distance display
   if(s.spot!=null&&s.floor_strike!=null){
@@ -2071,10 +2167,14 @@ function renderLog(entries){
     const spotHtml=e.spot!=null?`<span class="log-spot">${fmt$(e.spot,0)}</span>`:'';
     const div=document.createElement('div');
     div.className='log-entry';
-    div.innerHTML=`<span class="log-ts">${ts}</span><span class="log-type ${typeCls}">${e.type||'LOG'}</span>${spotHtml}<span class="log-msg">${e.msg||''}</span>`;
+    div.innerHTML=`<span class="log-ts">${ts}</span><span class="log-type ${typeCls}">${e.type||'LOG'}</span>${spotHtml}<span class="log-msg">${esc(e.msg)}</span>`;
     if(el.children[0]&&el.children[0].classList.contains('empty'))el.innerHTML='';
     el.prepend(div); added++;
   });
+  // Cap the panel: a STATUS entry lands every loop iteration, so an open tab
+  // otherwise accumulates thousands of nodes (and _logKeys grows forever).
+  while(el.children.length>300)el.removeChild(el.lastChild);
+  if(_logKeys.size>1000)_logKeys=new Set(Array.from(_logKeys).slice(-600));
 }
 function clearLog(){_logKeys.clear();$('log-entries').innerHTML='<div class="empty">cleared</div>';$('log-meta').textContent='—';}
 
@@ -2092,19 +2192,24 @@ function playAlert(isUp){
 }
 
 // ── signal poll (high frequency) ─────────────────────────────────────────────
+let _sigBusy=false;
 async function pollSignal(){
+  if((document.hidden&&_firstLoadDone)||_sigBusy)return;
+  _sigBusy=true;
   try{
     const [s, off, th]=await Promise.all([
-      fetch('/api/crypto/signal').then(r=>r.json()),
-      fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
-      fetch('/api/crypto/daily_thesis').then(r=>r.json()).catch(()=>null),
+      fj('/api/crypto/signal',null),
+      fj('/api/crypto/banner_offsets',null),
+      fj('/api/crypto/daily_thesis',null),
     ]);
     if(off&&off.yes&&off.no)_bannerOffsets=off;
     if(th)_dailyThesis=th;
     renderThesisBar();
+    if(!s)return;               // fetch failed — tick() will flag staleness
     _lastSignal=s;
+    _lastGoodSignalTs=Date.now();
 
-    if(s.status==='between_markets'||s.status==='no_active_market'){
+    if(s.status==='between_markets'||s.status==='no_active_market'||s.status==='no_data'){
       const banner=$('signal-banner');
       banner.className='signal-banner';
       $('sig-dir').textContent='—'; $('sig-dir').className='sig-direction waiting';
@@ -2112,7 +2217,8 @@ async function pollSignal(){
       $('dist-stat').style.display='none';
       const mins=s.mins_to_open;
       let waitLabel;
-      if(mins!=null&&mins>90){const hrs=Math.floor(mins/60),rm=Math.round(mins%60);waitLabel=`OFF HOURS — next session in ${hrs}h ${rm}m`;}
+      if(s.status==='no_data') waitLabel='NO DATA — scanner has no market snapshot yet';
+      else if(mins!=null&&mins>90){const hrs=Math.floor(mins/60),rm=Math.round(mins%60);waitLabel=`OFF HOURS — next session in ${hrs}h ${rm}m`;}
       else if(mins!=null&&mins>2) waitLabel=`Between markets — opens in ${mins.toFixed(1)}m`;
       else waitLabel='Market opening…';
       $('sig-label').textContent=waitLabel;
@@ -2131,25 +2237,45 @@ async function pollSignal(){
       badge.textContent='NEW MARKET'; badge.className='sig-reset-badge';
       badge.style.display=''; setTimeout(()=>{badge.style.display='none';},8000);
       if(s.ticker!==_lastAlertTicker){playAlert(s.direction==='YES');_lastAlertTicker=s.ticker;}
+      // T+1 re-render: whale flow is thin in a market's first minute, so pull
+      // a fresh signal 60s after open (same feature as /crypto's banner).
+      if(_t1Timer)clearTimeout(_t1Timer);
+      _t1Timer=setTimeout(async()=>{
+        try{
+          const s2=await fj('/api/crypto/signal',null);
+          if(s2&&s2.status==='ok'&&s2.ticker===_lastTicker)renderSignalBanner(s2,true);
+        }catch(e){}
+      },60000);
     }
     _lastTicker=s.ticker;
     renderSignalBanner(s,false);
   }catch(e){console.error('pollSignal',e);}
+  finally{_sigBusy=false;}
 }
 
 // ── slow refresh (whales, history, BRS, account, log) ────────────────────────
+let _slowBusy=false;
 async function pollSlow(){
+  if((document.hidden&&_firstLoadDone)||_slowBusy)return;
+  _slowBusy=true;
   try{
     const [spotR, histR, brsR, brsOff, brsCur, acctR, logR]=await Promise.all([
-      fetch('/api/crypto/spot').then(r=>r.json()).catch(()=>({})),
-      fetch('/api/crypto/history').then(r=>r.json()).catch(()=>({rows:[]})),
-      fetch('/api/crypto/banner_history?limit=60').then(r=>r.json()).catch(()=>({rows:[],stats:{}})),
-      fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
-      fetch('/api/crypto/banner_current').then(r=>r.json()).catch(()=>null),
-      fetch('/api/account').then(r=>r.json()).catch(()=>null),
-      fetch('/api/loop_log').then(r=>r.json()).catch(()=>({entries:[]})),
+      fj('/api/crypto/spot',{}),
+      fj('/api/crypto/history',{rows:[]}),
+      fj('/api/crypto/banner_history?limit=60',{rows:[],stats:{}}),
+      fj('/api/crypto/banner_offsets',null),
+      fj('/api/crypto/banner_current',null),
+      fj('/api/account',null),
+      fj('/api/loop_log',{entries:[]}),
     ]);
-    if(spotR.btc){_btcSpot=spotR.btc;$('spot-btc').textContent='BTC '+fmt$(_btcSpot,0);}
+    // Prefer fresh spot; fall back to the signal payload's spot (the reliable
+    // source) and mark the header when the collector has gone stale.
+    if(spotR.btc&&!spotR.stale){_btcSpot=spotR.btc;$('spot-btc').textContent='BTC '+fmt$(_btcSpot,0);}
+    else{
+      const fb=_lastSignal&&_lastSignal.spot;
+      if(fb){_btcSpot=fb;$('spot-btc').textContent='BTC '+fmt$(fb,0)+'*';}
+      else if(spotR.btc){$('spot-btc').textContent='BTC '+fmt$(spotR.btc,0)+' (stale)';}
+    }
     if(spotR.eth)$('spot-eth').textContent='ETH '+fmt$(spotR.eth,0);
     if(brsOff&&brsOff.yes&&brsOff.no)_bannerOffsets=brsOff;
     renderThesisBar();
@@ -2157,11 +2283,24 @@ async function pollSlow(){
     renderBRS(brsR.rows, brsOff, brsCur, brsR.stats);
     if(acctR){renderAccount(acctR);}
     if(logR.entries)renderLog(logR.entries);
+    _firstLoadDone=true;
   }catch(e){console.error('pollSlow',e);}
+  finally{_slowBusy=false;}
 }
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){pollSignal();pollSlow();}});
 
-// ── clock ────────────────────────────────────────────────────────────────────
-function tick(){ $('clock').textContent=new Date().toISOString().slice(11,19)+' UTC'; }
+// ── clock + data-staleness watchdog ──────────────────────────────────────────
+function tick(){
+  $('clock').textContent=new Date().toISOString().slice(11,19)+' UTC';
+  // The clock updating every second makes the page look live even when the
+  // signal feed died — grey the banner and say so instead.
+  const age=_lastGoodSignalTs?(Date.now()-_lastGoodSignalTs)/1000:0;
+  const banner=$('signal-banner');
+  if(_lastGoodSignalTs&&age>15){
+    banner.classList.add('stale-data');
+    $('sig-ticker').textContent='DATA STALE — '+Math.round(age)+'s without a signal update';
+  }else banner.classList.remove('stale-data');
+}
 tick(); setInterval(tick,1000);
 
 pollSignal();  setInterval(pollSignal,  4000);
@@ -2224,6 +2363,7 @@ header { padding:10px 20px; border-bottom:1px solid var(--border); background:va
 .signal-banner.flash { animation: flashpulse 0.5s ease-out; }
 .signal-banner.thesis-mute    { opacity:0.5; filter:grayscale(50%); }
 .signal-banner.thesis-counter { outline:2px dashed var(--red); outline-offset:-2px; }
+.signal-banner.stale-data     { opacity:0.45; filter:grayscale(80%); }
 @keyframes flashpulse { 0%{opacity:0.1} 40%{opacity:1} 100%{opacity:1} }
 
 /* direction block — left panel */
@@ -2585,9 +2725,9 @@ function renderSignals(rows) {
     const edgeCls = edgeCents > 0 ? 'pos' : 'neg';
     const ctxStyle = r.context ? ' style="opacity:0.55"' : '';
     const ctxLabel = r.context ? '<span class="dim" style="font-size:9px;letter-spacing:.5px">CTX</span>' : '';
-    return `<div class="sig-row"${ctxStyle} title="${r.detail||''}">
+    return `<div class="sig-row"${ctxStyle} title="${esc(r.detail||'')}">
       ${typeBadge(r.type)}${ctxLabel}
-      <span class="trunc dim" title="${r.title||r.ticker}">${shortTicker(r.title||r.ticker,28)}</span>
+      <span class="trunc dim" title="${esc(r.title||r.ticker)}">${shortTicker(r.title||r.ticker,28)}</span>
       <span class="${dirCls}">${dirLabel}</span>
       <span class="num dim">${fmtP(r.kalshi_price)}</span>
       <span class="num ${edgeCls}">${edgeSign}${edgeCents}¢</span>
@@ -2758,9 +2898,11 @@ function renderBannerSuccess(rows, off, cur) {
 
 // ── Signal history strip ─────────────────────────────────────────────
 function renderHistory(rows) {
-  if(!rows||!rows.length) return;
   const strip = $('history-strip');
   if(!strip) return;
+  // Render the empty state instead of returning early — an early return
+  // leaves the initial "loading…" placeholder up forever on a fresh day.
+  if(!rows||!rows.length){strip.innerHTML='<span class="dim" style="font-size:10px;padding:4px 8px">no history yet</span>';return;}
   strip.innerHTML = rows.slice().reverse().map(r => {
     const isUp = r.direction === 'YES';
     const dirCls = isUp ? 'yes' : 'no';
@@ -2818,19 +2960,33 @@ function playAlert(isUp) {
 }
 
 // ── Main refresh ─────────────────────────────────────────────────────
+// Guarded fetch: timeout + fallback so one dead endpoint (the spot
+// collector is known-flaky) can't reject the whole Promise.all and
+// freeze every panel on the page.
+const fj = (u, fb) => fetch(u, {signal: AbortSignal.timeout(4000)}).then(r=>r.json()).catch(()=>fb);
+function esc(s) { return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// Pause polling in hidden tabs — but only after the first load, so a page
+// opened in a background tab still populates.
+let _firstLoadDone = false;
+let _refreshBusy = false;
 async function refresh() {
+  if ((document.hidden && _firstLoadDone) || _refreshBusy) return;
+  _refreshBusy = true;
   try {
     const [spotR, sigsR, histR, brsR, brsOff, brsCur, whalesR] = await Promise.all([
-      fetch('/api/crypto/spot').then(r=>r.json()),
-      fetch('/api/crypto/signals').then(r=>r.json()),
-      fetch('/api/crypto/history').then(r=>r.json()),
-      fetch('/api/crypto/banner_history?limit=50').then(r=>r.json()).catch(()=>({rows:[]})),
-      fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
-      fetch('/api/crypto/banner_current').then(r=>r.json()).catch(()=>null),
-      fetch('/api/crypto/whales').then(r=>r.json()).catch(()=>({rows:[]})),
+      fj('/api/crypto/spot', {}),
+      fj('/api/crypto/signals', {rows:[]}),
+      fj('/api/crypto/history', {rows:[]}),
+      fj('/api/crypto/banner_history?limit=50', {rows:[]}),
+      fj('/api/crypto/banner_offsets', null),
+      fj('/api/crypto/banner_current', null),
+      fj('/api/crypto/whales', {rows:[]}),
     ]);
 
-    if(spotR.btc) { $('spot-btc').textContent = 'BTC ' + fmt$(spotR.btc); _btcSpot = spotR.btc; }
+    if(spotR.btc) {
+      _btcSpot = spotR.btc;
+      $('spot-btc').textContent = 'BTC ' + fmt$(spotR.btc) + (spotR.stale ? ' (stale)' : '');
+    }
     if(spotR.eth) $('spot-eth').textContent = 'ETH ' + fmt$(spotR.eth);
 
     renderThesisBar(_btcSpot);
@@ -2838,10 +2994,24 @@ async function refresh() {
     renderHistory(histR.rows);
     renderBannerSuccess(brsR.rows, brsOff, brsCur);
     renderCWhales(whalesR.rows);
+    _firstLoadDone = true;
   } catch(e) { console.error('refresh error', e); }
+  finally { _refreshBusy = false; }
 }
+document.addEventListener('visibilitychange', () => { if(!document.hidden) { refresh(); pollSignal(); } });
 
-function tick() { $('clock').textContent = new Date().toISOString().slice(11,19)+' UTC'; }
+let _lastGoodSignalTs = 0;  // declared before tick()'s first synchronous call
+function tick() {
+  $('clock').textContent = new Date().toISOString().slice(11,19)+' UTC';
+  // The clock updating every second makes the page look live even when the
+  // signal feed died — grey the banner and say so instead.
+  const age = _lastGoodSignalTs ? (Date.now() - _lastGoodSignalTs)/1000 : 0;
+  const banner = $('signal-banner');
+  if(_lastGoodSignalTs && age > 15) {
+    banner.classList.add('stale-data');
+    $('sig-ticker').textContent = 'DATA STALE — ' + Math.round(age) + 's without a signal update';
+  } else banner.classList.remove('stale-data');
+}
 tick(); setInterval(tick,1000);
 refresh(); setInterval(refresh, 3000);
 
@@ -2855,6 +3025,7 @@ let _bannerSnap = null;
 let _t1Timer = null;
 let _lastAlertTicker = null;
 let _lastConfAbove50 = false;
+let _lastFlashKey = null;
 
 function renderThesisBar(btcSpot) {
   const bar = $('thesis-bar');
@@ -2876,7 +3047,7 @@ function renderThesisBar(btcSpot) {
     spotHtml = `<span class="thesis-bar-spot">BTC $${Math.round(btcSpot).toLocaleString()}</span>`;
   }
   // Strip the redundant "key $X" suffix from note since it's already shown in meta
-  const rawNote = (t.note || '').replace(/;\s*key \$[\d,]+\.?/g, '').replace(/\.\s*$/, '');
+  const rawNote = esc((t.note || '').replace(/;\s*key \$[\d,]+\.?/g, '').replace(/\.\s*$/, ''));
   const noteHtml = rawNote ? `<div class="thesis-bar-note" title="${rawNote}">${rawNote}</div>` : '';
   bar.className = `thesis-bar ${cls}`;
   bar.style.display = '';
@@ -2915,8 +3086,13 @@ function renderSignalBanner(s, isT1=false) {
 
   $('sig-dir').textContent = isUp ? '▲' : '▼';
   $('sig-dir').className = 'sig-direction ' + dirCls;
-  banner.className = 'signal-banner ' + dirCls + ' flash';
-  setTimeout(() => banner.classList.remove('flash'), 600);
+  // Flash only when the market or direction actually changed — replaying the
+  // opacity-dip keyframe on every poll makes the banner blink constantly.
+  const flashKey = s.ticker + '|' + s.direction;
+  const changed = flashKey !== _lastFlashKey;
+  _lastFlashKey = flashKey;
+  banner.className = 'signal-banner ' + dirCls + (changed ? ' flash' : '');
+  if(changed) setTimeout(() => banner.classList.remove('flash'), 600);
 
   const tradeable = s.price >= 0.05 && s.price <= 0.95 && s.mins_left != null && s.mins_left >= 2;
   if(!tradeable) {
@@ -3019,18 +3195,23 @@ function renderSignalBanner(s, isT1=false) {
   }
 }
 
+let _sigBusy = false;
 async function pollSignal() {
+  if((document.hidden && _firstLoadDone) || _sigBusy) return;
+  _sigBusy = true;
   try {
     const [s, off, th] = await Promise.all([
-      fetch('/api/crypto/signal').then(r=>r.json()),
-      fetch('/api/crypto/banner_offsets').then(r=>r.json()).catch(()=>null),
-      fetch('/api/crypto/daily_thesis').then(r=>r.json()).catch(()=>null),
+      fj('/api/crypto/signal', null),
+      fj('/api/crypto/banner_offsets', null),
+      fj('/api/crypto/daily_thesis', null),
     ]);
     if(off && off.yes && off.no) _bannerOffsets = off;
     if(th) _dailyThesis = th;
     renderThesisBar(_btcSpot);
+    if(!s) return;              // fetch failed — tick() will flag staleness
+    _lastGoodSignalTs = Date.now();
 
-    if(s.status === 'between_markets' || s.status === 'no_active_market') {
+    if(s.status === 'between_markets' || s.status === 'no_active_market' || s.status === 'no_data') {
       const banner = $('signal-banner');
       banner.className = 'signal-banner';
       _bannerSnap = null;
@@ -3038,7 +3219,9 @@ async function pollSignal() {
       $('sig-range-buy').textContent = '—'; $('sig-range-sell').textContent = '—';
       const mins = s.mins_to_open != null ? s.mins_to_open : null;
       let waitLabel;
-      if (mins != null && mins > 90) {
+      if (s.status === 'no_data') {
+        waitLabel = 'NO DATA — scanner has no market snapshot yet';
+      } else if (mins != null && mins > 90) {
         const hrs = Math.floor(mins / 60), rm = Math.round(mins % 60);
         waitLabel = `OFF HOURS — next session in ${hrs}h ${rm}m`;
       } else if (mins != null && mins > 2) {
@@ -3065,8 +3248,10 @@ async function pollSignal() {
       badge.style.display = ''; setTimeout(() => { badge.style.display='none'; }, 8000);
       if(_t1Timer) clearTimeout(_t1Timer);
       _t1Timer = setTimeout(async () => {
-        const s2 = await fetch('/api/crypto/signal').then(r=>r.json());
-        renderSignalBanner(s2, true);
+        try {
+          const s2 = await fj('/api/crypto/signal', null);
+          if(s2 && s2.status === 'ok') renderSignalBanner(s2, true);
+        } catch(e) {}
       }, 60000);
     }
     renderSignalBanner(s);
@@ -3079,6 +3264,7 @@ async function pollSignal() {
     }
     _lastConfAbove50 = confAbove50;
   } catch(e) { console.error('signal poll error', e); }
+  finally { _sigBusy = false; }
 }
 
 pollSignal();
@@ -3133,15 +3319,19 @@ function renderLog() {
       <span class="log-ts">${t}</span>
       <span class="log-type ${typeCls}">${e.type || 'NOTE'}</span>
       ${spotStr}
-      <span class="log-msg">${e.msg || ''}</span>
+      <span class="log-msg">${esc(e.msg)}</span>
     </div>`;
   }).join('');
 }
 
 async function refreshLog() {
+  if(document.hidden && _firstLoadDone) return;
   try {
-    const { rows } = await fetch('/api/loop_log?limit=300').then(r => r.json());
-    mergeLogEntries(rows);
+    // Endpoint returns {"entries": [...]} (plus "rows" as an alias) — this
+    // page destructured a key the server never sent and stayed empty forever.
+    const j = await fj('/api/loop_log?limit=300', null);
+    if(!j) return;
+    mergeLogEntries(j.entries || j.rows || []);
     renderLog();
   } catch(e) {}
 }
@@ -3158,7 +3348,7 @@ _WHALES_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>daedalus — BTC signals</title>
+<title>kalshi-scanner · BTC signals</title>
 <style>
 :root { --bg:#0d1117; --bg2:#161b22; --bg3:#21262d; --fg:#e6edf3; --mute:#7d8590;
         --border:#30363d; --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff; }
@@ -3262,11 +3452,25 @@ footer { text-align:center; padding:10px; color:var(--mute); font-size:11px;
 
 <script>
 function copyTicker(btn, ticker) {
-  navigator.clipboard.writeText(ticker).then(() => {
+  const ok = () => {
     btn.textContent = 'copied!';
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
-  });
+  };
+  const fail = () => { btn.textContent = 'failed'; setTimeout(() => { btn.textContent = 'copy'; }, 1500); };
+  // navigator.clipboard is undefined outside secure contexts (e.g. viewing
+  // this page over http://<lan-ip>:9050) — fall back to execCommand there.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ticker).then(ok).catch(fail);
+  } else {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = ticker; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy') ? ok() : fail();
+      ta.remove();
+    } catch(e) { fail(); }
+  }
 }
 
 function parseExpiry15m(ticker) {
@@ -3299,9 +3503,16 @@ function renderSignals(bodyId, ageId, data, is15m) {
   const age = data.age_s ?? 0;
   ageEl.textContent = age + 's ago';
   ageEl.className = 'card-age' + (age > 120 ? ' stale' : '');
-  if (!data.markets || !data.markets.length) { bodyEl.innerHTML = '<span class="dim">no markets</span>'; return; }
+  // Drop already-expired 15m markets: a stale alpha snapshot otherwise shows
+  // a dead market as the #1 signal.
+  let markets = data.markets || [];
+  if (is15m) markets = markets.filter(m => {
+    const exp = parseExpiry15m(m.ticker || '');
+    return !exp || (exp - Date.now()) > -30000;
+  });
+  if (!markets.length) { bodyEl.innerHTML = '<span class="dim">no live markets</span>'; return; }
 
-  bodyEl.innerHTML = data.markets.map((m, i) => {
+  bodyEl.innerHTML = markets.map((m, i) => {
     const t = m.ticker || '';
     const hasQ = m.mid != null;
     const dirCls = m.direction === 'YES' ? 'dir-yes' : 'dir-no';
@@ -3353,17 +3564,29 @@ function renderFeed(rows) {
   }).join('');
 }
 
+let _refreshBusy = false;
+// Pause polling in hidden tabs — but only after the first load, so a page
+// opened in a background tab still populates.
+let _firstLoadDone = false;
 async function refresh() {
+  if ((document.hidden && _firstLoadDone) || _refreshBusy) return;
+  _refreshBusy = true;
   try {
-    const [{rows}, btc] = await Promise.all([
-      fetch('/api/whales?limit=200').then(r=>r.json()),
-      fetch('/api/btc').then(r=>r.json()),
+    const fj = (u, fb) => fetch(u, {signal: AbortSignal.timeout(4000)}).then(r=>r.json()).catch(()=>fb);
+    const [whalesR, btc] = await Promise.all([
+      fj('/api/whales?limit=200', {rows:[]}),
+      fj('/api/btc', null),
     ]);
-    renderSignals('body-15m','age-15m', btc.btc_15m, true);
-    renderSignals('body-d',  'age-d',   btc.btc_d,   false);
-    renderFeed(rows);
+    if (btc) {
+      renderSignals('body-15m','age-15m', btc.btc_15m, true);
+      renderSignals('body-d',  'age-d',   btc.btc_d,   false);
+    }
+    renderFeed(whalesR.rows);
+    _firstLoadDone = true;
   } catch(e) { console.error(e); }
+  finally { _refreshBusy = false; }
 }
+document.addEventListener('visibilitychange', () => { if(!document.hidden) refresh(); });
 
 function tick() { document.getElementById('clock').textContent = new Date().toISOString().slice(11,19)+' UTC'; }
 tick(); setInterval(tick, 1000);

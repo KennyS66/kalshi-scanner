@@ -100,7 +100,7 @@ def detect_flow_divergence(scanner):
     either the whales are wrong or the price hasn't caught up yet.
     """
     signals = []
-    for ticker, snap in scanner.market_snapshots.items():
+    for ticker, snap in list(scanner.market_snapshots.items()):
         if snap.trade_volume < 100 or snap.recent_whale_count < 2:
             continue
 
@@ -200,7 +200,7 @@ def detect_cross_market_arb(scanner):
 
     # Group markets by game
     games = defaultdict(dict)
-    for ticker, snap in scanner.market_snapshots.items():
+    for ticker, snap in list(scanner.market_snapshots.items()):
         game_key, sport, market_type, variant = _parse_game_key(ticker)
         if game_key and market_type:
             games[game_key][(market_type, variant)] = snap
@@ -473,7 +473,7 @@ def detect_odds_edge(scanner, odds_api):
     for prefix, sport_key in sport_map.items():
         # Find Kalshi markets for this sport
         kalshi_games = {}
-        for ticker, snap in scanner.market_snapshots.items():
+        for ticker, snap in list(scanner.market_snapshots.items()):
             if ticker.startswith(prefix) and "GAME" in ticker:
                 kalshi_games[ticker] = snap
 
@@ -581,7 +581,7 @@ def detect_btc_strike_arb(scanner):
 
     # Build {(series_key, direction): [(strike, price, snap), ...]}
     buckets: dict = {}
-    for ticker, snap in scanner.market_snapshots.items():
+    for ticker, snap in list(scanner.market_snapshots.items()):
         if not ticker.upper().startswith("KXBTC"):
             continue
         strike, direction = _btc_strike(ticker)
@@ -678,7 +678,7 @@ def detect_btc_ladder_sweep(scanner):
     yes_markets = []
     no_markets = []
 
-    for ticker, snap in scanner.market_snapshots.items():
+    for ticker, snap in list(scanner.market_snapshots.items()):
         if "KXBTC15M" not in ticker.upper() and not ("KXBTC" in ticker.upper() and "15M" in ticker.upper()):
             continue
         if snap.recent_whale_count == 0:
@@ -743,7 +743,7 @@ def detect_ask_sum_arb(scanner):
     Also flags illiquid markets (sum > 1.10) where other signals should be discounted.
     """
     signals = []
-    for ticker, snap in scanner.market_snapshots.items():
+    for ticker, snap in list(scanner.market_snapshots.items()):
         if "KXMVE" in ticker:
             continue
         yes_ask = snap.yes_price
@@ -788,7 +788,7 @@ def detect_btc_implied_distribution(scanner):
 
     # Group T-type BTC strikes by expiry suffix (last date component of ticker)
     buckets: dict = {}
-    for ticker, snap in scanner.market_snapshots.items():
+    for ticker, snap in list(scanner.market_snapshots.items()):
         t = ticker.upper()
         if not t.startswith("KXBTC"):
             continue

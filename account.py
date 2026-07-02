@@ -69,15 +69,19 @@ def main():
     print(f"Cash balance : ${dollars}")
     print(f"Portfolio val: ${(bal.get('portfolio_value') or 0) / 100:.2f}")
 
-    mp = [p for p in pos.get("market_positions", []) if p.get("position")]
+    # Field names per the live API (see web.py's account poller): quantities
+    # are position_fp, money fields are *_dollars and already in dollars.
+    mp = [p for p in pos.get("market_positions", []) if float(p.get("position_fp") or 0)]
     if not mp:
         print("Open positions: none")
     else:
         print("Open positions:")
         for p in mp:
-            print(f"  {p.get('ticker'):28} qty={p.get('position'):>5} "
-                  f"avg=${(p.get('market_exposure', 0)) / 100:.2f} "
-                  f"realized=${(p.get('realized_pnl', 0)) / 100:+.2f}")
+            qty = float(p.get("position_fp") or 0)
+            side = "yes" if qty > 0 else "no"
+            print(f"  {p.get('ticker'):28} {side:>3} qty={abs(qty):>5g} "
+                  f"exposure=${float(p.get('market_exposure_dollars') or 0):.2f} "
+                  f"realized=${float(p.get('realized_pnl_dollars') or 0):+.2f}")
 
 
 if __name__ == "__main__":

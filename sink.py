@@ -157,7 +157,7 @@ def _concordance(scanner, ticker, direction_char, is_15m) -> float:
     expiry = parts[-1]
     same_dir = 0
     total = 0
-    for t, snap in scanner.market_snapshots.items():
+    for t, snap in list(scanner.market_snapshots.items()):
         tu = t.upper()
         if not _is_btc_15m(tu):
             continue
