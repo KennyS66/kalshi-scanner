@@ -180,8 +180,33 @@ def main():
         print(f"Watch      : key level ${key:,.0f} only; flag a confirmed break either way. Stay quiet in the range.")
     print("Cadence    : ~5min in chop; tighten near the key level; faster only on a confirmed break.")
 
+    # Intraday regime overlay: the loop journals session-level regime reads
+    # (intraday_regime.py) so the watch plan can track live levels after the
+    # morning key stops being relevant. Bias is NOT affected — it stays a
+    # graded once-daily call; this only adapts what the loop watches.
+    reg = None
+    try:
+        from intraday_regime import latest_today
+        reg = latest_today()
+    except Exception:
+        pass
+    plan_reg = "regime=none"
+    if reg:
+        rlo, rhi = reg.get("range_lo"), reg.get("range_hi")
+        rng = f" ${rlo:,.0f}-${rhi:,.0f}" if rlo and rhi else ""
+        print(f"\n-- intraday regime [{reg.get('session','?')}] --")
+        print(f"Regime     : {reg.get('regime','?')}{rng}")
+        if reg.get("note"):
+            print(f"Note       : {reg['note']}")
+        if reg.get("regime") == "range" and rlo and rhi:
+            print(f"Watch also : live range edges — a sustained move outside "
+                  f"${rlo:,.0f}/${rhi:,.0f} is the intraday event to flag.")
+        plan_reg = (f"regime={reg.get('regime','?')} "
+                    f"rlo={int(rlo) if rlo else 0} rhi={int(rhi) if rhi else 0} "
+                    f"session={reg.get('session','?')}")
+
     print(f"\nPLAN: bias={bias} key={int(key)} spot={int(spot) if spot else 0} pos={pos} "
-          f"stale={'yes' if stale else 'no'} invalidated={'yes' if invalidated else 'no'}")
+          f"stale={'yes' if stale else 'no'} invalidated={'yes' if invalidated else 'no'} {plan_reg}")
 
 
 if __name__ == "__main__":
