@@ -17,14 +17,14 @@ echo "Syncing repo (latest daily thesis)..."
 GIT_TERMINAL_PROMPT=0 git pull --rebase --autostash 2>&1 | tail -3 \
   || echo "  (git pull skipped/failed — continuing with the local thesis)"
 
-# Pull Kalshi creds from the daedalus-mm .env (single source of truth).
-# bots/ layout is the local checkout; ~/daedalus-mm is the cloud layout.
-DAEDALUS_ENV="$HOME/bots/daedalus-mm/.env"
-[[ -f "$DAEDALUS_ENV" ]] || DAEDALUS_ENV="$HOME/daedalus-mm/.env"
-if [[ -f "$DAEDALUS_ENV" ]]; then
+# Pull Kalshi creds from ~/.kalshi/trading.env (single source of truth for
+# the scanner's own production key). daedalus-mm/.env belongs to a separate
+# bot and may intentionally point at demo credentials — never borrow it here.
+KALSHI_ENV="$HOME/.kalshi/trading.env"
+if [[ -f "$KALSHI_ENV" ]]; then
   set -a
   # shellcheck disable=SC1090
-  source "$DAEDALUS_ENV"
+  source "$KALSHI_ENV"
   set +a
 fi
 
@@ -32,7 +32,7 @@ API_KEY="${KALSHI_API_KEY:-${KALSHI_API_KEY_ID:-}}"
 KEY_FILE="${KALSHI_PRIVATE_KEY_PATH:-$HOME/.kalshi/private_key.pem}"
 
 if [[ -z "$API_KEY" ]]; then
-  echo "error: KALSHI_API_KEY (or KALSHI_API_KEY_ID in $DAEDALUS_ENV) is not set" >&2
+  echo "error: KALSHI_API_KEY (or KALSHI_API_KEY_ID in $KALSHI_ENV) is not set" >&2
   exit 1
 fi
 if [[ ! -f "$KEY_FILE" ]]; then
