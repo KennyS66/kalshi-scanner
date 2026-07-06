@@ -1478,7 +1478,7 @@ header {
 .hc-time  { color:var(--mute); font-size:10px; }
 
 /* ── 3-col row: limit targets / account / BRS ── */
-.trade-3col { display:grid; grid-template-columns:1.1fr 1fr 1fr; border-bottom:1px solid var(--border); align-items:start; }
+.trade-3col { display:grid; grid-template-columns:1fr 1fr 1.1fr; border-bottom:1px solid var(--border); align-items:start; }
 .trade-3col > div { border-right:1px solid var(--border); min-width:0; }
 .trade-3col > div:last-child { border-right:none; }
 
@@ -1689,8 +1689,32 @@ header {
   <div class="dim" style="font-size:11px;padding:4px">loading…</div>
 </div>
 
-<!-- ── limit targets / account / BRS, side by side ── -->
+<!-- ── BRS / account / limit targets, side by side ── -->
 <div class="trade-3col">
+  <div>
+    <div class="panel-hdr">
+      <span>Buy / Sell Range History</span>
+      <span id="brs-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
+    </div>
+    <div class="panel-body" id="brs-body"><div class="empty">no settled markets yet</div></div>
+  </div>
+
+  <div class="acct-wrap">
+    <div class="acct-head">
+      <span class="acct-balance" id="acct-balance">$—</span>
+      <span class="acct-pnl" id="acct-pnl"></span>
+      <span class="acct-age" id="acct-age">—</span>
+    </div>
+    <div class="acct-section-lbl">Open positions</div>
+    <div id="pos-grid"><div class="acct-empty">loading…</div></div>
+    <div class="acct-section-lbl" style="display:flex;align-items:center;gap:10px;margin-top:10px">
+      Recent fills
+      <span id="fills-key-badge" style="font-size:10px;display:none"></span>
+      <button id="fills-toggle-btn" onclick="toggleFills()" style="font-size:10px;padding:2px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--mute);cursor:pointer;font-family:inherit">ON</button>
+    </div>
+    <div id="fill-grid"><div class="acct-empty">loading…</div></div>
+  </div>
+
   <div class="limit-wrap">
     <div class="limit-card">
       <div class="limit-hdr">
@@ -1710,30 +1734,6 @@ header {
         </div>
       </div>
     </div>
-  </div>
-
-  <div class="acct-wrap">
-    <div class="acct-head">
-      <span class="acct-balance" id="acct-balance">$—</span>
-      <span class="acct-pnl" id="acct-pnl"></span>
-      <span class="acct-age" id="acct-age">—</span>
-    </div>
-    <div class="acct-section-lbl">Open positions</div>
-    <div id="pos-grid"><div class="acct-empty">loading…</div></div>
-    <div class="acct-section-lbl" style="display:flex;align-items:center;gap:10px;margin-top:10px">
-      Recent fills
-      <span id="fills-key-badge" style="font-size:10px;display:none"></span>
-      <button id="fills-toggle-btn" onclick="toggleFills()" style="font-size:10px;padding:2px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--mute);cursor:pointer;font-family:inherit">ON</button>
-    </div>
-    <div id="fill-grid"><div class="acct-empty">loading…</div></div>
-  </div>
-
-  <div>
-    <div class="panel-hdr">
-      <span>Buy / Sell Range History</span>
-      <span id="brs-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
-    </div>
-    <div class="panel-body" id="brs-body"><div class="empty">no settled markets yet</div></div>
   </div>
 </div>
 
