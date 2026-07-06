@@ -114,18 +114,29 @@ def main():
     # longer reflects the market and should stop being favored until a fresh
     # thesis confirms a side — this is what makes the bias a live variable
     # instead of a value frozen at whatever daily_research.py last wrote.
+    # The adverse move is measured from whichever reference is already further
+    # against the bias: the key level or the spot recorded at call time. A DOWN
+    # thesis often sets its key BELOW spot (support to break) — being above
+    # that key is the normal waiting state, not an invalidation. Only a move
+    # through/beyond the reference against the bias counts.
     invalidated = False
     invalidation_msg = None
-    gap_signed = (spot - key) if (spot and key) else None
-    if not stale and bias in ("UP", "DOWN") and gap_signed is not None:
-        if bias == "DOWN" and gap_signed > PRICE_BREAK_THRESHOLD:
-            invalidated = True
-            invalidation_msg = (f"spot ${gap_signed:,.0f} ABOVE key ${key:,.0f} — "
-                                 f"a bounce broke through the DOWN thesis's level")
-        elif bias == "UP" and -gap_signed > PRICE_BREAK_THRESHOLD:
-            invalidated = True
-            invalidation_msg = (f"spot ${-gap_signed:,.0f} BELOW key ${key:,.0f} — "
-                                 f"a rejection broke through the UP thesis's level")
+    rec_spot = t.get("spot") or 0
+    if not stale and bias in ("UP", "DOWN") and spot and key:
+        if bias == "DOWN":
+            ref = max(key, rec_spot)
+            adverse = spot - ref
+            if adverse > PRICE_BREAK_THRESHOLD:
+                invalidated = True
+                invalidation_msg = (f"spot ${adverse:,.0f} ABOVE ${ref:,.0f} "
+                                     f"(max of key / call spot) — price rallied through the DOWN thesis")
+        else:  # UP
+            ref = min(key, rec_spot) if rec_spot else key
+            adverse = ref - spot
+            if adverse > PRICE_BREAK_THRESHOLD:
+                invalidated = True
+                invalidation_msg = (f"spot ${adverse:,.0f} BELOW ${ref:,.0f} "
+                                     f"(min of key / call spot) — price broke down through the UP thesis")
 
     if invalidated:
         bias = "WAIT"
