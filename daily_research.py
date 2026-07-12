@@ -132,7 +132,12 @@ def etf_net_flow_usd():
 
     # The flow table row: plain numbers in millions, one cell per ETF, with
     # the net total as the LAST cell (no $ signs, e.g. "-60.7" … "-189.2").
-    row = text[dm.start(): text.find("</tr>", dm.start())]
+    row_end = text.find("</tr>", dm.start())
+    if row_end == -1:
+        row_end = dm.start() + 2000   # bound the scan if markup changes
+    # Normalize Unicode minus / parenthesized negatives before matching.
+    row = text[dm.start(): row_end].replace("−", "-")
+    row = re.sub(r">\s*\((-?[\d,]+\.?\d*)\)\s*<", r">-\1<", row)
     cells = re.findall(r">\s*(-?[\d,]+\.?\d*)\s*<", row)
     try:
         nums = [float(c.replace(",", "")) for c in cells]
@@ -395,7 +400,8 @@ def main():
     # Price history
     print("  Fetching 200-day price history...")
     prices_200 = price_history(200)
-    prices_7   = price_history(7)
+    # Last 8 daily points cover the 7-day window — no second fetch needed.
+    prices_7   = prices_200[-8:] if prices_200 else price_history(7)
     ma50  = compute_ma(prices_200, 50)
     ma200 = compute_ma(prices_200, 200)
     if ma50:

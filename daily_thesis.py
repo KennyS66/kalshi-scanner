@@ -18,7 +18,6 @@ import json
 import re
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from backtest_gate import DATA
 
@@ -116,16 +115,35 @@ def report():
         return
     rows = [json.loads(l) for l in open(LOG) if l.strip()]
     rows.sort(key=lambda r: r.get("date", ""))
-    closes = _daily_closes()
+    # Size the close window to cover the whole log (CoinGecko free cap ~365d).
+    span = 35
+    if rows and rows[0].get("date"):
+        try:
+            oldest = datetime.strptime(rows[0]["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            span = min(365, max(35, (datetime.now(timezone.utc) - oldest).days + 3))
+        except ValueError:
+            pass
+    closes = _daily_closes(days=span)
     basis = "same-day UTC close" if closes else "next recorded spot (offline fallback)"
     print(f"=== DAILY BTC THESES ({len(rows)} logged, graded vs {basis}) ===")
     print(f"{'date':12} {'bias':5} {'conv':>4} {'spot':>10} {'close':>10} {'day%':>7} {'result':>7}  note")
+    # Pre-upsert logs contain several rows for one date; only the LAST row per
+    # date is the day's standing thesis — earlier ones show as superseded and
+    # are excluded from grading so one day can't count twice.
+    last_for_date = {r.get("date"): i for i, r in enumerate(rows)}
     graded = []          # (won, conviction)
     sig_stats = {}       # class -> [n, wins]
     for i, r in enumerate(rows):
+        if last_for_date.get(r.get("date")) != i:
+            print(f"{r.get('date', '?'):12} {r.get('bias', '?'):5} {r.get('conviction', '?'):>4} "
+                  f"${r.get('spot', 0):>9,.0f} {'':>10} {'':>7} {'supers.':>7}  {r.get('note', '')[:40]}")
+            continue
         close = closes.get(r["date"])
-        if close is None and i + 1 < len(rows):
-            close = rows[i + 1]["spot"]
+        if close is None and not closes:
+            # Offline fallback: next thesis on a LATER date, not a same-day dup.
+            nxt = next((x for x in rows[i + 1:] if x.get("date") != r.get("date")), None)
+            if nxt:
+                close = nxt["spot"]
         result, day_pct, actual = "—", None, 0
         if close is not None:
             day_pct = (close / r["spot"] - 1) * 100
@@ -145,8 +163,8 @@ def report():
                     n_w[1] += 1 if d == actual else 0
         close_s = f"${close:,.0f}" if close is not None else "(pending)"
         pct_s = f"{day_pct:+.1f}%" if day_pct is not None else ""
-        print(f"{r['date']:12} {r['bias']:5} {r['conviction']:>4} "
-              f"${r['spot']:>9,.0f} {close_s:>10} {pct_s:>7} {result:>7}  {r['note'][:40]}")
+        print(f"{r.get('date', '?'):12} {r.get('bias', '?'):5} {r.get('conviction', '?'):>4} "
+              f"${r.get('spot', 0):>9,.0f} {close_s:>10} {pct_s:>7} {result:>7}  {r.get('note', '')[:40]}")
 
     if graded:
         w = sum(1 for won, _ in graded if won)
