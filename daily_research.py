@@ -124,37 +124,29 @@ def etf_net_flow_usd():
     date_re = re.compile(
         r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s+(\d{4})"
     )
-    # Match a total that looks like "$-1,234.5M" or "$1.2B" — total line often says "Total"
-    # We look for a dollar sign followed by optional minus and digits with commas/dots,
-    # then optional M or B suffix
-    flow_re = re.compile(r"([-+]?\$[\d,]+\.?\d*)\s*([MB])?", re.IGNORECASE)
-
     # Find first date in the page (most recent entry)
     dm = date_re.search(text)
     if not dm:
         return None, None
     date_str = dm.group(0)
 
-    # Look for a net total after the date — scan ~2000 chars after the date
-    snippet = text[dm.start(): dm.start() + 2000]
-    # Find all dollar amounts and pick the largest absolute value as the total
-    amounts = []
-    for m in flow_re.finditer(snippet):
-        raw = m.group(1).replace("$", "").replace(",", "")
-        try:
-            val = float(raw)
-        except ValueError:
-            continue
-        suffix = (m.group(2) or "M").upper()
-        if suffix == "B":
-            val *= 1000
-        amounts.append(val)
-
-    if not amounts:
+    # The flow table row: plain numbers in millions, one cell per ETF, with
+    # the net total as the LAST cell (no $ signs, e.g. "-60.7" … "-189.2").
+    row = text[dm.start(): text.find("</tr>", dm.start())]
+    cells = re.findall(r">\s*(-?[\d,]+\.?\d*)\s*<", row)
+    try:
+        nums = [float(c.replace(",", "")) for c in cells]
+    except ValueError:
+        return date_str, None
+    if not nums:
         return date_str, None
 
-    # The total net flow is the largest absolute value in the snippet
-    net = max(amounts, key=abs)
+    net = nums[-1]
+    # Sanity: with several per-ETF cells present, they should sum to the total.
+    if len(nums) >= 3:
+        body = sum(nums[:-1])
+        if abs(body - net) > max(2.0, abs(net) * 0.05):
+            return date_str, None
     return date_str, round(net, 1)
 
 
@@ -243,19 +235,25 @@ def derive_thesis(spot, prices_200, prices_7, fg_val, fg_cls,
     ma50  = compute_ma(prices_200, 50)
     ma200 = compute_ma(prices_200, 200)
 
-    # 1. Moving average structure (strongest signal)
+    # 1. Moving average structure (strongest signal), scaled by distance to
+    # the 50d: full ±2.0 only when spot is ≥5% away, floor 0.25×. Right at the
+    # MA the regime label is close to a coin flip and one day's move can flip
+    # it — a 1% gap must not carry the same weight as a 15% one.
     if ma50 and ma200:
         above50  = spot > ma50
         above200 = spot > ma200
+        pct50 = (spot / ma50 - 1) * 100
+        ma_w = 2.0 * min(1.0, max(abs(pct50) / 5.0, 0.25))
+        near = f" (only {pct50:+.1f}% from 50d)" if abs(pct50) < 2.0 else ""
         if above50 and above200:
-            score += 2.0
+            score += ma_w
             note_parts.append(
-                f"above 50d (${ma50:,.0f}) + 200d (${ma200:,.0f}) MA — bullish structure"
+                f"above 50d (${ma50:,.0f}) + 200d (${ma200:,.0f}) MA — bullish structure{near}"
             )
         elif not above50 and not above200:
-            score -= 2.0
+            score -= ma_w
             note_parts.append(
-                f"below 50d (${ma50:,.0f}) + 200d (${ma200:,.0f}) MA — bearish structure"
+                f"below 50d (${ma50:,.0f}) + 200d (${ma200:,.0f}) MA — bearish structure{near}"
             )
         elif above50 and not above200:
             score += 0.5
@@ -270,6 +268,33 @@ def derive_thesis(spot, prices_200, prices_7, fg_val, fg_cls,
         else:
             score -= 1.0
             note_parts.append(f"below 50d MA (${ma50:,.0f})")
+
+    # 1b. Short-term momentum: 14d change, confirmed by 10d-MA slope. The MA
+    # structure above lags by weeks; this is what sees a recovery or rollover
+    # while spot is still on the wrong side of the 50d.
+    if len(prices_200) >= 16:
+        chg14 = prices_200[-1] / prices_200[-15] - 1
+        if abs(chg14) >= 0.10:
+            mom = 1.5
+        elif abs(chg14) >= 0.05:
+            mom = 1.0
+        elif abs(chg14) >= 0.02:
+            mom = 0.5
+        else:
+            mom = 0.0
+        if chg14 < 0:
+            mom = -mom
+        ma10_now  = mean(prices_200[-10:])
+        ma10_prev = mean(prices_200[-15:-5])
+        if mom and (mom > 0) != (ma10_now > ma10_prev):
+            mom *= 0.5   # move not confirmed by slope — likely wick-driven
+        score += mom
+        if mom:
+            note_parts.append(
+                f"14d {chg14*100:+.1f}% — short-term trend {'up' if mom > 0 else 'down'}"
+            )
+        else:
+            note_parts.append(f"14d {chg14*100:+.1f}% — short-term flat")
 
     # 2. Fear & Greed
     if fg_val is not None:
