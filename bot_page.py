@@ -89,7 +89,10 @@ async function poll(){
     $('dayPnl').className = (s.day_pnl||0) >= 0 ? 'pos':'neg';
     $('dayStop').textContent = s.bankroll ? '-$'+(0.10*s.bankroll).toFixed(2) : '—';
     const a = d.stats.all_time;
-    $('winRate').textContent = a.n ? a.win_pct.toFixed(0)+'%' : '—';
+    const td = d.stats.today || {n: 0};
+    const allStr = a.n ? a.win_pct.toFixed(0)+'%' : '—';
+    $('winRate').textContent = td.n > 0
+      ? `today: ${td.win_pct.toFixed(0)}% · all: ${allStr}` : allStr;
     $('netAvg').textContent = a.n ? money(a.net_avg) : '—';
     $('nTrades').textContent = a.n;
     $('unlock').textContent = 'LIVE unlock: ' + d.unlock.reason;

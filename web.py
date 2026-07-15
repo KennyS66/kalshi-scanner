@@ -1271,9 +1271,20 @@ _BOT_DIR = Path(__file__).parent / "data" / "bot"
 def _read_jsonl_tail(path, limit=50):
     try:
         lines = Path(path).read_text().splitlines()[-limit:]
-        return [json.loads(l) for l in lines]
     except Exception:
         return []
+    rows = []
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue  # skip a single torn/garbage line, not the whole file
+    return rows
+
+
+def _utc_day_str(ts: float) -> str:
+    import datetime as _dt
+    return _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
 
 
 def _trade_stats(trades):
@@ -1289,7 +1300,11 @@ def _trade_stats(trades):
     by_reason = {}
     for t in closed:
         by_reason.setdefault(t.get("exit_reason", "?"), []).append(t)
+    today_str = _utc_day_str(time.time())
+    today_rows = [t for t in closed
+                  if t.get("exit_ts") is not None and _utc_day_str(t["exit_ts"]) == today_str]
     return {"all_time": block(closed),
+            "today": block(today_rows),
             "by_exit_reason": {k: block(v) for k, v in by_reason.items()}}
 
 
@@ -1334,7 +1349,10 @@ async def api_bot_status() -> JSONResponse:
 
 @app.post("/api/bot/control")
 async def api_bot_control(request: Request) -> JSONResponse:
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "bad json"}, status_code=400)
     try:
         nonce = bot_control_write(_BOT_DIR, body.get("cmd", ""))
     except ValueError as e:

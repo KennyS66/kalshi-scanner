@@ -30,6 +30,14 @@ def test_sell_price_never_below_one_cent():
     assert b.sell("YES", 1, low)["price"] == 0.01
 
 
+def test_sell_clamps_negative_spread_so_price_never_exceeds_ask():
+    # A crossed book (yes_ask + no_ask < 1) yields spread < 0; without a
+    # clamp the sell price would be computed above the ask (phantom profit).
+    b = PaperBroker()
+    crossed = {"yes_ask": 0.52, "no_ask": 0.50, "spread": -0.05, "ts": 0}
+    assert b.sell("YES", 1, crossed)["price"] == 0.52
+
+
 def test_round_trip_pnl_nets_out_fees():
     b = PaperBroker()
     entry = b.buy("YES", 10, SIG)                      # 10 @ 0.52

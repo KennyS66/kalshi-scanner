@@ -1,8 +1,10 @@
 """Pure strategy logic for the swing bot — no I/O except config file read.
 
-Flip rule (spec v1): whale_trend changes sign, new |whale_trend| >=
-flip_threshold, and momentum sign agrees with the new direction. A zero
-whale_trend has no sign — it reseeds instead of flipping.
+Flip rule (spec v1): whale_trend changes sign vs. the last CONFIRMED sign,
+new |whale_trend| >= flip_threshold, and momentum sign agrees with the new
+direction. A zero whale_trend has no sign — it reseeds instead of flipping.
+A sub-threshold or momentum-disagreeing opposite-sign sample does not
+advance the confirmed sign, so it can't silently consume a later flip.
 """
 import json
 import math
@@ -39,11 +41,19 @@ def _sign(x: float) -> int:
 
 
 class FlipDetector:
-    """Per-ticker whale_trend sign-flip detector."""
+    """Per-ticker whale_trend sign-flip detector.
+
+    self._prev holds the last CONFIRMED signed whale_trend per ticker — it
+    only advances on (a) initial seed, (b) a fired flip, or (c) a same-sign
+    sample (which just refreshes magnitude). A sub-threshold or
+    momentum-disagreeing opposite-sign sample must NOT advance it, or that
+    sample would silently consume the flip for a later, valid opposite-sign
+    sample.
+    """
 
     def __init__(self, flip_threshold: float):
         self.flip_threshold = flip_threshold
-        self._prev = {}  # ticker -> last nonzero-signed whale_trend
+        self._prev = {}  # ticker -> last confirmed nonzero-signed whale_trend
 
     def update(self, ticker: str, whale_trend: float, momentum: float):
         prev = self._prev.get(ticker)
@@ -51,13 +61,17 @@ class FlipDetector:
         if cur_sign == 0:
             self._prev.pop(ticker, None)
             return None
-        self._prev[ticker] = whale_trend
-        if prev is None or _sign(prev) == cur_sign:
+        if prev is None:
+            self._prev[ticker] = whale_trend
+            return None
+        if _sign(prev) == cur_sign:
+            self._prev[ticker] = whale_trend  # same side: refresh magnitude
             return None
         if abs(whale_trend) < self.flip_threshold:
-            return None
+            return None  # sub-threshold opposite-sign sample: doesn't confirm
         if _sign(momentum) != cur_sign:
-            return None
+            return None  # momentum disagrees: doesn't confirm
+        self._prev[ticker] = whale_trend  # confirmed flip
         return "YES" if cur_sign > 0 else "NO"
 
     def forget(self, ticker: str):

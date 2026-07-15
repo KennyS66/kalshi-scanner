@@ -59,6 +59,31 @@ def test_flip_detector_tracks_tickers_independently_and_forgets():
     assert d.update("A", -2.5, -1.0) is None            # reseeded after forget
 
 
+def test_flip_detector_subthreshold_sample_does_not_consume_the_flip():
+    # +3 -> -1.5 (sub-threshold, must NOT silently confirm the sign flip) -> -5
+    # (mom agreeing) should still fire NO against the ORIGINAL +3 confirmed sign.
+    d = FlipDetector(flip_threshold=2.0)
+    assert d.update("T1", 3.0, 30.0) is None
+    assert d.update("T1", -1.5, -15.0) is None          # sub-threshold, no confirm
+    assert d.update("T1", -5.0, -50.0) == "NO"
+
+
+def test_flip_detector_subthreshold_then_back_to_same_side_fires_nothing():
+    d = FlipDetector(flip_threshold=2.0)
+    assert d.update("T1", 3.0, 30.0) is None
+    assert d.update("T1", -1.5, -15.0) is None          # sub-threshold, no confirm
+    assert d.update("T1", 2.5, 25.0) is None            # back to same (confirmed) side
+
+
+def test_flip_detector_momentum_blocked_flip_does_not_consume():
+    # +3 -> -2.5 with mom disagreeing (blocked) -> -2.6 with mom agreeing must
+    # still fire NO against the ORIGINAL +3 confirmed sign.
+    d = FlipDetector(flip_threshold=2.0)
+    assert d.update("T1", 3.0, 30.0) is None
+    assert d.update("T1", -2.5, 20.0) is None           # threshold ok, mom disagrees
+    assert d.update("T1", -2.6, -26.0) == "NO"
+
+
 from bot_core import size_contracts, entry_blockers, should_time_exit
 
 

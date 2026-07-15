@@ -22,7 +22,10 @@ class PaperBroker:
 
     def sell(self, side: str, qty: int, sig: dict) -> dict:
         ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
-        price = max(0.01, round(ask - (sig.get("spread") or 0.0), 4))
+        # A crossed book (yes_ask + no_ask < 1) yields a negative spread;
+        # clamp at 0 so the sell price never lands above the ask.
+        spread = max(0.0, sig.get("spread") or 0.0)
+        price = max(0.01, round(ask - spread, 4))
         return {"price": price, "qty": qty,
                 "fee_total": round(fee(price) * qty, 4),
                 "ts": sig.get("ts") or 0.0}

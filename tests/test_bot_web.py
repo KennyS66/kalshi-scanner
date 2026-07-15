@@ -1,5 +1,5 @@
 import json
-from web import bot_status_payload, bot_control_write
+from web import bot_status_payload, bot_control_write, _read_jsonl_tail
 
 
 def _seed(tmp_path):
@@ -46,3 +46,34 @@ def test_control_write_rejects_unknown_cmd(tmp_path):
     import pytest
     with pytest.raises(ValueError):
         bot_control_write(tmp_path, "fire_the_missiles")
+
+
+def test_read_jsonl_tail_skips_torn_lines(tmp_path):
+    p = tmp_path / "trades.jsonl"
+    p.write_text('{"a": 1}\n{not valid json at all\n{"a": 2}\n')
+    rows = _read_jsonl_tail(p, 50)
+    assert rows == [{"a": 1}, {"a": 2}]
+
+
+def test_api_bot_control_rejects_malformed_json():
+    from fastapi.testclient import TestClient
+    from web import app
+    client = TestClient(app)
+    r = client.post("/api/bot/control", content=b"{not json",
+                     headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+    assert r.json() == {"ok": False, "error": "bad json"}
+
+
+def test_trade_stats_today_block_filters_by_utc_day():
+    from web import _trade_stats
+    import time as _time
+    now = _time.time()
+    trades = [
+        {"status": "closed", "net_pnl": 1.0, "exit_ts": now, "exit_reason": "flip"},
+        {"status": "closed", "net_pnl": -1.0, "exit_ts": now - 3 * 86400,
+         "exit_reason": "flip"},
+    ]
+    stats = _trade_stats(trades)
+    assert stats["today"]["n"] == 1
+    assert stats["all_time"]["n"] == 2

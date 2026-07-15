@@ -154,6 +154,27 @@ def test_skip_events_logged_with_reasons(tmp_path, monkeypatch):
     assert skips and any("mins_left" in e["reason"] for e in skips)
 
 
+def test_time_exit_survives_askless_replay_row(tmp_path, monkeypatch):
+    # Historical replay rows can be status="ok" with mins_left but without
+    # yes_ask/no_ask. The time exit must still fire, falling back to the
+    # play's last quoted prices (from entry) instead of raising a KeyError.
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),     # enter YES @ 0.52
+        _sig(whale_trend=3.5, momentum=30.0, mins_left=1.5, ts=1010.0,
+             yes_ask=None, no_ask=None),                      # askless, time exit
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1
+    t = trades[0]
+    assert t["exit_reason"] == "time"
+    assert t["exit_price"] == 0.50   # fell back to entry's last_sig: 0.52 - spread 0.02
+    assert bot.state["open_plays"] == {}
+
+
 def test_feed_down_event_after_three_failures(tmp_path, monkeypatch):
     bot = _mkbot(tmp_path, [None, None, None, None], monkeypatch)
     for _ in range(4):

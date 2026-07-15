@@ -131,7 +131,15 @@ class Bot:
         self._event("enter", f"{side} x{qty} @ {fill['price']}", sig["ticker"], sig)
 
     def _exit(self, ticker, play, sig, reason):
-        fill = self.broker.sell(play["side"], play["qty"], sig)
+        # Historical replay rows can be status="ok" but lack yes_ask/no_ask
+        # (no live quote at that point in the recording). The entry sig
+        # always has both (entry_blockers requires them), and last_sig only
+        # ever advances from a fully-quoted row (see _manage), so falling
+        # back to it here always yields a usable sell fill.
+        fill_sig = sig
+        if sig.get("yes_ask") is None or sig.get("no_ask") is None:
+            fill_sig = play["last_sig"]
+        fill = self.broker.sell(play["side"], play["qty"], fill_sig)
         pnl = round_trip_pnl(play["entry"], fill)
         self.state["day_pnl"] = round(self.state["day_pnl"] + pnl, 4)
         del self.state["open_plays"][ticker]
@@ -212,7 +220,11 @@ class Bot:
         for t in list(self.state["open_plays"]):
             play = self.state["open_plays"][t]
             if sig.get("status") == "ok" and t == ticker:
-                play["last_sig"] = dict(sig)
+                # Only advance last_sig from a fully-quoted row — it's the
+                # fallback _exit uses for askless replay rows, so it must
+                # always carry a usable yes_ask/no_ask.
+                if sig.get("yes_ask") is not None and sig.get("no_ask") is not None:
+                    play["last_sig"] = dict(sig)
                 if should_time_exit(sig, self.cfg):
                     self._exit(t, play, sig, "time")
             else:
