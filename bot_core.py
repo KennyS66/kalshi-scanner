@@ -5,7 +5,10 @@ flip_threshold, and momentum sign agrees with the new direction. A zero
 whale_trend has no sign — it reseeds instead of flipping.
 """
 import json
+import math
 from pathlib import Path
+
+from backtest_gate import fee
 
 DEFAULT_CONFIG = {
     "flip_threshold": 2.0,     # min |whale_trend| after the sign change
@@ -59,3 +62,39 @@ class FlipDetector:
 
     def forget(self, ticker: str):
         self._prev.pop(ticker, None)
+
+
+def size_contracts(bankroll: float, price: float, risk_pct: float) -> int:
+    """Contracts so that qty * (price + fee) <= bankroll * risk_pct. 0 = can't afford."""
+    budget = bankroll * risk_pct
+    cost = price + fee(price)
+    if cost <= 0:
+        return 0
+    return max(0, math.floor(budget / cost))
+
+
+def entry_blockers(sig: dict, cfg: dict, open_plays: dict,
+                   halted: bool, paused: bool) -> list:
+    """Reasons NOT to enter right now. Empty list means entry is allowed."""
+    blockers = []
+    if paused:
+        blockers.append("paused")
+    if halted:
+        blockers.append("halted")
+    if sig.get("status") != "ok":
+        blockers.append("status_not_ok")
+        return blockers
+    price = sig.get("price") or 0.0
+    if price <= cfg["decided_lo"] or price >= cfg["decided_hi"]:
+        blockers.append(f"decided price={price}")
+    if (sig.get("mins_left") or 0.0) < cfg["min_entry_mins"]:
+        blockers.append(f"mins_left {sig.get('mins_left')} < {cfg['min_entry_mins']}")
+    if sig.get("ticker") in open_plays:
+        blockers.append("already_open")
+    elif len(open_plays) >= cfg["max_open_plays"]:
+        blockers.append(f"max_open {len(open_plays)}")
+    return blockers
+
+
+def should_time_exit(sig: dict, cfg: dict) -> bool:
+    return (sig.get("mins_left") or 0.0) <= cfg["exit_mins"]
