@@ -228,7 +228,8 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <div class="panel">
     <h3>Open plays</h3>
     <div class="tbl-wrap"><table id="openTable"><thead><tr>
-      <th>ticker</th><th>side</th><th>qty</th><th>entry</th><th>target</th><th>stretch</th>
+      <th>ticker</th><th>side</th><th>qty</th><th>entry</th><th>live</th>
+      <th>uP&amp;L</th><th>target</th><th>stretch</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="empty" id="openEmpty" hidden>flat — waiting for a flow flip inside the buy range</div>
   </div>
@@ -329,10 +330,24 @@ function drawMeter(r, askC) {
 }
 
 let offsets = {yes:{}, no:{}};
+let lastSig = null;
+// mirrors backtest_gate.fee: per-contract Kalshi fee, ceil to the cent
+const kfee = p => Math.ceil(7 * p * (1 - p)) / 100;
+// mirrors PaperBroker.sell: achievable sell = ask - spread, floor 1c
+function liveMark(play, sig) {
+  if (!sig || sig.status !== 'ok') return null;
+  const ask = play.side === 'YES' ? sig.yes_ask : sig.no_ask;
+  if (ask == null) return null;
+  const sell = Math.max(0.01, ask - Math.max(0, sig.spread || 0));
+  const upnl = (sell - play.entry.price) * play.qty
+             - play.entry.fee_total - kfee(sell) * play.qty;
+  return {sell, upnl};
+}
 
 async function pollSignal() {
   const [s, spot] = await Promise.all([
     fj('/api/crypto/signal', null), fj('/api/crypto/spot', null)]);
+  lastSig = s;
   const btc = (spot && spot.btc) || (s && s.spot);
   $('spot').textContent = btc ? '₿ $' + btc.toLocaleString(undefined,
       {maximumFractionDigits:0}) : '—';
@@ -439,9 +454,14 @@ async function pollBot() {
 
   $('openTable').tBodies[0].innerHTML = open.map(([t, p]) => {
     const r = p.ranges || {};
+    const m = (lastSig && lastSig.ticker === t) ? liveMark(p, lastSig) : null;
+    const liveTd = m ? `${(m.sell * 100).toFixed(1)}¢` : '<span class="dim">—</span>';
+    const upnlTd = m ? `<span class="${m.upnl >= 0 ? 'pos' : 'neg'}">${money(m.upnl)}</span>`
+                     : '<span class="dim">—</span>';
     return `<tr><td>${esc(t)}</td>
       <td><span class="side-chip ${p.side.toLowerCase()}">${p.side}</span></td>
       <td>${p.qty}</td><td>${(p.entry.price * 100).toFixed(1)}¢</td>
+      <td>${liveTd}</td><td>${upnlTd}</td>
       <td>${r.sell_low != null ? r.sell_low.toFixed(1) + '¢' : '<span class="dim">—</span>'}</td>
       <td>${r.sell_high != null ? r.sell_high.toFixed(1) + '¢' : '<span class="dim">—</span>'}</td></tr>`;
   }).join('');
