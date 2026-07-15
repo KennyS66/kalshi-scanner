@@ -91,8 +91,13 @@ header {
 .range-sub { padding:0 18px 4px; font-size:11px; color:var(--mute); font-family:var(--sans); }
 
 /* range meter: buy band (blue) + sell band (yellow) + price/ask ticks */
-.meter-wrap { padding:12px 18px 16px; }
+.meter-wrap { padding:12px 18px 30px; }
 .meter { position:relative; height:34px; background:var(--hair); border-radius:7px; }
+.meter .grid { position:absolute; top:0; bottom:0; width:1px; background:var(--border);
+               opacity:.55; }
+.meter .grid-label { position:absolute; top:38px; transform:translateX(-50%);
+                     font-size:9px; color:var(--mute); opacity:.8;
+                     font-variant-numeric:tabular-nums; }
 .meter .band { position:absolute; top:0; bottom:0; display:flex; align-items:center;
                justify-content:center; font-size:10px; font-weight:800; letter-spacing:1px; }
 .meter .band.buy  { background:var(--blue-bg);   border:1px solid var(--blue-bd);
@@ -107,19 +112,22 @@ header {
                      font-variant-numeric:tabular-nums; }
 .meter .tick-label.px  { color:var(--fg); }
 .meter .tick-label.ask { color:var(--orange); }
-.meter-scale { display:flex; justify-content:space-between; margin-top:6px;
-               font-size:10px; color:var(--mute); font-variant-numeric:tabular-nums; }
 .range-banner.waiting { opacity:.5; filter:grayscale(60%); }
 
-/* ── tiles ── */
-.tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr));
-         gap:12px; margin:14px 20px; }
-.tile { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius);
-        padding:11px 14px; box-shadow:var(--card-shadow); }
+/* ── ledger strip: one row, one ledger ── */
+.tiles { display:flex; flex-wrap:wrap; margin:14px 20px;
+         background:var(--bg2); border:1px solid var(--border);
+         border-radius:var(--radius); box-shadow:var(--card-shadow); }
+.tile { flex:1 1 128px; padding:12px 16px; border-left:1px solid var(--hair); min-width:0; }
+.tile:first-child { border-left:none; }
+.tile.hero { flex:1.3 1 150px; }
+.tile.hero .v { font-size:27px; letter-spacing:-1px; }
 .tile .k { font-size:10px; color:var(--mute); text-transform:uppercase;
            letter-spacing:.7px; font-family:var(--sans); font-weight:600; }
-.tile .v { font-size:19px; font-weight:800; margin-top:3px; font-variant-numeric:tabular-nums; }
-.tile .s { font-size:10px; color:var(--mute); margin-top:2px; font-variant-numeric:tabular-nums; }
+.tile .v { font-size:18px; font-weight:800; margin-top:3px; font-variant-numeric:tabular-nums;
+           white-space:nowrap; }
+.tile .s { font-size:10px; color:var(--mute); margin-top:2px; font-variant-numeric:tabular-nums;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pos { color:var(--green); } .neg { color:var(--red); }
 
 /* ── panels ── */
@@ -185,15 +193,14 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <div class="range-sub" id="rangeSub">calibrated from graded banner-target history</div>
   <div class="meter-wrap">
     <div class="meter" id="meter"></div>
-    <div class="meter-scale"><span id="scaleLo">—</span><span id="scaleHi">—</span></div>
   </div>
 </div>
 
 <div class="tiles">
+  <div class="tile hero"><div class="k">day p&amp;l</div><div class="v" id="dayPnl">—</div>
+    <div class="s" id="dayStop"></div></div>
   <div class="tile"><div class="k">bankroll</div><div class="v" id="bankroll">—</div>
     <div class="s" id="bankrollSub"></div></div>
-  <div class="tile"><div class="k">day p&amp;l</div><div class="v" id="dayPnl">—</div>
-    <div class="s" id="dayStop"></div></div>
   <div class="tile"><div class="k">loss budget</div><div class="v" id="lossBudget">—</div>
     <div class="s" id="lossBudgetSub"></div></div>
   <div class="tile"><div class="k">win rate</div><div class="v" id="winRate">—</div>
@@ -307,16 +314,18 @@ function drawMeter(r, askC) {
   const lo = Math.max(0, Math.floor(r.bl - 4)), hi = Math.min(100, Math.ceil(r.sh + 4));
   const X = v => ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo) * 100).toFixed(2) + '%';
   const W = (a, b) => ((Math.min(b, hi) - Math.max(a, lo)) / (hi - lo) * 100).toFixed(2) + '%';
-  let h = `<div class="band buy" style="left:${X(r.bl)};width:${W(r.bl, r.bh)}">BUY</div>`
-        + `<div class="band sell" style="left:${X(r.sl)};width:${W(r.sl, r.sh)}">SELL</div>`;
+  let h = '';
+  for (let g = Math.ceil(lo / 5) * 5; g <= hi; g += 5)
+    h += `<div class="grid" style="left:${X(g)}"></div>`
+       + `<div class="grid-label" style="left:${X(g)}">${g}</div>`;
+  h += `<div class="band buy" style="left:${X(r.bl)};width:${W(r.bl, r.bh)}">BUY</div>`
+     + `<div class="band sell" style="left:${X(r.sl)};width:${W(r.sl, r.sh)}">SELL</div>`;
   h += `<div class="tick px" style="left:${X(r.buyC)}"></div>`
      + `<div class="tick-label px" style="left:${X(r.buyC)}">${r.buyC.toFixed(1)}¢</div>`;
   if (askC != null && Math.abs(askC - r.buyC) > 0.6)
     h += `<div class="tick ask" style="left:${X(askC)}"></div>`
        + `<div class="tick-label ask" style="left:${X(askC)}">ask ${askC.toFixed(1)}¢</div>`;
   $('meter').innerHTML = h;
-  $('scaleLo').textContent = lo + '¢';
-  $('scaleHi').textContent = hi + '¢';
 }
 
 let offsets = {yes:{}, no:{}};
