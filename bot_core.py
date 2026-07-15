@@ -26,6 +26,8 @@ DEFAULT_CONFIG = {
     "paper_bankroll": 500.0,   # paper-mode stake; 0/absent = use real balance
     "live_requested": False,   # GUI toggle target; live also needs BOT_LIVE=1 + EV bar
     "use_ranges": True,        # gate entries/exits on the calibrated buy/sell ranges
+    "ev_gate": True,           # skip entry buckets with proven-negative EV
+    "ev_gate_min_samples": 12, # bucket sample floor before the gate may skip
 }
 
 
@@ -179,3 +181,54 @@ def entry_blockers(sig: dict, cfg: dict, open_plays: dict,
 
 def should_time_exit(sig: dict, cfg: dict) -> bool:
     return (sig.get("mins_left") or 0.0) <= cfg["exit_mins"]
+
+
+# ── EV gate: learned per-bucket skip from the closed-trade journal ────
+# Buckets are deliberately coarse (side x entry-price band x time-left) so
+# they accumulate samples in days, not months. A bucket only ever blocks
+# entries once it holds >= ev_gate_min_samples closed trades AND its net
+# average is negative — small samples and profitable buckets never gate.
+
+def entry_bucket(side: str, sig: dict) -> str:
+    m = sig.get("mins_left") or 0.0
+    mb = "4-7m" if m < 7 else "7-11m" if m < 11 else "11m+"
+    ask = sig.get("yes_ask") if side == "YES" else sig.get("no_ask")
+    c = (ask or 0.0) * 100
+    pb = "cheap" if c < 35 else "mid" if c <= 65 else "rich"
+    return f"{side}|{pb}|{mb}"
+
+
+def update_bucket_stats(stats: dict, side: str, entry_sig: dict,
+                        net_pnl: float) -> None:
+    """Fold one closed trade into stats in place (incremental, O(1))."""
+    b = entry_bucket(side, entry_sig or {})
+    d = stats.setdefault(b, {"n": 0, "wins": 0, "net": 0.0})
+    d["n"] += 1
+    d["wins"] += 1 if net_pnl > 0 else 0
+    d["net"] = round(d["net"] + net_pnl, 4)
+    d["net_avg"] = round(d["net"] / d["n"], 4)
+    d["win_pct"] = round(100.0 * d["wins"] / d["n"], 1)
+
+
+def bucket_stats(trades: list) -> dict:
+    """Aggregate closed trades (with entry_sig snapshots) into buckets."""
+    stats = {}
+    for t in trades:
+        if t.get("status") != "closed" or t.get("net_pnl") is None:
+            continue
+        update_bucket_stats(stats, t.get("side", "?"),
+                            t.get("entry_sig") or {}, t["net_pnl"])
+    return stats
+
+
+def ev_gate_blocker(side: str, sig: dict, stats: dict, cfg: dict):
+    """Reason to skip this entry per learned bucket EV, or None."""
+    if not cfg.get("ev_gate", True):
+        return None
+    b = entry_bucket(side, sig)
+    d = (stats or {}).get(b)
+    floor = cfg.get("ev_gate_min_samples", 12)
+    if d and d["n"] >= floor and d["net_avg"] < 0:
+        return (f"ev_gate: bucket {b} net avg {d['net_avg']:+.2f} "
+                f"over {d['n']} trades")
+    return None

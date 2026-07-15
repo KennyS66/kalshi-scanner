@@ -11,5 +11,7 @@
   "mode": "paper",
   "paper_bankroll": 500.0,
   "live_requested": false,
-  "use_ranges": true
+  "use_ranges": true,
+  "ev_gate": true,
+  "ev_gate_min_samples": 12
 }

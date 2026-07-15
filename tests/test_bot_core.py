@@ -202,3 +202,46 @@ def test_load_offsets_missing_and_malformed(tmp_path):
     p2 = tmp_path / "ok.json"
     p2.write_text('{"yes": {"sell_low_offset_c": 2.5}, "no": {}}')
     assert load_offsets(p2)["yes"]["sell_low_offset_c"] == 2.5
+
+
+from bot_core import (entry_bucket, bucket_stats, update_bucket_stats,
+                      ev_gate_blocker)
+
+
+def _trade(side="YES", pnl=1.0, ask=0.50, mins=8.0):
+    return {"status": "closed", "side": side, "net_pnl": pnl,
+            "entry_sig": {"yes_ask": ask, "no_ask": round(1 - ask, 2),
+                          "mins_left": mins}}
+
+
+def test_entry_bucket_bands():
+    assert entry_bucket("YES", {"yes_ask": 0.30, "mins_left": 5}) == "YES|cheap|4-7m"
+    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8}) == "YES|mid|7-11m"
+    assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12}) == "NO|rich|11m+"
+
+
+def test_bucket_stats_and_incremental_update_agree():
+    trades = [_trade(pnl=1.0), _trade(pnl=-0.5), _trade(side="NO", pnl=2.0),
+              {"status": "open"}]                       # open rows ignored
+    agg = bucket_stats(trades)
+    inc = {}
+    for t in trades[:3]:
+        update_bucket_stats(inc, t["side"], t["entry_sig"], t["net_pnl"])
+    assert agg == inc
+    assert agg["YES|mid|7-11m"] == {"n": 2, "wins": 1, "net": 0.5,
+                                    "net_avg": 0.25, "win_pct": 50.0}
+
+
+def test_ev_gate_blocks_only_proven_negative_buckets():
+    cfg = dict(DEFAULT_CONFIG)
+    sig = {"yes_ask": 0.50, "no_ask": 0.50, "mins_left": 8}
+    losing = bucket_stats([_trade(pnl=-0.5) for _ in range(12)])
+    assert "ev_gate" in ev_gate_blocker("YES", sig, losing, cfg)
+    small = bucket_stats([_trade(pnl=-0.5) for _ in range(11)])
+    assert ev_gate_blocker("YES", sig, small, cfg) is None      # under floor
+    winning = bucket_stats([_trade(pnl=0.5) for _ in range(20)])
+    assert ev_gate_blocker("YES", sig, winning, cfg) is None    # profitable
+    other = {"yes_ask": 0.70, "no_ask": 0.30, "mins_left": 8}   # different bucket
+    assert ev_gate_blocker("YES", other, losing, cfg) is None
+    off = dict(cfg, ev_gate=False)
+    assert ev_gate_blocker("YES", sig, losing, off) is None

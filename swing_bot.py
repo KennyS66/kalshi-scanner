@@ -78,7 +78,8 @@ def append_jsonl(path, row: dict) -> None:
 
 from bot_core import (FlipDetector, load_config, entry_blockers,
                       should_time_exit, should_target_exit, size_contracts,
-                      compute_side_ranges, load_offsets)
+                      compute_side_ranges, load_offsets,
+                      bucket_stats, update_bucket_stats, ev_gate_blocker)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
@@ -114,6 +115,16 @@ class Bot:
         self.detector = FlipDetector(self.cfg["flip_threshold"])
         self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
         self.feed_fails = 0
+        # EV-gate stats: seeded from the closed-trade journal at boot, then
+        # kept current incrementally in _exit (no per-tick file scans).
+        self.ev_stats = bucket_stats(self._read_trades())
+
+    def _read_trades(self):
+        try:
+            return [json.loads(l) for l in
+                    (self.dir / TRADES_FILE).read_text().splitlines() if l.strip()]
+        except Exception:
+            return []
 
     def _ranges_for(self, side, sig):
         """Calibrated buy/sell range for `side`, or None when gating is off."""
@@ -171,6 +182,7 @@ class Bot:
             "net_pnl": pnl, "exit_reason": reason,
             "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
             "status": "closed"})
+        update_bucket_stats(self.ev_stats, play["side"], play["entry_sig"], pnl)
         self._event("exit", f"{reason} pnl {pnl:+.2f}", ticker, sig)
 
     def _flatten(self, reason):
@@ -272,6 +284,9 @@ class Bot:
         blockers = entry_blockers(sig, self.cfg, self.state["open_plays"],
                                   self.state["halted"], self.state["paused"],
                                   ranges)
+        ev = ev_gate_blocker(flip, sig, self.ev_stats, self.cfg)
+        if ev:
+            blockers.append(ev)
         if blockers:
             self._event("skip", "; ".join(blockers), ticker, sig)
             return

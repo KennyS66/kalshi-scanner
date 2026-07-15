@@ -240,6 +240,20 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
     </tr></thead><tbody></tbody></table></div>
   </div>
 
+  <div class="panel">
+    <h3>EV gate <span class="dim" style="text-transform:none">(learned skip buckets)</span></h3>
+    <div class="tbl-wrap"><table id="evTable"><thead><tr>
+      <th>bucket</th><th>n</th><th>win%</th><th>net avg</th><th>gate</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="empty" id="evEmpty" hidden>no closed trades bucketed yet</div>
+    <div class="empty" id="evNote"></div>
+  </div>
+
+  <div class="panel">
+    <h3>Replay tuner <span class="dim" style="text-transform:none">(nightly, suggestion only)</span></h3>
+    <div id="tunerBody" class="empty">no tuner report yet</div>
+  </div>
+
   <div class="panel wide">
     <h3>Trades</h3>
     <div class="tbl-wrap"><table id="tradeTable"><thead><tr>
@@ -412,6 +426,40 @@ async function pollBot() {
       <td>${r.sell_high != null ? r.sell_high.toFixed(1) + '¢' : '<span class="dim">—</span>'}</td></tr>`;
   }).join('');
   $('openEmpty').hidden = open.length > 0;
+
+  const floor = cfg.ev_gate_min_samples || 12;
+  const buckets = Object.entries(d.ev_buckets || {})
+    .sort((x, y) => y[1].n - x[1].n);
+  $('evTable').tBodies[0].innerHTML = buckets.map(([b, v]) => {
+    const gated = v.n >= floor && v.net_avg < 0;
+    return `<tr><td>${esc(b)}</td><td>${v.n}</td><td>${v.win_pct.toFixed(0)}%</td>
+      <td class="${v.net_avg >= 0 ? 'pos' : 'neg'}">${money(v.net_avg)}</td>
+      <td>${gated ? '<span class="neg" style="font-weight:800">SKIP</span>'
+                  : v.n < floor ? `<span class="dim">${v.n}/${floor}</span>`
+                  : '<span class="pos">open</span>'}</td></tr>`;
+  }).join('');
+  $('evEmpty').hidden = buckets.length > 0;
+  $('evNote').textContent = cfg.ev_gate === false
+    ? 'EV gate disabled in config'
+    : `buckets skip only at ≥${floor} samples with negative net avg`;
+
+  const tn = d.tuner;
+  if (tn) {
+    const fmt = p => Object.entries(p || {}).map(([k, v]) => `${k}=${v}`).join(' · ');
+    const res = r => r ? `${r.trades} trades, ${r.win_pct.toFixed(0)}% win, `
+      + `<span class="${r.net_total >= 0 ? 'pos' : 'neg'}">${money(r.net_total)}</span>` : '—';
+    $('tunerBody').innerHTML =
+      `<div style="font-family:var(--sans);font-size:12px;line-height:1.9">
+       <div><span class="dim">ran ${esc(tn.day)} · ${tn.window_days}d window · `
+      + `${tn.train_rows}+${tn.validate_rows} rows (train+validate)</span></div>
+       <div>current: <b>${esc(fmt(tn.current && tn.current.params))}</b></div>
+       <div class="dim">→ train ${res(tn.current && tn.current.train)} · `
+      + `validate ${res(tn.current && tn.current.validate)}</div>
+       <div style="margin-top:6px">${tn.suggested
+         ? 'suggested: <b class="pos">' + esc(fmt(tn.suggested)) + '</b>'
+         : '<b>keep current config</b>'}</div>
+       <div class="dim">${esc(tn.note || '')}</div></div>`;
+  }
 
   $('reasonTable').tBodies[0].innerHTML =
     Object.entries((d.stats && d.stats.by_exit_reason) || {}).map(([k, v]) =>

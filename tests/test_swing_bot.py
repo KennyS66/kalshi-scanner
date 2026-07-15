@@ -269,3 +269,38 @@ def test_use_ranges_false_restores_unGated_entry(tmp_path, monkeypatch):
         bot.tick(now_ts=1000.0)
     assert "M1" in bot.state["open_plays"]
     assert bot.state["open_plays"]["M1"]["ranges"] is None
+
+
+def _losing_trade_row(ask=0.52, mins=10.0):
+    return {"status": "closed", "side": "YES", "net_pnl": -0.5,
+            "ticker": "OLD", "qty": 1, "entry_price": ask, "exit_price": 0.4,
+            "entry_ts": 1.0, "exit_ts": 2.0, "fees": 0.02, "exit_reason": "time",
+            "mode": "paper",
+            "entry_sig": {"yes_ask": ask, "no_ask": round(1 - ask, 2),
+                          "mins_left": mins}}
+
+
+def test_ev_gate_skips_poisoned_bucket_from_journal(tmp_path, monkeypatch):
+    # 12 historical losers in YES|mid|7-11m -> boot-loaded gate blocks entry.
+    (tmp_path / TRADES_FILE).write_text(
+        "\n".join(json.dumps(_losing_trade_row()) for _ in range(12)))
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["open_plays"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any("ev_gate" in e["reason"] for e in events if e["action"] == "skip")
+
+
+def test_ev_stats_update_on_live_exit(tmp_path, monkeypatch):
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                # enter
+        _sig(whale_trend=-3.0, momentum=-20.0, yes_ask=0.60, ts=1010.0),  # exit
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    assert bot.ev_stats == {}
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert sum(v["n"] for v in bot.ev_stats.values()) == 1
