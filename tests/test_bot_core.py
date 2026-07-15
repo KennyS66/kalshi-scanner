@@ -245,3 +245,28 @@ def test_ev_gate_blocks_only_proven_negative_buckets():
     assert ev_gate_blocker("YES", other, losing, cfg) is None
     off = dict(cfg, ev_gate=False)
     assert ev_gate_blocker("YES", sig, losing, off) is None
+
+
+from bot_core import trade_budget, loss_headroom, size_for_budget
+
+
+def test_loss_headroom_consumed_by_losses_only():
+    cfg = dict(DEFAULT_CONFIG)                     # cap 100
+    assert loss_headroom(0.0, cfg) == 100.0
+    assert loss_headroom(-40.0, cfg) == 60.0
+    assert loss_headroom(+50.0, cfg) == 100.0      # profit never expands it
+    assert loss_headroom(-120.0, cfg) == 0.0
+    assert loss_headroom(-999.0, dict(cfg, max_loss_usd=0)) == float("inf")
+
+
+def test_trade_budget_matches_remaining_headroom():
+    cfg = dict(DEFAULT_CONFIG)   # risk_pct .02, cap 100, trade_risk_frac .10
+    assert trade_budget(500.0, 0.0, cfg) == 10.0       # min(10, 10)
+    assert trade_budget(500.0, -50.0, cfg) == 5.0      # headroom 50 -> $5
+    assert trade_budget(500.0, -100.0, cfg) == 0.0     # cap hit -> no size
+    assert trade_budget(500.0, -50.0, dict(cfg, max_loss_usd=0)) == 10.0
+
+
+def test_size_for_budget():
+    assert size_for_budget(10.0, 0.50) > 0
+    assert size_for_budget(0.0, 0.50) == 0

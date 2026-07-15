@@ -412,3 +412,47 @@ def test_stop_loss_disabled_by_zero_frac(tmp_path, monkeypatch):
     for _ in sigs:
         bot.tick(now_ts=1000.0)
     assert "M1" in bot.state["open_plays"]          # still holding, no stop
+
+
+def test_max_loss_cap_flattens_blocks_and_survives_day_roll(tmp_path, monkeypatch):
+    # Journal already shows -101 total -> boot trips the cap before any entry.
+    rows = [dict(_losing_trade_row(), net_pnl=-50.5) for _ in range(2)]
+    (tmp_path / TRADES_FILE).write_text("\n".join(json.dumps(r) for r in rows))
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    assert bot.state["total_pnl"] == -101.0
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["loss_capped"] is True
+    assert bot.state["open_plays"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any("MAX LOSS CAP" in e["reason"] for e in events)
+    skips = [e for e in events if e["action"] == "skip"]
+    assert any("max_loss_cap" in e["reason"] for e in skips)
+    # Day roll resets the day stop but NOT the cap
+    bot.tick(now_ts=1000.0 + 86400 * 30)
+    assert bot.state["loss_capped"] is True
+
+
+def test_max_loss_cap_releases_when_config_raised(tmp_path, monkeypatch):
+    import json as _json
+    rows = [dict(_losing_trade_row(), net_pnl=-101.0)]
+    (tmp_path / TRADES_FILE).write_text("\n".join(json.dumps(r) for r in rows))
+    bot = _mkbot(tmp_path, [_sig(), _sig()], monkeypatch)
+    bot.tick(now_ts=1000.0)
+    assert bot.state["loss_capped"] is True
+    (tmp_path / "config.json").write_text(_json.dumps({"max_loss_usd": 200.0}))
+    bot.tick(now_ts=1005.0)                        # hot-reload raises the cap
+    assert "loss_capped" not in bot.state
+
+
+def test_sizing_shrinks_with_consumed_loss_budget(tmp_path, monkeypatch):
+    # total_pnl -50 -> headroom 50 -> budget $5 -> 9 contracts at 0.52+fee
+    rows = [dict(_losing_trade_row(), net_pnl=-50.0)]
+    (tmp_path / TRADES_FILE).write_text(json.dumps(rows[0]))
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    qty = bot.state["open_plays"]["M1"]["qty"]
+    assert 0 < qty <= 9                            # vs 18 with full headroom

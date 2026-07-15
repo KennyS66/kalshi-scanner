@@ -34,6 +34,11 @@ DEFAULT_CONFIG = {
                                # fraction below entry (0 = no stop): fires
                                # while the market is live, never rides a
                                # loser to settlement / a stale rolled exit
+    "max_loss_usd": 100.0,     # hard cap on TOTAL net loss (0 = off): at the
+                               # cap the bot flattens and blocks all entries
+    "trade_risk_frac": 0.10,   # per-trade cost budget as a fraction of the
+                               # REMAINING max-loss headroom (sizes shrink as
+                               # losses consume the budget)
 }
 
 
@@ -141,13 +146,35 @@ def should_target_exit(play: dict, sig: dict) -> bool:
     return px is not None and px >= r["sell_low"]
 
 
-def size_contracts(bankroll: float, price: float, risk_pct: float) -> int:
-    """Contracts so that qty * (price + fee) <= bankroll * risk_pct. 0 = can't afford."""
-    budget = bankroll * risk_pct
+def size_for_budget(budget: float, price: float) -> int:
+    """Contracts so that qty * (price + fee) <= budget. 0 = can't afford."""
     cost = price + fee(price)
     if cost <= 0:
         return 0
     return max(0, math.floor(budget / cost))
+
+
+def size_contracts(bankroll: float, price: float, risk_pct: float) -> int:
+    """Contracts so that qty * (price + fee) <= bankroll * risk_pct. 0 = can't afford."""
+    return size_for_budget(bankroll * risk_pct, price)
+
+
+def loss_headroom(total_pnl: float, cfg: dict) -> float:
+    """Dollars of max-loss budget left; profits never expand it past the cap."""
+    cap = cfg.get("max_loss_usd") or 0.0
+    return max(0.0, cap + min(0.0, total_pnl)) if cap > 0 else float("inf")
+
+
+def trade_budget(bankroll: float, total_pnl: float, cfg: dict) -> float:
+    """Per-trade cost budget MATCHED to the remaining max-loss headroom:
+    the smaller of the classic bankroll fraction and trade_risk_frac of
+    what's left before the cap. Worst case (settle to 0) a trade burns
+    only that slice, so the cap can't be blown through in one move."""
+    base = bankroll * cfg["risk_pct"]
+    head = loss_headroom(total_pnl, cfg)
+    if head == float("inf"):
+        return base
+    return min(base, head * cfg.get("trade_risk_frac", 0.10))
 
 
 def entry_blockers(sig: dict, cfg: dict, open_plays: dict,

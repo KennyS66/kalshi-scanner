@@ -78,7 +78,8 @@ def append_jsonl(path, row: dict) -> None:
 
 from bot_core import (FlipDetector, load_config, entry_blockers,
                       should_time_exit, should_target_exit, should_stop_exit,
-                      size_contracts, compute_side_ranges, load_offsets,
+                      size_for_budget, trade_budget, loss_headroom,
+                      compute_side_ranges, load_offsets,
                       bucket_stats, update_bucket_stats, ev_gate_blocker)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
@@ -128,9 +129,13 @@ class Bot:
         self.detector = FlipDetector(self.cfg["flip_threshold"])
         self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
         self.feed_fails = 0
-        # EV-gate stats: seeded from the closed-trade journal at boot, then
-        # kept current incrementally in _exit (no per-tick file scans).
-        self.ev_stats = bucket_stats(self._read_trades())
+        # EV-gate stats + lifetime P&L: seeded from the closed-trade journal
+        # at boot, then kept current incrementally in _exit.
+        trades = self._read_trades()
+        self.ev_stats = bucket_stats(trades)
+        self.state["total_pnl"] = round(sum(
+            t["net_pnl"] for t in trades
+            if t.get("status") == "closed" and t.get("net_pnl") is not None), 4)
 
     def _read_trades(self):
         try:
@@ -158,7 +163,9 @@ class Bot:
     # ── trade lifecycle ───────────────────────────────────────────────
     def _enter(self, side, sig, ranges=None):
         price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
-        qty = size_contracts(self.state["bankroll"], price, self.cfg["risk_pct"])
+        budget = trade_budget(self.state["bankroll"],
+                              self.state.get("total_pnl", 0.0), self.cfg)
+        qty = size_for_budget(budget, price)
         if qty < 1:
             self._event("skip", f"budget too small for 1 contract at {price}",
                         sig["ticker"], sig)
@@ -184,6 +191,8 @@ class Bot:
         fill = self.broker.sell(play["side"], play["qty"], fill_sig)
         pnl = round_trip_pnl(play["entry"], fill)
         self.state["day_pnl"] = round(self.state["day_pnl"] + pnl, 4)
+        self.state["total_pnl"] = round(
+            self.state.get("total_pnl", 0.0) + pnl, 4)
         del self.state["open_plays"][ticker]
         self.detector.forget(ticker)
         append_jsonl(self.dir / TRADES_FILE, {
@@ -265,6 +274,23 @@ class Bot:
             self._flatten("halt")
             self._event("halt", f"day_pnl {self.state['day_pnl']:+.2f} <= -{stop:.2f}")
 
+    def _check_max_loss(self):
+        """Hard cap on TOTAL loss. Unlike the day stop it never resets on a
+        day roll — trading stays blocked until the user raises max_loss_usd
+        (or the journal is reset). Condition-based, so a config raise
+        releases it without touching state."""
+        capped = loss_headroom(self.state.get("total_pnl", 0.0), self.cfg) <= 0
+        if capped and not self.state.get("loss_capped"):
+            self.state["loss_capped"] = True
+            self._flatten("max_loss")
+            self._event("halt", f"MAX LOSS CAP: total_pnl "
+                        f"{self.state.get('total_pnl', 0.0):+.2f} <= "
+                        f"-{self.cfg.get('max_loss_usd', 0):.0f} — trading "
+                        f"blocked until max_loss_usd is raised")
+        elif not capped and self.state.get("loss_capped"):
+            self.state.pop("loss_capped", None)
+            self._event("resume", "max-loss cap released (config raised)")
+
     # ── main tick ─────────────────────────────────────────────────────
     def tick(self, now_ts=None):
         now_ts = now_ts if now_ts is not None else time.time()
@@ -276,6 +302,7 @@ class Bot:
         self._handle_control()
         self._check_loop_deadman(now_ts)
         self._check_day_stop()
+        self._check_max_loss()
 
         sig = self.fetch()
         if sig is None:
@@ -327,6 +354,8 @@ class Bot:
         ev = ev_gate_blocker(flip, sig, self.ev_stats, self.cfg)
         if ev:
             blockers.append(ev)
+        if self.state.get("loss_capped"):
+            blockers.append("max_loss_cap")
         if blockers:
             self._event("skip", "; ".join(blockers), ticker, sig)
             return

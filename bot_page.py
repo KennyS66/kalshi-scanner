@@ -194,6 +194,8 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
     <div class="s" id="bankrollSub"></div></div>
   <div class="tile"><div class="k">day p&amp;l</div><div class="v" id="dayPnl">—</div>
     <div class="s" id="dayStop"></div></div>
+  <div class="tile"><div class="k">loss budget</div><div class="v" id="lossBudget">—</div>
+    <div class="s" id="lossBudgetSub"></div></div>
   <div class="tile"><div class="k">win rate</div><div class="v" id="winRate">—</div>
     <div class="s" id="winRateSub"></div></div>
   <div class="tile"><div class="k">net avg / trade</div><div class="v" id="netAvg">—</div>
@@ -403,6 +405,15 @@ async function pollBot() {
   $('dayPnl').className = 'v ' + ((s.day_pnl || 0) >= 0 ? 'pos' : 'neg');
   $('dayStop').textContent = s.bankroll
     ? `halt at -$${((cfg.day_stop_pct || .1) * s.bankroll).toFixed(0)}` : '';
+  const cap = cfg.max_loss_usd || 0, tot = s.total_pnl || 0;
+  if (cap > 0) {
+    const head = Math.max(0, cap + Math.min(0, tot));
+    $('lossBudget').textContent = '$' + head.toFixed(0) + ' / $' + cap.toFixed(0);
+    $('lossBudget').className = 'v ' + (head <= 0 ? 'neg' : head < cap * .3 ? '' : 'pos');
+    $('lossBudgetSub').textContent = head <= 0
+      ? 'MAX LOSS HIT — trading blocked'
+      : `total ${money(tot)} · sizes ${((cfg.trade_risk_frac || .1) * 100).toFixed(0)}% of headroom`;
+  } else { $('lossBudget').textContent = 'off'; $('lossBudgetSub').textContent = ''; }
 
   const a = (d.stats && d.stats.all_time) || {n: 0};
   const td = (d.stats && d.stats.today) || {n: 0};
