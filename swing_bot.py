@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import os
 import time
+import urllib.request
 from pathlib import Path
 
 BOT_DIR = Path(__file__).parent / "data" / "bot"
@@ -28,7 +29,7 @@ def _utc_day(ts: float) -> str:
 
 def fresh_state() -> dict:
     return {"mode": "paper", "paused": False, "halted": False,
-            "day": _utc_day(time.time()), "day_pnl": 0.0,
+            "day": _utc_day(0.0), "day_pnl": 0.0,
             "bankroll": 500.0, "bankroll_ts": 0.0,
             "open_plays": {}, "heartbeat": 0.0, "last_control_nonce": 0}
 
@@ -73,3 +74,177 @@ def append_jsonl(path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(json.dumps(row) + "\n")
+
+
+from bot_core import (FlipDetector, load_config, entry_blockers,
+                      should_time_exit, size_contracts)
+from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
+                        FALLBACK_BANKROLL)
+
+SIG_SNAPSHOT_KEYS = ("price", "yes_ask", "no_ask", "mins_left",
+                     "whale_trend", "momentum", "buy_pressure")
+BANKROLL_REFRESH_SECS = 3600
+
+
+def _snap(sig: dict) -> dict:
+    return {k: sig.get(k) for k in SIG_SNAPSHOT_KEYS}
+
+
+def fetch_signal():
+    try:
+        with urllib.request.urlopen(
+                "http://localhost:9050/api/crypto/signal", timeout=4) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+class Bot:
+    def __init__(self, bot_dir=None, fetch_fn=fetch_signal):
+        self.dir = Path(bot_dir) if bot_dir else BOT_DIR
+        self.fetch = fetch_fn
+        self.state = load_state(self.dir)
+        self.cfg = load_config(self.dir / CONFIG_FILE)
+        self.detector = FlipDetector(self.cfg["flip_threshold"])
+        self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
+        self.feed_fails = 0
+
+    # ── logging ───────────────────────────────────────────────────────
+    def _event(self, action, reason="", ticker="", sig=None, ts=None):
+        append_jsonl(self.dir / EVENTS_FILE,
+                     {"ts": ts if ts is not None else time.time(),
+                      "ticker": ticker, "action": action, "reason": reason,
+                      "sig": _snap(sig) if sig else None})
+
+    # ── trade lifecycle ───────────────────────────────────────────────
+    def _enter(self, side, sig):
+        price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
+        qty = size_contracts(self.state["bankroll"], price, self.cfg["risk_pct"])
+        if qty < 1:
+            self._event("skip", f"budget too small for 1 contract at {price}",
+                        sig["ticker"], sig)
+            return
+        fill = self.broker.buy(side, qty, sig)
+        self.state["open_plays"][sig["ticker"]] = {
+            "side": side, "qty": qty, "entry": fill,
+            "entry_sig": _snap(sig), "last_sig": dict(sig)}
+        self._event("enter", f"{side} x{qty} @ {fill['price']}", sig["ticker"], sig)
+
+    def _exit(self, ticker, play, sig, reason):
+        fill = self.broker.sell(play["side"], play["qty"], sig)
+        pnl = round_trip_pnl(play["entry"], fill)
+        self.state["day_pnl"] = round(self.state["day_pnl"] + pnl, 4)
+        del self.state["open_plays"][ticker]
+        self.detector.forget(ticker)
+        append_jsonl(self.dir / TRADES_FILE, {
+            "ticker": ticker, "mode": self.broker.mode, "side": play["side"],
+            "qty": play["qty"], "entry_price": play["entry"]["price"],
+            "exit_price": fill["price"], "entry_ts": play["entry"]["ts"],
+            "exit_ts": fill["ts"],
+            "fees": round(play["entry"]["fee_total"] + fill["fee_total"], 4),
+            "net_pnl": pnl, "exit_reason": reason,
+            "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
+            "status": "closed"})
+        self._event("exit", f"{reason} pnl {pnl:+.2f}", ticker, sig)
+
+    def _flatten(self, reason):
+        for ticker in list(self.state["open_plays"]):
+            play = self.state["open_plays"][ticker]
+            self._exit(ticker, play, play["last_sig"], reason)
+
+    # ── maintenance ───────────────────────────────────────────────────
+    def _refresh_bankroll(self, now_ts):
+        if now_ts - self.state["bankroll_ts"] < BANKROLL_REFRESH_SECS:
+            return
+        bal = fetch_bankroll()
+        if bal is not None:
+            self.state["bankroll"] = bal
+        elif not self.state["bankroll"]:
+            self.state["bankroll"] = FALLBACK_BANKROLL
+        self.state["bankroll_ts"] = now_ts
+
+    def _handle_control(self):
+        cmd, nonce = read_control(self.dir, self.state["last_control_nonce"])
+        self.state["last_control_nonce"] = nonce
+        if cmd == "pause":
+            self.state["paused"] = True
+            self._event("pause", "control")
+        elif cmd == "resume":
+            self.state["paused"] = False
+            self._event("resume", "control")
+        elif cmd == "flatten":
+            self._flatten("flatten")
+            self._event("flatten", "control")
+
+    def _check_day_stop(self):
+        stop = self.cfg["day_stop_pct"] * self.state["bankroll"]
+        if not self.state["halted"] and self.state["day_pnl"] <= -stop:
+            self.state["halted"] = True
+            self._flatten("halt")
+            self._event("halt", f"day_pnl {self.state['day_pnl']:+.2f} <= -{stop:.2f}")
+
+    # ── main tick ─────────────────────────────────────────────────────
+    def tick(self, now_ts=None):
+        now_ts = now_ts if now_ts is not None else time.time()
+        if roll_day_if_needed(self.state, now_ts):
+            self._event("day_roll", self.state["day"])
+        self.cfg = load_config(self.dir / CONFIG_FILE)   # hot-reload
+        self.detector.flip_threshold = self.cfg["flip_threshold"]
+        self._refresh_bankroll(now_ts)
+        self._handle_control()
+        self._check_day_stop()
+
+        sig = self.fetch()
+        if sig is None:
+            self.feed_fails += 1
+            if self.feed_fails == 3:
+                self._event("feed_down", "3 consecutive fetch failures")
+        else:
+            self.feed_fails = 0
+            self._manage(sig)
+
+        self.state["heartbeat"] = now_ts
+        save_state(self.dir, self.state)
+
+    def _manage(self, sig):
+        ticker = sig.get("ticker")
+        # exits / rolled markets first
+        for t in list(self.state["open_plays"]):
+            play = self.state["open_plays"][t]
+            if sig.get("status") == "ok" and t == ticker:
+                play["last_sig"] = dict(sig)
+                if should_time_exit(sig, self.cfg):
+                    self._exit(t, play, sig, "time")
+            else:
+                self._exit(t, play, play["last_sig"], "rolled")
+
+        if sig.get("status") != "ok":
+            return
+        flip = self.detector.update(ticker, sig.get("whale_trend") or 0.0,
+                                    sig.get("momentum") or 0.0)
+        # opposite-flip exit for a still-open play on this market
+        play = self.state["open_plays"].get(ticker)
+        if play and flip and flip != play["side"]:
+            self._exit(ticker, play, sig, "flip")
+            return
+        if not flip:
+            return
+        blockers = entry_blockers(sig, self.cfg, self.state["open_plays"],
+                                  self.state["halted"], self.state["paused"])
+        if blockers:
+            self._event("skip", "; ".join(blockers), ticker, sig)
+            return
+        self._enter(flip, sig)
+
+    def run(self):
+        print(f"swing_bot up — mode={self.broker.mode} dir={self.dir}", flush=True)
+        while True:
+            try:
+                self.tick()
+            except Exception as e:
+                self._event("error", repr(e))
+            time.sleep(self.cfg.get("poll_secs", 5))
+
+
+if __name__ == "__main__":
+    Bot().run()
