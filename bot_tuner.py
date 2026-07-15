@@ -40,6 +40,8 @@ GRID = {
     "flip_exit": [True, False],
     "max_entry_momentum": [0.0, 25.0],
     "max_entries_per_market": [0, 2],
+    "decided_lo": [0.05, 0.08],   # tighter band skips near-decided lottery
+    "decided_hi": [0.95, 0.92],   # entries (the 5.6c NO x151 stop on Jul 15)
 }
 QUICK_GRID = {
     "flip_threshold": [2.0, 3.0],
