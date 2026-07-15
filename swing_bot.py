@@ -65,7 +65,8 @@ def roll_day_if_needed(state: dict, now_ts: float) -> bool:
     today = _utc_day(now_ts)
     if state.get("day") == today:
         return False
-    state.update({"day": today, "day_pnl": 0.0, "halted": False})
+    state.update({"day": today, "day_pnl": 0.0, "halted": False,
+                  "market_entries": {}})
     return True
 
 
@@ -171,6 +172,8 @@ class Bot:
                         sig["ticker"], sig)
             return
         fill = self.broker.buy(side, qty, sig)
+        me = self.state.setdefault("market_entries", {})
+        me[sig["ticker"]] = me.get(sig["ticker"], 0) + 1
         self.state["open_plays"][sig["ticker"]] = {
             "side": side, "qty": qty, "entry": fill, "ranges": ranges,
             "entry_sig": _snap(sig), "last_sig": dict(sig)}
@@ -343,8 +346,9 @@ class Bot:
         # opposite-flip exit for a still-open play on this market
         play = self.state["open_plays"].get(ticker)
         if play and flip and flip != play["side"]:
-            self._exit(ticker, play, sig, "flip")
-            return
+            if self.cfg.get("flip_exit", True):
+                self._exit(ticker, play, sig, "flip")
+            return   # flip_exit off: hold — target/stop/time resolve it
         if not flip:
             return
         ranges = self._ranges_for(flip, sig)
@@ -356,6 +360,10 @@ class Bot:
             blockers.append(ev)
         if self.state.get("loss_capped"):
             blockers.append("max_loss_cap")
+        mcap = self.cfg.get("max_entries_per_market") or 0
+        n_mkt = self.state.get("market_entries", {}).get(ticker, 0)
+        if mcap and n_mkt >= mcap:
+            blockers.append(f"market_entries {n_mkt} >= {mcap} — whipsaw guard")
         if blockers:
             self._event("skip", "; ".join(blockers), ticker, sig)
             return

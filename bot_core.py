@@ -39,6 +39,11 @@ DEFAULT_CONFIG = {
     "trade_risk_frac": 0.10,   # per-trade cost budget as a fraction of the
                                # REMAINING max-loss headroom (sizes shrink as
                                # losses consume the budget)
+    "flip_exit": True,         # exit an open play on the opposite flip; off =
+                               # let target/stop/time resolve it (whipsaw fix)
+    "max_entry_momentum": 0.0, # skip flips with |momentum| above this — late,
+                               # chase-y entries (0 = off)
+    "max_entries_per_market": 0,  # cap re-entries per 15m market (0 = off)
 }
 
 
@@ -200,6 +205,10 @@ def entry_blockers(sig: dict, cfg: dict, open_plays: dict,
         blockers.append("already_open")
     elif len(open_plays) >= cfg["max_open_plays"]:
         blockers.append(f"max_open {len(open_plays)}")
+    mom_cap = cfg.get("max_entry_momentum") or 0.0
+    if mom_cap and abs(sig.get("momentum") or 0.0) > mom_cap:
+        blockers.append(f"momentum {abs(sig.get('momentum') or 0.0):.0f} > "
+                        f"{mom_cap:.0f} — late entry")
     if ranges is not None:
         ask = sig["yes_ask"] if ranges["side"] == "YES" else sig["no_ask"]
         ask_c = ask * 100

@@ -34,10 +34,12 @@ OFFSETS = Path(__file__).parent / "data" / "whales" / "banner_offsets.json"
 SWEEP_DIR = BOT_DIR / "tuner_sweep"
 
 GRID = {
-    "flip_threshold": [1.5, 2.0, 3.0],
-    "min_entry_mins": [3.0, 4.0, 6.0],
-    "exit_mins": [1.5, 2.0],
+    "flip_threshold": [2.0, 3.0],
+    "min_entry_mins": [4.0, 6.0],
     "use_ranges": [True, False],
+    "flip_exit": [True, False],
+    "max_entry_momentum": [0.0, 25.0],
+    "max_entries_per_market": [0, 2],
 }
 QUICK_GRID = {
     "flip_threshold": [2.0, 3.0],

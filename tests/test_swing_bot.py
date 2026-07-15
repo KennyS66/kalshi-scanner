@@ -456,3 +456,57 @@ def test_sizing_shrinks_with_consumed_loss_budget(tmp_path, monkeypatch):
         bot.tick(now_ts=1000.0)
     qty = bot.state["open_plays"]["M1"]["qty"]
     assert 0 < qty <= 9                            # vs 18 with full headroom
+
+
+def test_flip_exit_off_holds_through_opposite_flip(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps({"flip_exit": False}))
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                  # enter YES
+        _sig(whale_trend=-3.0, momentum=-20.0, ts=1010.0),                # opp flip: HOLD
+        _sig(whale_trend=-3.5, momentum=-20.0, yes_ask=0.66, ts=1015.0),  # target 64>=62
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1 and trades[0]["exit_reason"] == "target"
+
+
+def test_momentum_cap_blocks_late_entries(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps({"max_entry_momentum": 25.0}))
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["open_plays"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any("late entry" in e["reason"] for e in events if e["action"] == "skip")
+
+
+def test_per_market_entry_cap(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps({"max_entries_per_market": 2}))
+    flip_up = dict(whale_trend=3.0, momentum=30.0)
+    flip_dn = dict(whale_trend=-3.0, momentum=-30.0)
+    # After every exit the detector forgets the ticker, so each new flip
+    # needs a reseed sample first.
+    sigs = [
+        _sig(),                                   # seed (down)
+        _sig(**flip_up, ts=1005.0),               # entry 1 (YES)
+        _sig(**flip_dn, ts=1010.0),               # opp flip -> exit + forget
+        _sig(**flip_dn, ts=1015.0),               # reseed (down)
+        _sig(**flip_up, ts=1020.0),               # entry 2 (YES)
+        _sig(**flip_dn, ts=1025.0),               # opp flip -> exit + forget
+        _sig(**flip_dn, ts=1030.0),               # reseed (down)
+        _sig(**flip_up, ts=1035.0),               # entry 3 -> BLOCKED
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["market_entries"]["M1"] == 2
+    assert bot.state["open_plays"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any("whipsaw guard" in e["reason"] for e in events if e["action"] == "skip")

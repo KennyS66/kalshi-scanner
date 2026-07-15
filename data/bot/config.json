@@ -17,5 +17,8 @@
   "loop_deadman_mins": 45,
   "stop_loss_frac": 0.5,
   "max_loss_usd": 100.0,
-  "trade_risk_frac": 0.10
+  "trade_risk_frac": 0.10,
+  "flip_exit": false,
+  "max_entry_momentum": 25.0,
+  "max_entries_per_market": 2
 }
