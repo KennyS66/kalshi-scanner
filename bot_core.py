@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
     "decided_hi": 0.95,
     "poll_secs": 5,
     "mode": "paper",
+    "paper_bankroll": 500.0,   # paper-mode stake; 0/absent = use real balance
     "live_requested": False,   # GUI toggle target; live also needs BOT_LIVE=1 + EV bar
 }
 

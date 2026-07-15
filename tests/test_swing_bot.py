@@ -181,3 +181,22 @@ def test_feed_down_event_after_three_failures(tmp_path, monkeypatch):
         bot.tick(now_ts=1000.0)
     events = _rows(tmp_path, EVENTS_FILE)
     assert sum(1 for e in events if e["action"] == "feed_down") == 1  # fires once
+
+
+def test_paper_bankroll_override_sizes_trades_and_skips_balance_fetch(tmp_path, monkeypatch):
+    import json as _json
+    calls = []
+    monkeypatch.setattr(bot_broker, "_balance_dollars",
+                        lambda: calls.append(1) or 123.0)
+    (tmp_path / "config.json").write_text(_json.dumps({"paper_bankroll": 400.0}))
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    it = iter(sigs)
+    # now_ts far past bankroll_ts=0 so the hourly guard WOULD fetch the live
+    # balance (123.0) if the paper_bankroll override didn't short-circuit it.
+    bot = Bot(tmp_path, fetch_fn=lambda: next(it, None))
+    bot.tick(now_ts=2_000_000_000.0)
+    bot.tick(now_ts=2_000_000_005.0)
+    assert calls == []                                   # no live balance fetch
+    assert bot.state["bankroll"] == 400.0                # from config, not 123/500
+    # $400 * 2% = $8 budget; yes_ask 0.52 + fee 0.02 = 0.54 -> 14 contracts
+    assert bot.state["open_plays"]["M1"]["qty"] == 14

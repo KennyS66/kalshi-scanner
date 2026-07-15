@@ -162,6 +162,13 @@ class Bot:
 
     # ── maintenance ───────────────────────────────────────────────────
     def _refresh_bankroll(self, now_ts):
+        # Paper mode with a configured paper bankroll: fixed stake, no live
+        # balance fetch. Live mode (future) always uses the real balance.
+        pb = self.cfg.get("paper_bankroll") or 0
+        if self.broker.mode == "paper" and pb > 0:
+            self.state["bankroll"] = float(pb)
+            self.state["bankroll_ts"] = now_ts
+            return
         if now_ts - self.state["bankroll_ts"] < BANKROLL_REFRESH_SECS:
             return
         bal = fetch_bankroll()

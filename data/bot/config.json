@@ -9,5 +9,6 @@
   "decided_hi": 0.95,
   "poll_secs": 5,
   "mode": "paper",
+  "paper_bankroll": 500.0,
   "live_requested": false
 }
