@@ -6,7 +6,7 @@ signal row in ts order, filling into a throwaway data dir. Use this to
 sanity-check trigger frequency and tune config before arming the daemon.
 
 Usage:  python3 bot_replay.py [--log data/whales/signal_feature_log.jsonl]
-                              [--out data/bot/replay]
+                              [--out data/bot/replay] [--bankroll 500.0]
 Final line: "REPLAY_RESULT: trades=N win=P% net_avg=$X net_total=$X"
 """
 import argparse
@@ -44,13 +44,19 @@ def _rows(log_path):
     return rows
 
 
-def replay(log_path, out_dir) -> dict:
+def replay(log_path, out_dir, bankroll=500.0) -> dict:
     out = Path(out_dir)
     if out.exists():
         shutil.rmtree(out)
     rows = _rows(log_path)
     it = iter(rows)
     bot = Bot(out, fetch_fn=lambda: next(it, None))
+    # Replay must be offline and deterministic: historical row timestamps make
+    # now_ts - bankroll_ts >= BANKROLL_REFRESH_SECS constantly, which would
+    # otherwise make Bot._refresh_bankroll call the live signed Kalshi balance
+    # GET on (near) every tick. Pin bankroll so that guard never fires.
+    bot.state["bankroll"] = float(bankroll)
+    bot.state["bankroll_ts"] = 10**12
     for r in rows:
         bot.tick(now_ts=r.get("ts", 0))
     trades_file = out / TRADES_FILE
@@ -68,8 +74,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", default=str(FEATURE_LOG))
     ap.add_argument("--out", default="data/bot/replay")
+    ap.add_argument("--bankroll", type=float, default=500.0)
     args = ap.parse_args()
-    r = replay(args.log, args.out)
+    r = replay(args.log, args.out, bankroll=args.bankroll)
     print(f"signals={r['signals']}  round trips={r['trades']}  wins={r['wins']}")
     win_pct = 100 * r["wins"] / r["trades"] if r["trades"] else 0.0
     print(f"REPLAY_RESULT: trades={r['trades']} win={win_pct:.0f}% "

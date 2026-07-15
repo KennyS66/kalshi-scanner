@@ -84,6 +84,9 @@ def entry_blockers(sig: dict, cfg: dict, open_plays: dict,
     if sig.get("status") != "ok":
         blockers.append("status_not_ok")
         return blockers
+    if sig.get("yes_ask") is None or sig.get("no_ask") is None:
+        blockers.append("no_quote (missing yes_ask/no_ask)")
+        return blockers
     price = sig.get("price") or 0.0
     if price <= cfg["decided_lo"] or price >= cfg["decided_hi"]:
         blockers.append(f"decided price={price}")

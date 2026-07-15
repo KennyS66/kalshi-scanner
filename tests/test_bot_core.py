@@ -97,6 +97,18 @@ def test_entry_blockers_each_guard():
     assert any("not_ok" in b for b in entry_blockers({"status": "between_markets"}, cfg, {}, False, False))
 
 
+def test_entry_blockers_missing_quote_is_blocked():
+    cfg = dict(DEFAULT_CONFIG)
+    sig = _sig()
+    del sig["yes_ask"]
+    blockers = entry_blockers(sig, cfg, {}, False, False)
+    assert any(b.startswith("no_quote") for b in blockers)
+    sig2 = _sig()
+    del sig2["no_ask"]
+    blockers2 = entry_blockers(sig2, cfg, {}, False, False)
+    assert any(b.startswith("no_quote") for b in blockers2)
+
+
 def test_should_time_exit():
     cfg = dict(DEFAULT_CONFIG)
     assert should_time_exit(_sig(mins_left=1.9), cfg) is True
