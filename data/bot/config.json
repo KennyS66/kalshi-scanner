@@ -1,0 +1,14 @@
+{
+  "flip_threshold": 2.0,
+  "min_entry_mins": 4.0,
+  "exit_mins": 2.0,
+  "risk_pct": 0.02,
+  "day_stop_pct": 0.1,
+  "max_open_plays": 3,
+  "decided_lo": 0.05,
+  "decided_hi": 0.95,
+  "poll_secs": 5,
+  "mode": "paper",
+  "paper_bankroll": 500.0,
+  "live_requested": false
+}
