@@ -363,3 +363,20 @@ def test_deadman_ignored_when_no_loop_log(tmp_path, monkeypatch):
               loop_log=tmp_path / "never_existed.jsonl")
     bot.tick(now_ts=2_000_000_000.0)
     assert bot.state["paused"] is False
+
+
+def test_boot_never_replays_preexisting_control(tmp_path, monkeypatch):
+    # A control command written before boot must not fire on the new process.
+    monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: 500.0)
+    (tmp_path / "control.json").write_text(json.dumps({"nonce": 9, "cmd": "resume"}))
+    save_state(tmp_path, fresh_state() | {"paused": True,
+                                          "last_control_nonce": 7})
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    bot.tick(now_ts=1000.0)
+    assert bot.state["paused"] is True            # stale resume NOT replayed
+    assert bot.state["last_control_nonce"] == 9
+    (tmp_path / "control.json").write_text(json.dumps({"nonce": 10, "cmd": "resume"}))
+    bot.tick(now_ts=1005.0)
+    assert bot.state["paused"] is False           # fresh command still works

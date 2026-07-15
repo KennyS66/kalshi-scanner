@@ -115,6 +115,16 @@ class Bot:
                              else WHALES_DIR / "banner_offsets.json")
         self.loop_log = (Path(loop_log) if loop_log
                          else WHALES_DIR / "loop_log.jsonl")
+        # Boot: whatever is in control.json predates this process — mark it
+        # consumed so a restart never replays the last command (a replayed
+        # "resume" could un-pause a bot the user deliberately paused).
+        try:
+            disk_nonce = int(json.loads(
+                (self.dir / CONTROL_FILE).read_text()).get("nonce", 0))
+        except Exception:
+            disk_nonce = 0
+        self.state["last_control_nonce"] = max(
+            self.state.get("last_control_nonce", 0), disk_nonce)
         self.detector = FlipDetector(self.cfg["flip_threshold"])
         self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
         self.feed_fails = 0
