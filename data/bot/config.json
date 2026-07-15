@@ -13,5 +13,6 @@
   "live_requested": false,
   "use_ranges": true,
   "ev_gate": true,
-  "ev_gate_min_samples": 12
+  "ev_gate_min_samples": 12,
+  "loop_deadman_mins": 90
 }

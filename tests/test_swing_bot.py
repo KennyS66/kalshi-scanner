@@ -63,7 +63,8 @@ def _mkbot(tmp_path, sigs, monkeypatch, bankroll=500.0):
     # offsets_file under tmp_path (absent -> zero offsets) so tests never
     # read the machine's live banner_offsets.json
     return Bot(tmp_path, fetch_fn=lambda: next(it, None),
-               offsets_file=tmp_path / "banner_offsets.json")
+               offsets_file=tmp_path / "banner_offsets.json",
+               loop_log=tmp_path / "loop_log.jsonl")
 
 
 def _rows(tmp_path, name):
@@ -197,7 +198,8 @@ def test_paper_bankroll_override_sizes_trades_and_skips_balance_fetch(tmp_path, 
     # now_ts far past bankroll_ts=0 so the hourly guard WOULD fetch the live
     # balance (123.0) if the paper_bankroll override didn't short-circuit it.
     bot = Bot(tmp_path, fetch_fn=lambda: next(it, None),
-              offsets_file=tmp_path / "banner_offsets.json")
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
     bot.tick(now_ts=2_000_000_000.0)
     bot.tick(now_ts=2_000_000_005.0)
     assert calls == []                                   # no live balance fetch
@@ -304,3 +306,60 @@ def test_ev_stats_update_on_live_exit(tmp_path, monkeypatch):
     for _ in sigs:
         bot.tick(now_ts=1000.0)
     assert sum(v["n"] for v in bot.ev_stats.values()) == 1
+
+
+def _mkbot_deadman(tmp_path, sigs, monkeypatch, hb_age_secs):
+    import os
+    monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: 500.0)
+    hb = tmp_path / "loop_log.jsonl"
+    hb.write_text('{"hb": 1}\n')
+    now = 2_000_000_000.0
+    os.utime(hb, (now - hb_age_secs, now - hb_age_secs))
+    it = iter(sigs)
+    bot = Bot(tmp_path, fetch_fn=lambda: next(it, None),
+              offsets_file=tmp_path / "banner_offsets.json", loop_log=hb)
+    return bot, now
+
+
+def test_deadman_pauses_on_stale_loop_heartbeat(tmp_path, monkeypatch):
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    bot, now = _mkbot_deadman(tmp_path, sigs, monkeypatch,
+                              hb_age_secs=91 * 60)
+    for _ in sigs:
+        bot.tick(now_ts=now)
+    assert bot.state["paused"] is True
+    assert bot.state["paused_by"] == "deadman"
+    assert bot.state["open_plays"] == {}          # entry blocked while paused
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any("deadman" in e["reason"] for e in events if e["action"] == "pause")
+
+
+def test_deadman_releases_when_heartbeat_returns(tmp_path, monkeypatch):
+    import os
+    bot, now = _mkbot_deadman(tmp_path, [_sig()], monkeypatch,
+                              hb_age_secs=91 * 60)
+    bot.tick(now_ts=now)
+    assert bot.state["paused_by"] == "deadman"
+    os.utime(bot.loop_log, (now, now))            # heartbeat returns
+    bot.tick(now_ts=now)
+    assert bot.state["paused"] is False
+    assert "paused_by" not in bot.state
+
+
+def test_deadman_never_releases_manual_pause(tmp_path, monkeypatch):
+    bot, now = _mkbot_deadman(tmp_path, [_sig(), _sig()], monkeypatch,
+                              hb_age_secs=0)      # fresh heartbeat
+    bot.state["paused"] = True                    # manual pause, no paused_by
+    bot.tick(now_ts=now)
+    assert bot.state["paused"] is True
+
+
+def test_deadman_ignored_when_no_loop_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: 500.0)
+    sigs = [_sig()]
+    it = iter(sigs)
+    bot = Bot(tmp_path, fetch_fn=lambda: next(it, None),
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "never_existed.jsonl")
+    bot.tick(now_ts=2_000_000_000.0)
+    assert bot.state["paused"] is False

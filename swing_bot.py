@@ -105,13 +105,16 @@ WHALES_DIR = Path(__file__).parent / "data" / "whales"
 
 
 class Bot:
-    def __init__(self, bot_dir=None, fetch_fn=fetch_signal, offsets_file=None):
+    def __init__(self, bot_dir=None, fetch_fn=fetch_signal, offsets_file=None,
+                 loop_log=None):
         self.dir = Path(bot_dir) if bot_dir else BOT_DIR
         self.fetch = fetch_fn
         self.state = load_state(self.dir)
         self.cfg = load_config(self.dir / CONFIG_FILE)
         self.offsets_file = (Path(offsets_file) if offsets_file
                              else WHALES_DIR / "banner_offsets.json")
+        self.loop_log = (Path(loop_log) if loop_log
+                         else WHALES_DIR / "loop_log.jsonl")
         self.detector = FlipDetector(self.cfg["flip_threshold"])
         self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
         self.feed_fails = 0
@@ -213,13 +216,37 @@ class Bot:
         self.state["last_control_nonce"] = nonce
         if cmd == "pause":
             self.state["paused"] = True
+            self.state.pop("paused_by", None)   # manual: deadman won't resume it
             self._event("pause", "control")
         elif cmd == "resume":
             self.state["paused"] = False
+            self.state.pop("paused_by", None)
             self._event("resume", "control")
         elif cmd == "flatten":
             self._flatten("flatten")
             self._event("flatten", "control")
+
+    def _check_loop_deadman(self, now_ts):
+        """No unsupervised trading: pause when the marketloop heartbeat
+        (loop_log.jsonl mtime) goes stale — tokens exhausted, session closed,
+        machine asleep. Auto-resume only a deadman pause; a manual pause from
+        the GUI stays paused."""
+        mins = self.cfg.get("loop_deadman_mins") or 0
+        if not mins:
+            return
+        try:
+            age = now_ts - self.loop_log.stat().st_mtime
+        except OSError:
+            return   # loop never ran on this machine — don't enforce
+        if age > mins * 60 and not self.state["paused"]:
+            self.state["paused"] = True
+            self.state["paused_by"] = "deadman"
+            self._event("pause", f"loop heartbeat stale {age/60:.0f}m — deadman")
+        elif (age <= mins * 60 and self.state["paused"]
+              and self.state.get("paused_by") == "deadman"):
+            self.state["paused"] = False
+            self.state.pop("paused_by", None)
+            self._event("resume", "loop heartbeat back — deadman released")
 
     def _check_day_stop(self):
         stop = self.cfg["day_stop_pct"] * self.state["bankroll"]
@@ -237,6 +264,7 @@ class Bot:
         self.detector.flip_threshold = self.cfg["flip_threshold"]
         self._refresh_bankroll(now_ts)
         self._handle_control()
+        self._check_loop_deadman(now_ts)
         self._check_day_stop()
 
         sig = self.fetch()

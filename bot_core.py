@@ -28,6 +28,8 @@ DEFAULT_CONFIG = {
     "use_ranges": True,        # gate entries/exits on the calibrated buy/sell ranges
     "ev_gate": True,           # skip entry buckets with proven-negative EV
     "ev_gate_min_samples": 12, # bucket sample floor before the gate may skip
+    "loop_deadman_mins": 90,   # pause if the marketloop heartbeat is staler
+                               # than this (0 = never); auto-resumes when back
 }
 
 
