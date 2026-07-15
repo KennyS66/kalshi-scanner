@@ -1317,12 +1317,12 @@ def bot_status_payload(bot_dir=None) -> dict:
     trades = _read_jsonl_tail(d / "bot_trades.jsonl", 1000)
     from bot_broker import live_unlock_ok
     from bot_core import load_config
-    ok, reason = live_unlock_ok(trades, load_config(d / "config.json"),
-                                dict(os.environ))
+    cfg = load_config(d / "config.json")
+    ok, reason = live_unlock_ok(trades, cfg, dict(os.environ))
     return {"state": state, "stats": _trade_stats(trades),
             "trades": trades[-50:],
             "events": _read_jsonl_tail(d / "bot_events.jsonl", 50),
-            "unlock": {"ok": ok, "reason": reason}}
+            "unlock": {"ok": ok, "reason": reason}, "config": cfg}
 
 
 def bot_control_write(bot_dir, cmd: str) -> int:

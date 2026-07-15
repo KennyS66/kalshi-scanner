@@ -138,3 +138,67 @@ def test_should_time_exit():
     cfg = dict(DEFAULT_CONFIG)
     assert should_time_exit(_sig(mins_left=1.9), cfg) is True
     assert should_time_exit(_sig(mins_left=2.5), cfg) is False
+
+
+from bot_core import (compute_side_ranges, sell_price_c, should_target_exit,
+                      load_offsets)
+
+
+def test_compute_side_ranges_yes_zero_offsets():
+    r = compute_side_ranges(0.50, 70.0, "YES", {})
+    assert (r["buy_low"], r["buy_high"]) == (47.0, 52.0)
+    assert r["sell_low"] == 62.0          # buy_high + 10
+    assert r["sell_high"] == 70.0         # flow fair
+    assert r["side"] == "YES"
+
+
+def test_compute_side_ranges_no_side_and_offsets():
+    # NO side: buy price is 1 - price; offsets pull the targets down.
+    r = compute_side_ranges(0.30, 40.0, "NO", {"sell_low_offset_c": 8.0,
+                                               "sell_high_offset_c": 8.0})
+    assert (r["buy_low"], r["buy_high"]) == (67.0, 72.0)
+    assert r["sell_low"] == 74.0          # max(72+2, 72+10-8)
+    assert r["sell_high"] == 76.0         # max(74+2, 60-8=52) -> floor wins
+
+
+def test_compute_side_ranges_clamps():
+    r = compute_side_ranges(0.02, 99.0, "YES", {})
+    assert r["buy_low"] == 1.0            # floor at 1c
+    r2 = compute_side_ranges(0.97, 99.0, "YES", {})
+    assert r2["buy_high"] == 95.0         # cap at 95c
+
+
+def test_entry_blockers_range_gate():
+    sig = {"status": "ok", "ticker": "M1", "price": 0.50, "yes_ask": 0.60,
+           "no_ask": 0.42, "mins_left": 10.0}
+    cfg = dict(DEFAULT_CONFIG)
+    r = compute_side_ranges(0.50, 70.0, "YES", {})
+    b = entry_blockers(sig, cfg, {}, False, False, r)
+    assert any("above buy range" in x for x in b)
+    sig2 = dict(sig, yes_ask=0.50)
+    assert entry_blockers(sig2, cfg, {}, False, False, r) == []
+    sig3 = dict(sig, yes_ask=0.40)
+    b3 = entry_blockers(sig3, cfg, {}, False, False, r)
+    assert any("below buy range" in x for x in b3)
+    assert entry_blockers(sig, cfg, {}, False, False, None) == []  # gate off
+
+
+def test_sell_price_and_target_exit():
+    sig = {"yes_ask": 0.66, "no_ask": 0.36, "spread": 0.02}
+    assert sell_price_c(sig, "YES") == 64.0
+    assert sell_price_c({"yes_ask": None}, "YES") is None
+    play = {"side": "YES", "ranges": {"sell_low": 62.0}}
+    assert should_target_exit(play, sig) is True
+    assert should_target_exit({"side": "YES", "ranges": None}, sig) is False
+    assert should_target_exit(
+        {"side": "YES", "ranges": {"sell_low": 65.0}}, sig) is False
+
+
+def test_load_offsets_missing_and_malformed(tmp_path):
+    assert load_offsets(tmp_path / "nope.json") == {}
+    p = tmp_path / "bad.json"
+    p.write_text("{not json")
+    assert load_offsets(p) == {}
+    p2 = tmp_path / "ok.json"
+    p2.write_text('{"yes": {"sell_low_offset_c": 2.5}, "no": {}}')
+    assert load_offsets(p2)["yes"]["sell_low_offset_c"] == 2.5

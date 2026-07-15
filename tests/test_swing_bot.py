@@ -60,7 +60,10 @@ def _sig(**over):
 def _mkbot(tmp_path, sigs, monkeypatch, bankroll=500.0):
     monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: bankroll)
     it = iter(sigs)
-    return Bot(tmp_path, fetch_fn=lambda: next(it, None))
+    # offsets_file under tmp_path (absent -> zero offsets) so tests never
+    # read the machine's live banner_offsets.json
+    return Bot(tmp_path, fetch_fn=lambda: next(it, None),
+               offsets_file=tmp_path / "banner_offsets.json")
 
 
 def _rows(tmp_path, name):
@@ -193,10 +196,76 @@ def test_paper_bankroll_override_sizes_trades_and_skips_balance_fetch(tmp_path, 
     it = iter(sigs)
     # now_ts far past bankroll_ts=0 so the hourly guard WOULD fetch the live
     # balance (123.0) if the paper_bankroll override didn't short-circuit it.
-    bot = Bot(tmp_path, fetch_fn=lambda: next(it, None))
+    bot = Bot(tmp_path, fetch_fn=lambda: next(it, None),
+              offsets_file=tmp_path / "banner_offsets.json")
     bot.tick(now_ts=2_000_000_000.0)
     bot.tick(now_ts=2_000_000_005.0)
     assert calls == []                                   # no live balance fetch
     assert bot.state["bankroll"] == 400.0                # from config, not 123/500
     # $400 * 2% = $8 budget; yes_ask 0.52 + fee 0.02 = 0.54 -> 14 contracts
     assert bot.state["open_plays"]["M1"]["qty"] == 14
+
+
+def test_target_exit_at_calibrated_sell_low(tmp_path, monkeypatch):
+    # Zero offsets: buy range 47-52, sell_low = buy_high + 10 = 62.
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),     # enter YES @ 0.52
+        _sig(whale_trend=3.5, momentum=30.0, yes_ask=0.60, ts=1010.0),  # 58 < 62
+        _sig(whale_trend=3.5, momentum=30.0, yes_ask=0.66, ts=1015.0),  # 64 >= 62
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "target"
+    assert trades[0]["exit_price"] == 0.64          # 0.66 - 0.02 spread
+    assert bot.state["open_plays"] == {}
+
+
+def test_offsets_file_tightens_target(tmp_path, monkeypatch):
+    # sell_low_offset 8c from the graded history: sell_low = max(54, 52+10-8) = 54.
+    import json as _json
+    (tmp_path / "banner_offsets.json").write_text(_json.dumps(
+        {"yes": {"sell_low_offset_c": 8.0}, "no": {}}))
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                # enter
+        _sig(whale_trend=3.5, momentum=30.0, yes_ask=0.57, ts=1010.0),  # 55 >= 54
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1 and trades[0]["exit_reason"] == "target"
+    assert trades[0]["entry_sig"] is not None
+
+
+def test_flip_outside_buy_range_is_skipped(tmp_path, monkeypatch):
+    # Ask 60c with price 0.50 -> buy range 47-52 -> chasing, skip.
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, yes_ask=0.60, ts=1005.0),
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["open_plays"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    skips = [e for e in events if e["action"] == "skip"]
+    assert skips and any("above buy range" in e["reason"] for e in skips)
+
+
+def test_use_ranges_false_restores_unGated_entry(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps({"use_ranges": False}))
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, yes_ask=0.60, ts=1005.0),
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" in bot.state["open_plays"]
+    assert bot.state["open_plays"]["M1"]["ranges"] is None

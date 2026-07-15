@@ -77,7 +77,8 @@ def append_jsonl(path, row: dict) -> None:
 
 
 from bot_core import (FlipDetector, load_config, entry_blockers,
-                      should_time_exit, size_contracts)
+                      should_time_exit, should_target_exit, size_contracts,
+                      compute_side_ranges, load_offsets)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
@@ -99,15 +100,29 @@ def fetch_signal():
         return None
 
 
+WHALES_DIR = Path(__file__).parent / "data" / "whales"
+
+
 class Bot:
-    def __init__(self, bot_dir=None, fetch_fn=fetch_signal):
+    def __init__(self, bot_dir=None, fetch_fn=fetch_signal, offsets_file=None):
         self.dir = Path(bot_dir) if bot_dir else BOT_DIR
         self.fetch = fetch_fn
         self.state = load_state(self.dir)
         self.cfg = load_config(self.dir / CONFIG_FILE)
+        self.offsets_file = (Path(offsets_file) if offsets_file
+                             else WHALES_DIR / "banner_offsets.json")
         self.detector = FlipDetector(self.cfg["flip_threshold"])
         self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
         self.feed_fails = 0
+
+    def _ranges_for(self, side, sig):
+        """Calibrated buy/sell range for `side`, or None when gating is off."""
+        if not self.cfg.get("use_ranges", True):
+            return None
+        offs = load_offsets(self.offsets_file)
+        return compute_side_ranges(sig.get("price") or 0.0,
+                                   sig.get("yes_pct") or 50.0,
+                                   side, offs.get(side.lower(), {}))
 
     # ── logging ───────────────────────────────────────────────────────
     def _event(self, action, reason="", ticker="", sig=None, ts=None):
@@ -117,7 +132,7 @@ class Bot:
                       "sig": _snap(sig) if sig else None})
 
     # ── trade lifecycle ───────────────────────────────────────────────
-    def _enter(self, side, sig):
+    def _enter(self, side, sig, ranges=None):
         price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         qty = size_contracts(self.state["bankroll"], price, self.cfg["risk_pct"])
         if qty < 1:
@@ -126,9 +141,12 @@ class Bot:
             return
         fill = self.broker.buy(side, qty, sig)
         self.state["open_plays"][sig["ticker"]] = {
-            "side": side, "qty": qty, "entry": fill,
+            "side": side, "qty": qty, "entry": fill, "ranges": ranges,
             "entry_sig": _snap(sig), "last_sig": dict(sig)}
-        self._event("enter", f"{side} x{qty} @ {fill['price']}", sig["ticker"], sig)
+        tgt = (f" target {ranges['sell_low']:.1f}c"
+               f" (stretch {ranges['sell_high']:.1f}c)") if ranges else ""
+        self._event("enter", f"{side} x{qty} @ {fill['price']}{tgt}",
+                    sig["ticker"], sig)
 
     def _exit(self, ticker, play, sig, reason):
         # Historical replay rows can be status="ok" but lack yes_ask/no_ask
@@ -232,7 +250,9 @@ class Bot:
                 # always carry a usable yes_ask/no_ask.
                 if sig.get("yes_ask") is not None and sig.get("no_ask") is not None:
                     play["last_sig"] = dict(sig)
-                if should_time_exit(sig, self.cfg):
+                if should_target_exit(play, sig):
+                    self._exit(t, play, sig, "target")
+                elif should_time_exit(sig, self.cfg):
                     self._exit(t, play, sig, "time")
             else:
                 self._exit(t, play, play["last_sig"], "rolled")
@@ -248,12 +268,14 @@ class Bot:
             return
         if not flip:
             return
+        ranges = self._ranges_for(flip, sig)
         blockers = entry_blockers(sig, self.cfg, self.state["open_plays"],
-                                  self.state["halted"], self.state["paused"])
+                                  self.state["halted"], self.state["paused"],
+                                  ranges)
         if blockers:
             self._event("skip", "; ".join(blockers), ticker, sig)
             return
-        self._enter(flip, sig)
+        self._enter(flip, sig, ranges)
 
     def run(self):
         print(f"swing_bot up — mode={self.broker.mode} dir={self.dir}", flush=True)

@@ -28,6 +28,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from bot_core import compute_side_ranges
+
 DATA = Path(__file__).parent / "data" / "whales"
 DATA.mkdir(parents=True, exist_ok=True)
 JOURNAL = DATA / "banner_targets.jsonl"
@@ -85,20 +87,12 @@ def save_offsets(o):
 
 
 def compute_ranges(s, side_offsets):
+    # Single source of truth for the range math: bot_core.compute_side_ranges
+    # (the swing bot gates its entries/exits on the same formula).
     is_up = s["direction"] == "YES"
-    buy_c = (s["price"] if is_up else 1 - s["price"]) * 100
-    flow_fair_c = s["yes_pct"] if is_up else (100 - s["yes_pct"])
-    buy_low = max(1.0, buy_c - 3.0)
-    buy_high = min(95.0, buy_c + 2.0)
-    sell_low = max(
-        buy_high + 2.0,   # floor: sell target must always be above buy range
-        min(95.0, buy_high + 10.0 - side_offsets.get("sell_low_offset_c", 0.0)),
-    )
-    sell_high = max(
-        sell_low + 2.0,
-        min(95.0, flow_fair_c - side_offsets.get("sell_high_offset_c", 0.0)),
-    )
-    return is_up, buy_low, buy_high, sell_low, sell_high
+    r = compute_side_ranges(s["price"], s["yes_pct"],
+                            "YES" if is_up else "NO", side_offsets)
+    return is_up, r["buy_low"], r["buy_high"], r["sell_low"], r["sell_high"]
 
 
 def is_tradeable(s):

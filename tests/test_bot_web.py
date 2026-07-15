@@ -77,3 +77,9 @@ def test_trade_stats_today_block_filters_by_utc_day():
     stats = _trade_stats(trades)
     assert stats["today"]["n"] == 1
     assert stats["all_time"]["n"] == 2
+
+
+def test_status_payload_includes_config(tmp_path):
+    payload = bot_status_payload(tmp_path)
+    assert payload["config"]["use_ranges"] is True
+    assert payload["config"]["risk_pct"] == 0.02
