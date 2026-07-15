@@ -36,3 +36,43 @@ def test_round_trip_pnl_nets_out_fees():
     exit_ = b.sell("YES", 10, {**SIG, "yes_ask": 0.60, "ts": 1300.0})  # 10 @ 0.58
     expected = (0.58 - 0.52) * 10 - entry["fee_total"] - exit_["fee_total"]
     assert round_trip_pnl(entry, exit_) == pytest.approx(expected)
+
+
+import bot_broker
+from bot_broker import fetch_bankroll, live_unlock_ok, LiveBroker, FALLBACK_BANKROLL
+
+
+def _trades(n, avg):
+    return [{"net_pnl": avg, "status": "closed"} for _ in range(n)]
+
+
+def test_fetch_bankroll_returns_none_on_failure(monkeypatch):
+    monkeypatch.setattr(bot_broker, "_balance_dollars",
+                        lambda: (_ for _ in ()).throw(RuntimeError("api down")))
+    assert fetch_bankroll() is None
+
+
+def test_fetch_bankroll_returns_dollars(monkeypatch):
+    monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: 512.33)
+    assert fetch_bankroll() == 512.33
+
+
+def test_live_unlock_requires_all_four_conditions():
+    cfg_on = {"live_requested": True}
+    env_on = {"BOT_LIVE": "1"}
+    ok, _ = live_unlock_ok(_trades(100, 0.01), cfg_on, env_on)
+    assert ok
+    assert not live_unlock_ok(_trades(99, 0.01), cfg_on, env_on)[0]      # < 100 trades
+    assert not live_unlock_ok(_trades(100, -0.01), cfg_on, env_on)[0]    # negative EV
+    assert not live_unlock_ok(_trades(100, 0.01), {"live_requested": False}, env_on)[0]
+    assert not live_unlock_ok(_trades(100, 0.01), cfg_on, {})[0]         # no BOT_LIVE
+
+
+def test_live_broker_locked_raises():
+    import pytest
+    with pytest.raises(RuntimeError, match="live trading locked"):
+        LiveBroker(_trades(3, 0.01), {"live_requested": True}, {})
+
+
+def test_fallback_bankroll_is_500():
+    assert FALLBACK_BANKROLL == 500.0
