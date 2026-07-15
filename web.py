@@ -1264,6 +1264,90 @@ async def api_loop_log_post(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+# ── swing bot (paper-first; see docs/superpowers/specs/2026-07-15-…) ──
+_BOT_DIR = Path(__file__).parent / "data" / "bot"
+
+
+def _read_jsonl_tail(path, limit=50):
+    try:
+        lines = Path(path).read_text().splitlines()[-limit:]
+        return [json.loads(l) for l in lines]
+    except Exception:
+        return []
+
+
+def _trade_stats(trades):
+    closed = [t for t in trades if t.get("status") == "closed"]
+
+    def block(rows):
+        n = len(rows)
+        wins = sum(1 for t in rows if t["net_pnl"] > 0)
+        total = round(sum(t["net_pnl"] for t in rows), 4)
+        return {"n": n, "win_pct": round(100 * wins / n, 1) if n else 0.0,
+                "net_total": total,
+                "net_avg": round(total / n, 4) if n else 0.0}
+    by_reason = {}
+    for t in closed:
+        by_reason.setdefault(t.get("exit_reason", "?"), []).append(t)
+    return {"all_time": block(closed),
+            "by_exit_reason": {k: block(v) for k, v in by_reason.items()}}
+
+
+def bot_status_payload(bot_dir=None) -> dict:
+    d = Path(bot_dir) if bot_dir else _BOT_DIR
+    try:
+        state = json.loads((d / "bot_state.json").read_text())
+    except Exception:
+        state = {}
+    trades = _read_jsonl_tail(d / "bot_trades.jsonl", 1000)
+    from bot_broker import live_unlock_ok
+    from bot_core import load_config
+    ok, reason = live_unlock_ok(trades, load_config(d / "config.json"),
+                                dict(os.environ))
+    return {"state": state, "stats": _trade_stats(trades),
+            "trades": trades[-50:],
+            "events": _read_jsonl_tail(d / "bot_events.jsonl", 50),
+            "unlock": {"ok": ok, "reason": reason}}
+
+
+def bot_control_write(bot_dir, cmd: str) -> int:
+    if cmd not in ("pause", "resume", "flatten"):
+        raise ValueError(f"unknown bot command: {cmd}")
+    d = Path(bot_dir) if bot_dir else _BOT_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    ctl = d / "control.json"
+    try:
+        nonce = int(json.loads(ctl.read_text()).get("nonce", 0))
+    except Exception:
+        nonce = 0
+    nonce += 1
+    tmp = d / "control.json.tmp"
+    tmp.write_text(json.dumps({"nonce": nonce, "cmd": cmd}))
+    os.replace(tmp, ctl)
+    return nonce
+
+
+@app.get("/api/bot/status")
+async def api_bot_status() -> JSONResponse:
+    return JSONResponse(bot_status_payload())
+
+
+@app.post("/api/bot/control")
+async def api_bot_control(request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        nonce = bot_control_write(_BOT_DIR, body.get("cmd", ""))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "nonce": nonce})
+
+
+@app.get("/bot", response_class=HTMLResponse)
+async def bot_screen() -> str:
+    from bot_page import BOT_HTML
+    return BOT_HTML
+
+
 @app.get("/crypto", response_class=HTMLResponse)
 async def crypto_page() -> str:
     return _CRYPTO_HTML
