@@ -9,6 +9,13 @@ def _row(ticker, ts, wt, mom, yes_ask=0.50, mins_left=10.0, price=0.50):
             "status": "ok"}
 
 
+def _row_no_quote(ticker, ts, wt, mom, mins_left=10.0, price=0.50):
+    """A row with no real yes_ask/no_ask — must never get synthetic fills."""
+    return {"ticker": ticker, "ts": ts, "whale_trend": wt, "momentum": mom,
+            "price": price, "mins_left": mins_left, "buy_pressure": 0,
+            "status": "ok"}
+
+
 def test_replay_produces_trades_and_summary(tmp_path, monkeypatch):
     import bot_broker
     monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: 500.0)
@@ -22,6 +29,28 @@ def test_replay_produces_trades_and_summary(tmp_path, monkeypatch):
     result = replay(log, tmp_path / "out")
     assert result["trades"] == 1
     assert result["net_total"] != 0
+
+
+def test_replay_skips_entry_row_missing_quotes(tmp_path, monkeypatch):
+    """A row without real yes_ask/no_ask must not get synthetic fills backfilled
+    from price/direction. It should flow through to the existing no_quote
+    entry blocker instead: no trade opens, and a skip event is logged."""
+    import bot_broker
+    monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: 500.0)
+    log = tmp_path / "log.jsonl"
+    rows = [
+        _row_no_quote("KXBTC15M-A", 1, -3.0, -10),
+        _row_no_quote("KXBTC15M-A", 2, 3.0, 10),  # flip, but no quotes -> must skip
+    ]
+    log.write_text("\n".join(json.dumps(r) for r in rows))
+    out_dir = tmp_path / "out"
+    result = replay(log, out_dir)
+    assert result["trades"] == 0
+
+    import swing_bot
+    events_file = out_dir / swing_bot.EVENTS_FILE
+    events = [json.loads(l) for l in events_file.read_text().splitlines()]
+    assert any(e["action"] == "skip" and "no_quote" in e["reason"] for e in events)
 
 
 def test_replay_never_hits_live_balance_endpoint(tmp_path, monkeypatch):

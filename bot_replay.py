@@ -28,17 +28,6 @@ def _rows(log_path):
                 continue
             if "BTC15M" in (r.get("ticker") or ""):
                 r.setdefault("status", "ok")
-                # Compute yes_ask and no_ask if missing (for real logs with price/spread)
-                if "yes_ask" not in r:
-                    price = r.get("price", 0.50)
-                    spread = r.get("spread") or 0.02
-                    direction = r.get("direction", "YES")
-                    if direction == "YES":
-                        r["yes_ask"] = price
-                        r["no_ask"] = round(1 - price + spread, 3)
-                    else:
-                        r["no_ask"] = price
-                        r["yes_ask"] = round(1 - price + spread, 3)
                 rows.append(r)
     rows.sort(key=lambda r: r.get("ts", 0))
     return rows
@@ -65,9 +54,10 @@ def replay(log_path, out_dir, bankroll=500.0) -> dict:
     closed = [t for t in trades if t["status"] == "closed"]
     wins = sum(1 for t in closed if t["net_pnl"] > 0)
     total = round(sum(t["net_pnl"] for t in closed), 4)
+    quoted = sum(1 for r in rows if r.get("yes_ask") is not None and r.get("no_ask") is not None)
     return {"trades": len(closed), "wins": wins, "net_total": total,
             "net_avg": round(total / len(closed), 4) if closed else 0.0,
-            "signals": len(rows)}
+            "signals": len(rows), "quoted": quoted}
 
 
 def main():
@@ -77,7 +67,7 @@ def main():
     ap.add_argument("--bankroll", type=float, default=500.0)
     args = ap.parse_args()
     r = replay(args.log, args.out, bankroll=args.bankroll)
-    print(f"signals={r['signals']}  round trips={r['trades']}  wins={r['wins']}")
+    print(f"signals={r['signals']} quoted={r['quoted']}  round trips={r['trades']}  wins={r['wins']}")
     win_pct = 100 * r["wins"] / r["trades"] if r["trades"] else 0.0
     print(f"REPLAY_RESULT: trades={r['trades']} win={win_pct:.0f}% "
           f"net_avg=${r['net_avg']:+.4f} net_total=${r['net_total']:+.2f}")
