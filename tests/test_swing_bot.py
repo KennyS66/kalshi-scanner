@@ -380,3 +380,35 @@ def test_boot_never_replays_preexisting_control(tmp_path, monkeypatch):
     (tmp_path / "control.json").write_text(json.dumps({"nonce": 10, "cmd": "resume"}))
     bot.tick(now_ts=1005.0)
     assert bot.state["paused"] is False           # fresh command still works
+
+
+def test_stop_loss_cuts_loser_before_settlement(tmp_path, monkeypatch):
+    # Enter YES @ 0.52; sell value halves (26c line) -> exit "stop", not a
+    # ride to settlement. yes_ask 0.27, spread 0.02 -> sell 25c <= 26c.
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),
+        _sig(whale_trend=3.5, momentum=30.0, yes_ask=0.40, ts=1010.0),  # 38c > 26c
+        _sig(whale_trend=3.5, momentum=30.0, yes_ask=0.27, ts=1015.0),  # 25c <= 26c
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1 and trades[0]["exit_reason"] == "stop"
+    assert trades[0]["exit_price"] == 0.25
+    assert bot.state["open_plays"] == {}
+
+
+def test_stop_loss_disabled_by_zero_frac(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps({"stop_loss_frac": 0}))
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),
+        _sig(whale_trend=3.5, momentum=30.0, yes_ask=0.27, ts=1010.0),
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" in bot.state["open_plays"]          # still holding, no stop

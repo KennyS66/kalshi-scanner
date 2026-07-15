@@ -77,8 +77,8 @@ def append_jsonl(path, row: dict) -> None:
 
 
 from bot_core import (FlipDetector, load_config, entry_blockers,
-                      should_time_exit, should_target_exit, size_contracts,
-                      compute_side_ranges, load_offsets,
+                      should_time_exit, should_target_exit, should_stop_exit,
+                      size_contracts, compute_side_ranges, load_offsets,
                       bucket_stats, update_bucket_stats, ev_gate_blocker)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
@@ -302,6 +302,8 @@ class Bot:
                     play["last_sig"] = dict(sig)
                 if should_target_exit(play, sig):
                     self._exit(t, play, sig, "target")
+                elif should_stop_exit(play, sig, self.cfg):
+                    self._exit(t, play, sig, "stop")
                 elif should_time_exit(sig, self.cfg):
                     self._exit(t, play, sig, "time")
             else:

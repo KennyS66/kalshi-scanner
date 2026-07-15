@@ -28,8 +28,12 @@ DEFAULT_CONFIG = {
     "use_ranges": True,        # gate entries/exits on the calibrated buy/sell ranges
     "ev_gate": True,           # skip entry buckets with proven-negative EV
     "ev_gate_min_samples": 12, # bucket sample floor before the gate may skip
-    "loop_deadman_mins": 90,   # pause if the marketloop heartbeat is staler
+    "loop_deadman_mins": 45,   # pause if the marketloop heartbeat is staler
                                # than this (0 = never); auto-resumes when back
+    "stop_loss_frac": 0.5,     # cut a play when its sell value falls this
+                               # fraction below entry (0 = no stop): fires
+                               # while the market is live, never rides a
+                               # loser to settlement / a stale rolled exit
 }
 
 
@@ -183,6 +187,17 @@ def entry_blockers(sig: dict, cfg: dict, open_plays: dict,
 
 def should_time_exit(sig: dict, cfg: dict) -> bool:
     return (sig.get("mins_left") or 0.0) <= cfg["exit_mins"]
+
+
+def should_stop_exit(play: dict, sig: dict, cfg: dict) -> bool:
+    """Stop-loss: sell value fell stop_loss_frac below entry — cut it now."""
+    frac = cfg.get("stop_loss_frac") or 0.0
+    if not frac:
+        return False
+    px = sell_price_c(sig, play["side"])
+    if px is None:
+        return False
+    return px <= play["entry"]["price"] * 100 * (1 - frac)
 
 
 # ── EV gate: learned per-bucket skip from the closed-trade journal ────
