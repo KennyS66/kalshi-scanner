@@ -425,11 +425,12 @@ async function pollBot() {
   $('bankroll').textContent = s.bankroll ? '$' + s.bankroll.toFixed(2) : '—';
   $('bankrollSub').textContent = cfg.paper_bankroll
     ? `fixed paper stake · ${((cfg.risk_pct || 0) * 100).toFixed(0)}% per trade` : '';
+  const cap = cfg.max_loss_usd || 0, tot = s.total_pnl || 0;
   $('dayPnl').textContent = money(s.day_pnl || 0);
   $('dayPnl').className = 'v ' + ((s.day_pnl || 0) >= 0 ? 'pos' : 'neg');
-  $('dayStop').textContent = s.bankroll
-    ? `halt at -$${((cfg.day_stop_pct || .1) * s.bankroll).toFixed(0)}` : '';
-  const cap = cfg.max_loss_usd || 0, tot = s.total_pnl || 0;
+  $('dayStop').innerHTML = (s.bankroll
+    ? `total <span class="${tot >= 0 ? 'pos' : 'neg'}" style="font-weight:800">${money(tot)}</span>`
+      + ` · halt at -$${((cfg.day_stop_pct || .1) * s.bankroll).toFixed(0)}` : '');
   if (cap > 0) {
     const head = Math.max(0, cap + Math.min(0, tot));
     $('lossBudget').textContent = '$' + head.toFixed(0) + ' / $' + cap.toFixed(0);
