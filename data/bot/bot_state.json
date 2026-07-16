@@ -1,1 +1,1 @@
-{"mode": "paper", "paused": false, "halted": false, "day": "2026-07-15", "day_pnl": 0.0, "bankroll": 500.0, "bankroll_ts": 1784150697.8399184, "open_plays": {}, "heartbeat": 1784150697.8399184, "last_control_nonce": 54, "total_pnl": 0, "market_entries": {}}
+{"mode": "paper", "paused": true, "halted": false, "day": "2026-07-16", "day_pnl": 0.0, "bankroll": 500.0, "bankroll_ts": 1784162133.2181473, "open_plays": {}, "heartbeat": 1784162133.2181473, "last_control_nonce": 56, "total_pnl": 8.27, "market_entries": {}, "paused_by": "deadman"}

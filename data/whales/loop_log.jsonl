@@ -106,3 +106,18 @@
 {"ts": 1783812105.2555423, "type": "EVENT", "spot": 64023, "msg": "64000 KEY TEST 23:21Z: spot 64023 falling hard into the day key (momentum -63, vol 55/min) after the stair-step 64380->64023. First test all day, trend-aligned with DOWN c2. Day-plan playbook: HIGH bounce risk INTO the key \u2014 bank short profit here; a bounce = counter-trend long; a confirmed break (15m close <64000 + sustain) opens air below toward 63450/63000 Jul8-10 structure."}
 {"ts": 1783812126.3688884, "type": "EVENT", "spot": 63972, "msg": "64000 INTRABAR BREAK 23:23Z: spot 63972 through the day key on the first touch. UNCONFIRMED \u2014 needs the 23:30Z 15m close below + 10-15min sustain. If confirmed: DOWN c2 thesis pays, air toward 63450/63000 Jul8-10 structure. If it snaps back: classic first-touch bounce the plan warned about."}
 {"ts": 1783812452.6543016, "type": "STATUS", "spot": 63806, "msg": "marketloop STOPPED by user 23:27Z Jul 11: watcher + wakeups cancelled, scanner/GUI left running. Final state: 64000 key BROKE first touch 23:23Z and extended to 63806 (-$575 off the 64380 top); 23:30Z close pending, sustain unconfirmed at stop but decisive tape. Regime trend_down 63450-64000, key flips resistance. DOWN c2 day: fought all session, paid at the end. Resume with /marketloop."}
+{"ts": 1784125670.0598812, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784126725.4157941, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784138312.0183349, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784139026.6534464, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784140117.3411295, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784141522.1117003, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784143397.8820508, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784144489.819844, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784145727.8480382, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784146335.0865948, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784147444.9147532, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784148203.4176, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784150054.2242467, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784150700.3441842, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784153442.4251392, "type": "NOTE", "spot": null, "msg": ""}
