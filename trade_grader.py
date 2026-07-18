@@ -80,6 +80,22 @@ def hold_path_stats(ticks, side, entry_price, entry_ts, exit_ts):
     return mfe, mae
 
 
+def post_exit_stats(ticks, side, exit_ts, expiry):
+    """Best held-side price between exit (inclusive) and expiry, or None.
+
+    For stops this answers 'did price rebound after we bailed' — a
+    good_stop that was also recoverable means a patient exit could have
+    left at breakeven-or-better even though settlement went against."""
+    prices = [t["price"] for t in ticks
+              if t.get("price") is not None and t.get("ts") is not None
+              and exit_ts <= t["ts"] <= expiry]
+    if not prices:
+        return None
+    if side == "NO":
+        prices = [1.0 - p for p in prices]
+    return round(max(prices), 4)
+
+
 def trade_key(row):
     return f"{row['ticker']}|{row['entry_ts']}"
 
@@ -134,6 +150,10 @@ def grade_trade(trade, ticks, thesis_rows, regime_rows):
         "held_pnl_gross": held, "delta_vs_held": delta,
         "mfe": mfe, "mae": mae,
         "verdict": verdict_for(trade.get("exit_reason"), side, settled),
+        "post_exit_high": (peh := post_exit_stats(
+            ticks, side, trade["exit_ts"], expiry_of(trade))),
+        "recoverable": ((peh is not None and peh > entry)
+                        if trade.get("exit_reason") == "stop" else None),
         **ctx, "aligned": aligned,
         "data_gap": settled == "unknown" or mfe is None,
         "graded_ts": time.time(),

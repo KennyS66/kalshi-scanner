@@ -296,3 +296,36 @@ def test_run_cycle_survives_corrupt_trade_row(tmp_path, monkeypatch):
     idx = tg.FeatureIndex(feat)
     now = expiry_of(good) + tg.GRADE_DELAY_S + 1
     assert tg.run_cycle(idx, now=now) == 1          # bad row skipped, good graded
+
+
+from trade_grader import post_exit_stats
+
+
+def test_post_exit_stats_rebound_after_stop():
+    # stop at t=300 (price 0.28), rebound to 0.68 at t=450, expiry 600
+    ticks = [tick(100, price=0.60), tick(300, price=0.28),
+             tick(450, price=0.68), tick(590, price=0.40)]
+    high = post_exit_stats(ticks, "YES", exit_ts=300, expiry=600)
+    assert high == pytest.approx(0.68)
+    # NO side inverts
+    high_no = post_exit_stats(ticks, "NO", exit_ts=300, expiry=600)
+    assert high_no == pytest.approx(0.72)   # 1 - 0.28 at t=300... exit tick included
+    # no ticks after exit
+    assert post_exit_stats(ticks, "YES", exit_ts=595, expiry=600) is None
+
+
+def test_grade_trade_marks_recoverable_stop():
+    trade = make_trade()          # YES stop, entry 0.60, exit_ts TS+300, expiry TS+600
+    exp = expiry_of(trade)
+    ticks = [tick(TS_JUL17 + 60, price=0.65),
+             tick(TS_JUL17 + 200, price=0.28),
+             tick(TS_JUL17 + 400, price=0.66),     # rebound above 0.60 entry
+             tick(exp - 30, spot=63900.0, strike=63950.0, price=0.03)]
+    row = grade_trade(trade, ticks, THESIS, REGIMES)
+    assert row["verdict"] == "good_stop"           # settled against -> stop right
+    assert row["post_exit_high"] == pytest.approx(0.66)
+    assert row["recoverable"] is True              # but a patient exit beat entry
+    # without the rebound tick, not recoverable
+    row2 = grade_trade(trade, [t for t in ticks if t["ts"] != TS_JUL17 + 400],
+                       THESIS, REGIMES)
+    assert row2["recoverable"] is False
