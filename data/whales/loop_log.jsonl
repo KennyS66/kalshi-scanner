@@ -138,3 +138,5 @@
 {"ts": 1784342599.723591, "type": "STATUS", "spot": null, "msg": "dual weekday/weekend gate live"}
 {"ts": 1784343785.8458338, "type": "STATUS", "spot": null, "msg": "web back after graph-UI restart"}
 {"ts": 1784346531.6190436, "type": "STATUS", "spot": null, "msg": "heartbeat \u2014 releasing deadman"}
+{"ts": 1784348167.9700406, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784350629.4680855, "type": "STATUS", "spot": null, "msg": "quiet iter"}
