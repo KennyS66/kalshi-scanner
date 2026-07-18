@@ -148,3 +148,4 @@
 {"ts": 1784364734.1990094, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784366591.4391525, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784368446.7229679, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784369277.8964052, "type": "EVENT", "spot": null, "msg": "DAY HALT tripped: day -50.27; bot idle until 00Z Jul 19"}
