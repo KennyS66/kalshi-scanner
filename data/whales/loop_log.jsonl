@@ -151,3 +151,5 @@
 {"ts": 1784369277.8964052, "type": "EVENT", "spot": null, "msg": "DAY HALT tripped: day -50.27; bot idle until 00Z Jul 19"}
 {"ts": 1784372946.4959252, "type": "STATUS", "spot": null, "msg": "quiet iter; bot halted for day"}
 {"ts": 1784375696.6897967, "type": "STATUS", "spot": null, "msg": "heartbeat"}
+{"ts": 1784378169.7052467, "type": "STATUS", "spot": null, "msg": "quiet iter; halted day"}
+{"ts": 1784378871.2481182, "type": "EVENT", "spot": null, "msg": "CONFIRMED BREAK above 64100, spot 64212; regime trend_up 64100-64600 journaled; bot day-halted so watch-only"}
