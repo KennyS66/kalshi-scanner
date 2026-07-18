@@ -137,3 +137,4 @@
 {"ts": 1784341152.7676558, "type": "STATUS", "spot": null, "msg": "2h status update delivered"}
 {"ts": 1784342599.723591, "type": "STATUS", "spot": null, "msg": "dual weekday/weekend gate live"}
 {"ts": 1784343785.8458338, "type": "STATUS", "spot": null, "msg": "web back after graph-UI restart"}
+{"ts": 1784346531.6190436, "type": "STATUS", "spot": null, "msg": "heartbeat \u2014 releasing deadman"}
