@@ -45,7 +45,7 @@ def verdict_for(exit_reason, side, settled):
     favorable = settled == side
     if exit_reason == "stop":
         return "whipsaw_stop" if favorable else "good_stop"
-    if exit_reason == "target":
+    if exit_reason in ("target", "target_half", "stretch"):
         return "clean_win" if favorable else "lucky_exit"
     return "left_money" if favorable else "good_exit"
 
@@ -97,7 +97,9 @@ def post_exit_stats(ticks, side, exit_ts, expiry):
 
 
 def trade_key(row):
-    return f"{row['ticker']}|{row['entry_ts']}"
+    # exit_ts distinguishes scale-out legs that share ticker+entry_ts;
+    # existing grade rows carry exit_ts too, so dedup stays backward-compatible
+    return f"{row['ticker']}|{row['entry_ts']}|{row.get('exit_ts')}"
 
 
 def day_context(entry_ts, thesis_rows, regime_rows):

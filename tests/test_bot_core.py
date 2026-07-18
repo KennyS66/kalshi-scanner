@@ -363,3 +363,14 @@ def test_daytime_trades_filters_curfew_hours():
             {"status": "closed"}]                     # no exit_ts: dropped
     out = daytime_trades(rows)
     assert out == [rows[0]]
+
+
+from bot_core import should_stretch_exit
+
+def test_should_stretch_exit():
+    play = {"side": "YES", "ranges": {"sell_low": 62.0, "sell_high": 70.0}}
+    hit  = {"yes_ask": 0.72, "spread": 0.02}   # sell 70c >= 70
+    miss = {"yes_ask": 0.66, "spread": 0.02}   # sell 64c < 70
+    assert should_stretch_exit(play, hit) is True
+    assert should_stretch_exit(play, miss) is False
+    assert should_stretch_exit({"side": "YES"}, hit) is False   # no ranges

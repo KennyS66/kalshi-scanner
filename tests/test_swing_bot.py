@@ -1,5 +1,8 @@
 import json
 import time
+
+import pytest
+
 from swing_bot import (fresh_state, load_state, save_state, read_control,
                        roll_day_if_needed, append_jsonl)
 
@@ -63,14 +66,13 @@ def _mkbot(tmp_path, sigs, monkeypatch, bankroll=500.0):
     # curfews off: fixture sig timestamps are epoch-small (hour 00Z) and these
     # tests exercise strategy mechanics, not the session-curfew overlay
     cfg_p = tmp_path / "config.json"
-    if not cfg_p.exists():
-        cfg_p.write_text(json.dumps({"overnight_curfew": False,
-                                     "weekend_curfew": False}))
-    else:
-        cfg = json.loads(cfg_p.read_text())
-        cfg.setdefault("overnight_curfew", False)
-        cfg.setdefault("weekend_curfew", False)
-        cfg_p.write_text(json.dumps(cfg))
+    cfg = json.loads(cfg_p.read_text()) if cfg_p.exists() else {}
+    # legacy-mechanics defaults: curfews and scale-out off unless a test
+    # opts in via its own config.json written before _mkbot
+    cfg.setdefault("overnight_curfew", False)
+    cfg.setdefault("weekend_curfew", False)
+    cfg.setdefault("scale_out", False)
+    cfg_p.write_text(json.dumps(cfg))
     # offsets_file under tmp_path (absent -> zero offsets) so tests never
     # read the machine's live banner_offsets.json
     return Bot(tmp_path, fetch_fn=lambda: next(it, None),
@@ -529,3 +531,48 @@ def test_per_market_entry_cap(tmp_path, monkeypatch):
     assert bot.state["open_plays"] == {}
     events = _rows(tmp_path, EVENTS_FILE)
     assert any("whipsaw guard" in e["reason"] for e in events if e["action"] == "skip")
+
+
+def test_scale_out_banks_half_then_runner_rides_to_stretch(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"scale_out": True, "min_edge_c": None,
+         "overnight_curfew": False, "weekend_curfew": False}))
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                 # enter x18 @ .52
+        _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.66, ts=1010.0),   # sell 64c >= 62 -> scale half
+        _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.74, ts=1015.0),   # sell 72c >= 70 -> stretch
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert [t["exit_reason"] for t in trades] == ["target_half", "stretch"]
+    half, runner = trades
+    assert half["qty"] == 9 and runner["qty"] == 9
+    assert half["exit_price"] == 0.64 and runner["exit_price"] == 0.72
+    assert bot.state["open_plays"] == {}
+    # both legs realized into day pnl; ev gate saw ONE combined sample
+    assert bot.state["day_pnl"] == pytest.approx(half["net_pnl"] + runner["net_pnl"])
+    bucket = [v for v in bot.ev_stats.values()]
+    assert len(bucket) == 1 and bucket[0]["n"] == 1
+    assert bucket[0]["net"] == pytest.approx(half["net_pnl"] + runner["net_pnl"])
+
+
+def test_scale_out_qty_one_exits_full_at_target(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"scale_out": True, "min_edge_c": None, "paper_bankroll": 30.0,
+         "overnight_curfew": False, "weekend_curfew": False}))
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                 # tiny budget -> 1 contract
+        _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.66, ts=1010.0),
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1 and trades[0]["exit_reason"] == "target"
+    assert trades[0]["qty"] == 1

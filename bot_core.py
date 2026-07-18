@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     "weekend_curfew": True,    # no entries Sat/Sun 00Z-13Z (thin-tape bleed)
     "overnight_curfew": True,  # no entries 00Z-13Z any day until replay beats it
     "min_edge_c": 2.0,         # min NET cents/contract at win target; None=off
+    "scale_out": True,         # bank half at the win line, runner rides to stretch
     "ev_gate_min_samples": 12, # bucket sample floor before the gate may skip
     "loop_deadman_mins": 45,   # pause if the marketloop heartbeat is staler
                                # than this (0 = never); auto-resumes when back
@@ -153,6 +154,15 @@ def should_target_exit(play: dict, sig: dict) -> bool:
         return False
     px = sell_price_c(sig, play["side"])
     return px is not None and px >= r["sell_low"]
+
+
+def should_stretch_exit(play: dict, sig: dict) -> bool:
+    """After a scale-out, the runner exits at the stretch line (sell_high)."""
+    r = play.get("ranges")
+    if not r:
+        return False
+    px = sell_price_c(sig, play["side"])
+    return px is not None and px >= r["sell_high"]
 
 
 def size_for_budget(budget: float, price: float) -> int:

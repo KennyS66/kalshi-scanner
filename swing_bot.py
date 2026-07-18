@@ -79,6 +79,7 @@ def append_jsonl(path, row: dict) -> None:
 
 from bot_core import (FlipDetector, load_config, entry_blockers,
                       should_time_exit, should_target_exit, should_stop_exit,
+                      should_stretch_exit,
                       size_for_budget, trade_budget, loss_headroom,
                       compute_side_ranges, load_offsets,
                       bucket_stats, update_bucket_stats, ev_gate_blocker,
@@ -183,6 +184,38 @@ class Bot:
         self._event("enter", f"{side} x{qty} @ {fill['price']}{tgt}",
                     sig["ticker"], sig)
 
+    def _scale_out(self, ticker, play, sig):
+        """Bank half the position at the win line; the rest rides to stretch.
+        Books its own journal row; entry fill is re-apportioned so the
+        runner's later _exit math stays exact."""
+        fill_sig = sig
+        if sig.get("yes_ask") is None or sig.get("no_ask") is None:
+            fill_sig = play["last_sig"]
+        half = play["qty"] // 2
+        fill = self.broker.sell(play["side"], half, fill_sig)
+        entry = play["entry"]
+        entry_fee_half = round(entry["fee_total"] * half / entry["qty"], 4)
+        pnl = round((fill["price"] - entry["price"]) * half
+                    - entry_fee_half - fill["fee_total"], 4)
+        self.state["day_pnl"] = round(self.state["day_pnl"] + pnl, 4)
+        self.state["total_pnl"] = round(
+            self.state.get("total_pnl", 0.0) + pnl, 4)
+        append_jsonl(self.dir / TRADES_FILE, {
+            "ticker": ticker, "mode": self.broker.mode, "side": play["side"],
+            "qty": half, "entry_price": entry["price"],
+            "exit_price": fill["price"], "entry_ts": entry["ts"],
+            "exit_ts": fill["ts"],
+            "fees": round(entry_fee_half + fill["fee_total"], 4),
+            "net_pnl": pnl, "exit_reason": "target_half",
+            "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
+            "status": "closed"})
+        entry["qty"] -= half
+        entry["fee_total"] = round(entry["fee_total"] - entry_fee_half, 4)
+        play["qty"] -= half
+        play["scaled"] = {"pnl": pnl}
+        self._event("scale", f"banked {half} @ {fill['price']} pnl {pnl:+.2f}"
+                    f" — {play['qty']} ride to stretch", ticker, sig)
+
     def _exit(self, ticker, play, sig, reason):
         # Historical replay rows can be status="ok" but lack yes_ask/no_ask
         # (no live quote at that point in the recording). The entry sig
@@ -208,7 +241,9 @@ class Bot:
             "net_pnl": pnl, "exit_reason": reason,
             "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
             "status": "closed"})
-        update_bucket_stats(self.ev_stats, play["side"], play["entry_sig"], pnl)
+        # one EV sample per entry decision: fold any banked scale-out leg in
+        update_bucket_stats(self.ev_stats, play["side"], play["entry_sig"],
+                            round(pnl + (play.get("scaled") or {}).get("pnl", 0.0), 4))
         self._event("exit", f"{reason} pnl {pnl:+.2f}", ticker, sig)
 
     def _flatten(self, reason):
@@ -331,8 +366,13 @@ class Bot:
                 # always carry a usable yes_ask/no_ask.
                 if sig.get("yes_ask") is not None and sig.get("no_ask") is not None:
                     play["last_sig"] = dict(sig)
-                if should_target_exit(play, sig):
-                    self._exit(t, play, sig, "target")
+                scaled = play.get("scaled")
+                if (not scaled and self.cfg.get("scale_out", True)
+                        and play["qty"] >= 2 and should_target_exit(play, sig)):
+                    self._scale_out(t, play, sig)
+                elif (should_stretch_exit(play, sig) if scaled
+                      else should_target_exit(play, sig)):
+                    self._exit(t, play, sig, "stretch" if scaled else "target")
                 elif should_stop_exit(play, sig, self.cfg):
                     self._exit(t, play, sig, "stop")
                 elif should_time_exit(sig, self.cfg):
