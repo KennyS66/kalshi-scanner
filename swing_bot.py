@@ -81,7 +81,8 @@ from bot_core import (FlipDetector, load_config, entry_blockers,
                       should_time_exit, should_target_exit, should_stop_exit,
                       size_for_budget, trade_budget, loss_headroom,
                       compute_side_ranges, load_offsets,
-                      bucket_stats, update_bucket_stats, ev_gate_blocker)
+                      bucket_stats, update_bucket_stats, ev_gate_blocker,
+                      weekend_curfew_blocker)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
@@ -358,6 +359,9 @@ class Bot:
         ev = ev_gate_blocker(flip, sig, self.ev_stats, self.cfg)
         if ev:
             blockers.append(ev)
+        cur = weekend_curfew_blocker(sig.get("ts") or time.time(), self.cfg)
+        if cur:
+            blockers.append(cur)
         if self.state.get("loss_capped"):
             blockers.append("max_loss_cap")
         mcap = self.cfg.get("max_entries_per_market") or 0

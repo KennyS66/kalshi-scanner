@@ -8,6 +8,7 @@ advance the confirmed sign, so it can't silently consume a later flip.
 """
 import json
 import math
+import time
 from pathlib import Path
 
 from backtest_gate import fee
@@ -27,6 +28,7 @@ DEFAULT_CONFIG = {
     "live_requested": False,   # GUI toggle target; live also needs BOT_LIVE=1 + EV bar
     "use_ranges": True,        # gate entries/exits on the calibrated buy/sell ranges
     "ev_gate": True,           # skip entry buckets with proven-negative EV
+    "weekend_curfew": True,    # no entries Sat/Sun 00Z-13Z (thin-tape bleed)
     "ev_gate_min_samples": 12, # bucket sample floor before the gate may skip
     "loop_deadman_mins": 45,   # pause if the marketloop heartbeat is staler
                                # than this (0 = never); auto-resumes when back
@@ -243,6 +245,20 @@ def should_stop_exit(play: dict, sig: dict, cfg: dict) -> bool:
 # average is negative — small samples and profitable buckets never gate.
 
 MOM_ALIGN_STRONG = 8.0   # aligned-momentum floor for the "strong" band
+CURFEW_END_HOUR = 13     # weekend overnight curfew covers 00Z-13Z Sat/Sun
+
+
+def weekend_curfew_blocker(now_ts: float, cfg: dict):
+    """Reason to skip entries in the thin weekend-overnight tape, or None.
+
+    Sat/Sun 00Z-13Z measured -1.10/trade avg (2026-07-18, n=57 overnight);
+    exits are never curfewed — open plays still manage themselves."""
+    if not cfg.get("weekend_curfew", True):
+        return None
+    g = time.gmtime(now_ts)
+    if g.tm_wday >= 5 and g.tm_hour < CURFEW_END_HOUR:
+        return f"weekend_curfew: no entries Sat/Sun 00-{CURFEW_END_HOUR}Z"
+    return None
 
 
 def entry_bucket(side: str, sig: dict) -> str:

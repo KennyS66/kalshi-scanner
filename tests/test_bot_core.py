@@ -288,3 +288,16 @@ def test_trade_budget_matches_remaining_headroom():
 def test_size_for_budget():
     assert size_for_budget(10.0, 0.50) > 0
     assert size_for_budget(0.0, 0.50) == 0
+
+
+from bot_core import weekend_curfew_blocker
+
+def test_weekend_curfew_blocks_sat_sun_overnight():
+    cfg = {"weekend_curfew": True}
+    sun_03z = 1784430000.0   # Sun 03:00Z — curfew window
+    sun_14z = 1784469600.0   # Sun 14:00Z — after 13Z
+    fri_03z = 1784257200.0   # Fri 03:00Z — weekday
+    assert weekend_curfew_blocker(sun_03z, cfg) is not None
+    assert weekend_curfew_blocker(sun_14z, cfg) is None      # after 13Z ok
+    assert weekend_curfew_blocker(fri_03z, cfg) is None      # weekday ok
+    assert weekend_curfew_blocker(sun_03z, {"weekend_curfew": False}) is None
