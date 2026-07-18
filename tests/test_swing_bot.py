@@ -576,3 +576,34 @@ def test_scale_out_qty_one_exits_full_at_target(tmp_path, monkeypatch):
     trades = _rows(tmp_path, TRADES_FILE)
     assert len(trades) == 1 and trades[0]["exit_reason"] == "target"
     assert trades[0]["qty"] == 1
+
+
+def test_profit_lock_halts_on_giveback_and_halves_size(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"min_edge_c": None, "scale_out": False,
+         "overnight_curfew": False, "weekend_curfew": False}))
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    # armed: day peaked at +20, still healthy -> entries allowed at HALF size
+    bot.state["day_pnl"] = 20.0
+    bot.tick(now_ts=1000.0)                    # seeds detector, sets day_high
+    assert bot.state["day_high"] == 20.0
+    bot.tick(now_ts=1000.0)                    # flip -> enter at half budget
+    play = list(bot.state["open_plays"].values())[0]
+    # full budget $10 (2% default x500) -> half $5 -> qty 9 @ .52+.02 fee
+    assert play["qty"] == 9
+    # giveback: drop below 50% of the 20 peak -> halt, profit banked
+    bot.state["day_pnl"] = 9.5
+    bot.tick(now_ts=1000.0)
+    assert bot.state["halted"] is True
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any("profit_lock" in e["reason"] for e in events if e["action"] == "halt")
+
+
+def test_profit_lock_not_armed_below_threshold():
+    from swing_bot import fresh_state, roll_day_if_needed
+    s = fresh_state()
+    s.update({"day": "2020-01-01", "day_pnl": 5.0, "day_high": 20.0})
+    roll_day_if_needed(s, time.time())
+    assert s["day_high"] == 0.0                # watermark resets each day

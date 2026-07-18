@@ -29,7 +29,7 @@ def _utc_day(ts: float) -> str:
 
 def fresh_state() -> dict:
     return {"mode": "paper", "paused": False, "halted": False,
-            "day": _utc_day(0.0), "day_pnl": 0.0,
+            "day": _utc_day(0.0), "day_pnl": 0.0, "day_high": 0.0,
             "bankroll": 500.0, "bankroll_ts": 0.0,
             "open_plays": {}, "heartbeat": 0.0, "last_control_nonce": 0}
 
@@ -65,8 +65,8 @@ def roll_day_if_needed(state: dict, now_ts: float) -> bool:
     today = _utc_day(now_ts)
     if state.get("day") == today:
         return False
-    state.update({"day": today, "day_pnl": 0.0, "halted": False,
-                  "market_entries": {}})
+    state.update({"day": today, "day_pnl": 0.0, "day_high": 0.0,
+                  "halted": False, "market_entries": {}})
     return True
 
 
@@ -168,6 +168,10 @@ class Bot:
         price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         budget = trade_budget(self.state["bankroll"],
                               self.state.get("total_pnl", 0.0), self.cfg)
+        arm = self.cfg.get("profit_arm_usd") or 0.0
+        if arm > 0 and self.state.get("day_high", 0.0) >= arm:
+            # profit lock armed: green day banked — risk small from here
+            budget *= self.cfg.get("profit_size_frac", 0.5)
         qty = size_for_budget(budget, price)
         if qty < 1:
             self._event("skip", f"budget too small for 1 contract at {price}",
@@ -313,6 +317,23 @@ class Bot:
             self._flatten("halt")
             self._event("halt", f"day_pnl {self.state['day_pnl']:+.2f} <= -{stop:.2f}")
 
+    def _check_profit_lock(self):
+        """Trail the day's profit peak: once armed, halt before a give-back
+        erases it — bank at least keep_frac of the best point."""
+        arm = self.cfg.get("profit_arm_usd") or 0.0
+        if arm <= 0:
+            return
+        hi = max(self.state.get("day_high", 0.0), self.state["day_pnl"])
+        self.state["day_high"] = hi
+        if self.state["halted"] or hi < arm:
+            return
+        floor = hi * self.cfg.get("profit_keep_frac", 0.5)
+        if self.state["day_pnl"] <= floor:
+            self.state["halted"] = True
+            self._flatten("halt")
+            self._event("halt", f"profit_lock: day peaked {hi:+.2f}, banking "
+                        f"{self.state['day_pnl']:+.2f} (floor {floor:.2f})")
+
     def _check_max_loss(self):
         """Hard cap on TOTAL loss. Unlike the day stop it never resets on a
         day roll — trading stays blocked until the user raises max_loss_usd
@@ -341,6 +362,7 @@ class Bot:
         self._handle_control()
         self._check_loop_deadman(now_ts)
         self._check_day_stop()
+        self._check_profit_lock()
         self._check_max_loss()
 
         sig = self.fetch()

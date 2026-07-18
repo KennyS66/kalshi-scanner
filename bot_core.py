@@ -32,6 +32,9 @@ DEFAULT_CONFIG = {
     "overnight_curfew": True,  # no entries 00Z-13Z any day until replay beats it
     "min_edge_c": 2.0,         # min NET cents/contract at win target; None=off
     "scale_out": True,         # bank half at the win line, runner rides to stretch
+    "profit_arm_usd": 15.0,    # day P&L peak that arms the profit lock; 0=off
+    "profit_keep_frac": 0.5,   # halt the day if P&L gives back to this frac of peak
+    "profit_size_frac": 0.5,   # entry-budget multiplier while the lock is armed
     "ev_gate_min_samples": 12, # bucket sample floor before the gate may skip
     "loop_deadman_mins": 45,   # pause if the marketloop heartbeat is staler
                                # than this (0 = never); auto-resumes when back
