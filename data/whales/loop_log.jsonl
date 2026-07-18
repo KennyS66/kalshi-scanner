@@ -179,3 +179,5 @@
 {"ts": 1784409550.7688284, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784411413.464933, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784411515.3941052, "type": "EVENT", "spot": null, "msg": "day halt #2: -60.73; flat; 00Z roll in ~1h40m"}
+{"ts": 1784413272.5061712, "type": "STATUS", "spot": null, "msg": "quiet iter; day-halted till 00Z"}
+{"ts": 1784415774.5021434, "type": "STATUS", "spot": null, "msg": "quiet iter; halted till 00Z"}
