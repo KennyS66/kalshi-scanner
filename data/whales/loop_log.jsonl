@@ -168,3 +168,5 @@
 {"ts": 1784395797.8827853, "type": "STATUS", "spot": null, "msg": "10% sizing + fresh $100 cap live"}
 {"ts": 1784396515.2448874, "type": "STATUS", "spot": null, "msg": "sizing $25 base / $150 halt applied"}
 {"ts": 1784397187.449983, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784399652.8987296, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784401040.8795323, "type": "STATUS", "spot": null, "msg": "EV gate rebuilt on daytime-only evidence per standing audit"}
