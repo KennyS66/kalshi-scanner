@@ -348,3 +348,5 @@
 {"ts": 1784401011.4635441, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
 {"ts": 1784401256.708101, "ticker": "KXBTC15M-26JUL181515-15", "action": "enter", "reason": "YES x41 @ 0.58 target 64.0c (stretch 66.0c)", "sig": {"price": 0.57, "yes_ask": 0.58, "no_ask": 0.43, "mins_left": 14.1, "whale_trend": 5.8, "momentum": 8.56, "buy_pressure": -19407}}
 {"ts": 1784401376.9370236, "ticker": "KXBTC15M-26JUL181515-15", "action": "skip", "reason": "already_open", "sig": {"price": 0.55, "yes_ask": 0.55, "no_ask": 0.46, "mins_left": 12.1, "whale_trend": 2.1, "momentum": 12.11, "buy_pressure": -48825}}
+{"ts": 1784401597.4426692, "ticker": "KXBTC15M-26JUL181515-15", "action": "exit", "reason": "target pnl +2.46", "sig": {"price": 0.69, "yes_ask": 0.69, "no_ask": 0.32, "mins_left": 8.4, "whale_trend": 5.8, "momentum": 9.82, "buy_pressure": 2848}}
+{"ts": 1784401743.0009687, "ticker": "KXBTC15M-26JUL181515-15", "action": "skip", "reason": "thin_edge: 0.0c net at win target < 2.0c floor", "sig": {"price": 0.84, "yes_ask": 0.84, "no_ask": 0.17, "mins_left": 5.9, "whale_trend": -4.2, "momentum": -4.72, "buy_pressure": -27947}}
