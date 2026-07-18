@@ -156,3 +156,7 @@
 {"ts": 1784381253.5423462, "type": "EVENT", "spot": null, "msg": "FAILED BREAK confirmed, back below 64000; regime back to range 63400-64100"}
 {"ts": 1784383890.9623516, "type": "STATUS", "spot": null, "msg": "session-curfew build live"}
 {"ts": 1784383973.4834833, "type": "STATUS", "spot": null, "msg": "clean restart, session-curfew build"}
+{"ts": 1784385270.348334, "type": "EVENT", "spot": null, "msg": "2nd BREAK above 64100 confirmed, spot 64141; watching 64000 fail-line / 64600 continuation"}
+{"ts": 1784386174.0763004, "type": "STATUS", "spot": null, "msg": "candle chart build live"}
+{"ts": 1784386446.6675558, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784386918.280209, "type": "STATUS", "spot": null, "msg": "handing watch to Sonnet per Kenny; all systems green"}
