@@ -82,7 +82,7 @@ from bot_core import (FlipDetector, load_config, entry_blockers,
                       size_for_budget, trade_budget, loss_headroom,
                       compute_side_ranges, load_offsets,
                       bucket_stats, update_bucket_stats, ev_gate_blocker,
-                      weekend_curfew_blocker)
+                      weekend_curfew_blocker, daytime_trades)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
@@ -134,7 +134,7 @@ class Bot:
         # EV-gate stats + lifetime P&L: seeded from the closed-trade journal
         # at boot, then kept current incrementally in _exit.
         trades = self._read_trades()
-        self.ev_stats = bucket_stats(trades)
+        self.ev_stats = bucket_stats(daytime_trades(trades))
         self.state["total_pnl"] = round(sum(
             t["net_pnl"] for t in trades
             if t.get("status") == "closed" and t.get("net_pnl") is not None), 4)

@@ -314,6 +314,18 @@ def update_bucket_stats(stats: dict, side: str, entry_sig: dict,
     d["win_pct"] = round(100.0 * d["wins"] / d["n"], 1)
 
 
+def daytime_trades(trades: list) -> list:
+    """Trades that exited in the curfew-open window (13-24Z).
+
+    The live EV gate learns only from these: 2026-07-18 audit found gating
+    buckets whose losses were curfew-hours tape the bot no longer trades
+    (NO|mid|11m+|weak: -$18.34 overnight vs +$1.22 daytime). Replay keeps
+    the raw feed - it measures the uncurfewed strategy."""
+    return [t for t in trades
+            if t.get("exit_ts")
+            and time.gmtime(t["exit_ts"]).tm_hour >= CURFEW_END_HOUR]
+
+
 def bucket_stats(trades: list) -> dict:
     """Aggregate closed trades (with entry_sig snapshots) into buckets."""
     stats = {}

@@ -351,3 +351,15 @@ def test_trade_budget_ten_pct_with_fresh_cap():
     cfg = {"max_loss_usd": 100.0, "loss_cap_baseline": -61.3,
            "risk_pct": 0.10, "trade_risk_frac": 0.5}
     assert trade_budget(500.0, -61.3, cfg) == pytest.approx(50.0)  # min(50, 100*0.5)
+
+
+from bot_core import daytime_trades
+
+def test_daytime_trades_filters_curfew_hours():
+    wd_13z = 1784293200.0    # 13:00Z
+    wd_03z = 1784257200.0    # 03:00Z
+    rows = [{"exit_ts": wd_13z, "status": "closed"},
+            {"exit_ts": wd_03z, "status": "closed"},
+            {"status": "closed"}]                     # no exit_ts: dropped
+    out = daytime_trades(rows)
+    assert out == [rows[0]]
