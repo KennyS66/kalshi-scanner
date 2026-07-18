@@ -187,6 +187,15 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 /* gate progress bar inside its tile */
 .gatebar { height:4px; background:var(--hair); border-radius:3px; margin-top:6px; overflow:hidden; }
 .gatebar i { display:block; height:100%; background:var(--blue); border-radius:3px; }
+
+/* ── equity chart ── */
+#eqWrap { position:relative; }
+#eqWrap svg { display:block; width:100%; }
+.eqtip { position:absolute; pointer-events:none; z-index:5;
+         background:var(--bg3); border:1px solid var(--border); border-radius:7px;
+         padding:7px 10px; font-size:11px; line-height:1.7; white-space:nowrap;
+         box-shadow:0 6px 20px rgba(0,0,0,.45); font-variant-numeric:tabular-nums; }
+.eqtip .dim { font-family:var(--sans); }
 </style></head><body>
 
 <header>
@@ -234,6 +243,12 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 </div>
 
 <div class="grid">
+  <div class="panel wide">
+    <h3>Equity <span class="dim" style="text-transform:none">(cumulative net P&amp;L, last 50 settled · per-trade net below)</span></h3>
+    <div id="eqWrap"><svg id="eqSvg" height="196"></svg><div id="eqTip" class="eqtip" hidden></div></div>
+    <div class="empty" id="eqEmpty" hidden>no closed trades yet — the curve starts with the first settle</div>
+  </div>
+
   <div class="panel">
     <h3>Controls</h3>
     <div class="controls">
@@ -436,6 +451,82 @@ async function pollCalibration() {
   }
 }
 
+/* ── equity chart: step-line cumulative + diverging per-trade bars ── */
+let _eq = null;   // {trades (chronological), gmap} for resize re-render
+function renderEquity(trades, gmap) {
+  _eq = {trades, gmap};
+  const svg = $('eqSvg'), wrap = $('eqWrap');
+  $('eqEmpty').hidden = trades.length > 0;
+  wrap.hidden = trades.length === 0;
+  if (!trades.length) return;
+  const W = wrap.clientWidth || 600, H = 196;
+  const padL = 46, padR = 12, curveT = 10, curveB = 122, barsT = 140, barsB = 188;
+  const plotW = W - padL - padR, n = trades.length;
+  const X = i => padL + (n === 1 ? plotW / 2 : i * plotW / (n - 1));
+  // cumulative series, domain always includes 0
+  let c = 0; const cum = trades.map(t => +(c += t.net_pnl).toFixed(2));
+  const lo = Math.min(0, ...cum), hi = Math.max(0, ...cum);
+  const Y = v => curveB - (v - lo) / ((hi - lo) || 1) * (curveB - curveT);
+  // bars: symmetric domain so equal wins/losses read equal
+  const bmax = Math.max(...trades.map(t => Math.abs(t.net_pnl)), 0.01);
+  const bzero = (barsT + barsB) / 2;
+  const BY = v => bzero - v / bmax * (barsB - barsT) / 2;
+  const gv = 'var(--hair)', tick = v => '$' + v.toFixed(2).replace('.00', '');
+  let h = '';
+  // gridlines + y labels: min / zero / max of the cumulative scale
+  const marks = [...new Set([lo, 0, hi])];
+  for (const m of marks) {
+    const em = m === 0 ? 'var(--border)' : gv;
+    h += `<line x1="${padL}" x2="${W - padR}" y1="${Y(m)}" y2="${Y(m)}" stroke="${em}" stroke-width="1"/>`
+       + `<text x="${padL - 6}" y="${Y(m) + 3}" text-anchor="end" font-size="9" fill="var(--mute)">${tick(m)}</text>`;
+  }
+  h += `<line x1="${padL}" x2="${W - padR}" y1="${bzero}" y2="${bzero}" stroke="var(--border)" stroke-width="1"/>`;
+  // step-after equity path
+  let p = `M ${X(0)} ${Y(cum[0])}`;
+  for (let i = 1; i < n; i++) p += ` H ${X(i)} V ${Y(cum[i])}`;
+  h += `<path d="${p}" fill="none" stroke="var(--blue)" stroke-width="2" stroke-linejoin="round"/>`;
+  // direct label on the last point only
+  const endV = cum[n - 1];
+  h += `<circle cx="${X(n - 1)}" cy="${Y(endV)}" r="3" fill="var(--blue)"/>`
+     + `<text x="${Math.min(X(n - 1) + 6, W - padR)}" y="${Y(endV) - 6}" text-anchor="end" font-size="10"
+          font-weight="800" fill="var(--fg)">${money(endV)}</text>`;
+  // per-trade diverging bars, 2px gap, floor width 2px
+  const bw = Math.max(2, Math.min(14, plotW / n - 2));
+  trades.forEach((t, i) => {
+    const v = t.net_pnl, y = BY(v);
+    h += `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${Math.min(y, bzero).toFixed(1)}"
+           width="${bw.toFixed(1)}" height="${Math.max(1, Math.abs(y - bzero)).toFixed(1)}" rx="1.5"
+           fill="var(--${v >= 0 ? 'green' : 'red'})"/>`;
+  });
+  // x labels: first and last settle times
+  const xl = ts => new Date(ts * 1000).toISOString().slice(5, 16).replace('T', ' ');
+  h += `<text x="${padL}" y="${H - 1}" font-size="9" fill="var(--mute)">${xl(trades[0].exit_ts)}</text>`
+     + `<text x="${W - padR}" y="${H - 1}" text-anchor="end" font-size="9" fill="var(--mute)">${xl(trades[n - 1].exit_ts)}</text>`;
+  h += `<line id="eqHair" y1="${curveT}" y2="${barsB}" stroke="var(--mute)" stroke-width="1" opacity="0" pointer-events="none"/>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.innerHTML = h;
+  svg.onmousemove = ev => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(n - 1,
+      Math.round((ev.clientX - r.left - padL) / (plotW / Math.max(1, n - 1)))));
+    const hair = $('eqHair'); hair.setAttribute('x1', X(i)); hair.setAttribute('x2', X(i));
+    hair.setAttribute('opacity', '.5');
+    const t = trades[i], g = gmap[t.ticker + '|' + t.entry_ts];
+    const tip = $('eqTip'); tip.hidden = false;
+    tip.innerHTML = `<span class="dim">${xl(t.exit_ts)}</span> ${esc(t.ticker)}<br>`
+      + `<span class="side-chip ${t.side.toLowerCase()}">${t.side}</span> ${t.qty} × ${(t.entry_price * 100).toFixed(0)}¢`
+      + ` ($${(t.entry_price * t.qty).toFixed(2)}) · ${esc(t.exit_reason)}<br>`
+      + `net <b class="${t.net_pnl >= 0 ? 'pos' : 'neg'}">${money(t.net_pnl)}</b>`
+      + ` · total <b class="${cum[i] >= 0 ? 'pos' : 'neg'}">${money(cum[i])}</b>`
+      + (g && g.verdict ? ` · <span class="vchip ${esc(g.verdict)}">${esc(g.verdict.replace('_', ' '))}</span>` : '');
+    const tx = Math.min(Math.max(0, X(i) - 90), W - 220);
+    tip.style.left = tx + 'px'; tip.style.top = '6px';
+  };
+  svg.onmouseleave = () => { $('eqTip').hidden = true; $('eqHair').setAttribute('opacity', '0'); };
+}
+window.addEventListener('resize', () => _eq && renderEquity(_eq.trades, _eq.gmap));
+
 async function pollBot() {
   const d = await fj('/api/bot/status', null);
   if (!d) { $('runBadge').textContent = 'API ERR'; $('runBadge').className = 'badge offline'; return; }
@@ -559,6 +650,8 @@ async function pollBot() {
   $('gateProg').textContent = `${a.n}/${GATE_N}`;
   $('gateProgSub').textContent = 'settled trades before sizing review';
   $('gateBar').style.width = Math.min(100, a.n / GATE_N * 100).toFixed(0) + '%';
+
+  renderEquity((d.trades || []).filter(t => t.status === 'closed'), gmap);
 
   const trades = (d.trades || []).slice().reverse();
   $('tradeTable').tBodies[0].innerHTML = trades.map(t => {
