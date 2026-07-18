@@ -241,7 +241,10 @@ def test_target_exit_at_calibrated_sell_low(tmp_path, monkeypatch):
 
 def test_offsets_file_tightens_target(tmp_path, monkeypatch):
     # sell_low_offset 8c from the graded history: sell_low = max(54, 52+10-8) = 54.
+    # min_edge off: 54c target on a 52c ask is deliberately thin — this test
+    # checks offset plumbing, and the thin-edge gate would (correctly) block it.
     import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps({"min_edge_c": None}))
     (tmp_path / "banner_offsets.json").write_text(_json.dumps(
         {"yes": {"sell_low_offset_c": 8.0}, "no": {}}))
     sigs = [

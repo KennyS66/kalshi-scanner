@@ -305,3 +305,26 @@ def test_weekend_curfew_blocks_sat_sun_overnight():
     assert "weekend" in weekend_curfew_blocker(sun_03z, we_only)
     assert weekend_curfew_blocker(fri_03z, we_only) is None
     assert weekend_curfew_blocker(sun_03z, all_off) is None
+
+
+def test_entry_blockers_thin_edge_gate():
+    cfg = dict(DEFAULT_CONFIG)
+    r = compute_side_ranges(0.50, 70.0, "YES", {})   # sell_low 62c
+    # ask 60c -> gross 2c, fees ~4.3c -> net negative: blocked...
+    thin = {"status": "ok", "ticker": "M1", "price": 0.50, "yes_ask": 0.60,
+            "no_ask": 0.42, "mins_left": 10.0}
+    # ...but 60c ask is also above the buy range; use in-range thin case via
+    # tight ranges instead: entry 50c, sell_low floor makes edge huge, so
+    # craft ranges directly.
+    tight = dict(r, sell_low=54.0)                   # gross 4c at 50c ask
+    sig = {"status": "ok", "ticker": "M1", "price": 0.50, "yes_ask": 0.50,
+           "no_ask": 0.52, "mins_left": 10.0}
+    b = entry_blockers(sig, cfg, {}, False, False, tight)
+    assert any("thin_edge" in x for x in b)
+    # healthy edge (sell_low 62c): 12c gross, ~4c fees -> passes
+    assert entry_blockers(sig, cfg, {}, False, False, r) == []
+    # filter off
+    off = dict(cfg, min_edge_c=None)
+    assert entry_blockers(sig, off, {}, False, False, tight) == []
+    # no ranges -> no edge check (range gate handles its own absence)
+    assert entry_blockers(sig, cfg, {}, False, False, None) == []

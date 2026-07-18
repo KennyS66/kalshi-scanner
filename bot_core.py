@@ -11,7 +11,7 @@ import math
 import time
 from pathlib import Path
 
-from backtest_gate import fee
+from backtest_gate import fee  # noqa: F401 — also used by entry_blockers
 
 DEFAULT_CONFIG = {
     "flip_threshold": 2.0,     # min |whale_trend| after the sign change
@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     "ev_gate": True,           # skip entry buckets with proven-negative EV
     "weekend_curfew": True,    # no entries Sat/Sun 00Z-13Z (thin-tape bleed)
     "overnight_curfew": True,  # no entries 00Z-13Z any day until replay beats it
+    "min_edge_c": 2.0,         # min NET cents/contract at win target; None=off
     "ev_gate_min_samples": 12, # bucket sample floor before the gate may skip
     "loop_deadman_mins": 45,   # pause if the marketloop heartbeat is staler
                                # than this (0 = never); auto-resumes when back
@@ -221,6 +222,16 @@ def entry_blockers(sig: dict, cfg: dict, open_plays: dict,
         elif ask_c < ranges["buy_low"]:
             blockers.append(f"ask {ask_c:.1f}c below buy range "
                             f"{ranges['buy_low']:.1f}-{ranges['buy_high']:.1f}c")
+        # thin-edge gate: projected NET cents/contract at the win target must
+        # clear a floor — 3-5c gross margins lose to double fees (17 of the
+        # first 60 target "wins" netted < $0.30; several were net negative)
+        min_edge = cfg.get("min_edge_c")
+        if min_edge is not None:
+            edge_c = (ranges["sell_low"] - ask_c
+                      - 100 * (fee(ask) + fee(ranges["sell_low"] / 100)))
+            if edge_c < min_edge:
+                blockers.append(f"thin_edge: {edge_c:.1f}c net at win target "
+                                f"< {min_edge:.1f}c floor")
     return blockers
 
 
