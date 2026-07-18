@@ -132,3 +132,5 @@
 {"ts": 1784336036.5216384, "type": "STATUS", "spot": null, "msg": "heartbeat: interactive session active (grader Q&A); releasing deadman"}
 {"ts": 1784336616.155152, "type": "STATUS", "spot": null, "msg": "web restarted for GUI upgrade (grades panel); heartbeat"}
 {"ts": 1784337253.3296463, "type": "STATUS", "spot": null, "msg": "web restarted for equity chart; heartbeat"}
+{"ts": 1784338596.4918103, "type": "STATUS", "spot": null, "msg": "stack restarted with flow-conviction EV buckets; heartbeat"}
+{"ts": 1784338688.3266423, "type": "STATUS", "spot": null, "msg": "quiet mode"}
