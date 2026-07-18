@@ -163,3 +163,5 @@
 {"ts": 1784388940.3664246, "type": "STATUS", "spot": null, "msg": "bot resumed trading post-reset, day +3.57; breakout_watch watcher re-armed 64000-64600"}
 {"ts": 1784391368.7378283, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784393827.5153654, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784394715.540907, "type": "STATUS", "spot": null, "msg": "thin-edge gate live (min 2c net at target)"}
+{"ts": 1784394984.9265168, "type": "STATUS", "spot": null, "msg": "rebound tracking live; 8/26 stops were recoverable"}
