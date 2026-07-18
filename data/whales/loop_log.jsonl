@@ -121,3 +121,14 @@
 {"ts": 1784150054.2242467, "type": "NOTE", "spot": null, "msg": ""}
 {"ts": 1784150700.3441842, "type": "NOTE", "spot": null, "msg": ""}
 {"ts": 1784153442.4251392, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784162313.7477498, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784162339.926201, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784164219.4362285, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1784327768.2700307, "type": "STATUS", "spot": null, "msg": "loop resumed after power-off: stack restarted, fresh Jul17 thesis UP conv1 key=64000, spot 63893 below key (test zone), arming 10min-confirm break watcher"}
+{"ts": 1784331551.229371, "type": "STATUS", "spot": null, "msg": "loop active (interactive session) \u2014 designing loss-diagnosis capture; heartbeat refresh to release deadman"}
+{"ts": 1784331670.8955743, "type": "STATUS", "spot": null, "msg": "iter: spot pressing 64k from below, breakout_watch 63400-64100 journaled, watchers live, bot trading"}
+{"ts": 1784333230.9785879, "type": "STATUS", "spot": null, "msg": "iter: 00Z rollover check"}
+{"ts": 1784333262.9632921, "type": "STATUS", "spot": null, "msg": "00Z setup done: Jul18 thesis WAIT conv1 key=64000, regime range 63400-64100 journaled, watcher unchanged, weekend thin-tape caution"}
+{"ts": 1784336036.5216384, "type": "STATUS", "spot": null, "msg": "heartbeat: interactive session active (grader Q&A); releasing deadman"}
+{"ts": 1784336616.155152, "type": "STATUS", "spot": null, "msg": "web restarted for GUI upgrade (grades panel); heartbeat"}
+{"ts": 1784337253.3296463, "type": "STATUS", "spot": null, "msg": "web restarted for equity chart; heartbeat"}
