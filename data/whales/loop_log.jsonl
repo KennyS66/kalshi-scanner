@@ -134,3 +134,6 @@
 {"ts": 1784337253.3296463, "type": "STATUS", "spot": null, "msg": "web restarted for equity chart; heartbeat"}
 {"ts": 1784338596.4918103, "type": "STATUS", "spot": null, "msg": "stack restarted with flow-conviction EV buckets; heartbeat"}
 {"ts": 1784338688.3266423, "type": "STATUS", "spot": null, "msg": "quiet mode"}
+{"ts": 1784341152.7676558, "type": "STATUS", "spot": null, "msg": "2h status update delivered"}
+{"ts": 1784342599.723591, "type": "STATUS", "spot": null, "msg": "dual weekday/weekend gate live"}
+{"ts": 1784343785.8458338, "type": "STATUS", "spot": null, "msg": "web back after graph-UI restart"}
