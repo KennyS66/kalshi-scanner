@@ -83,3 +83,30 @@ def test_status_payload_includes_config(tmp_path):
     payload = bot_status_payload(tmp_path)
     assert payload["config"]["use_ranges"] is True
     assert payload["config"]["risk_pct"] == 0.02
+
+
+def test_status_payload_includes_grades(tmp_path):
+    _seed(tmp_path)
+    grades = [
+        {"ticker": "T0", "entry_ts": 0, "verdict": "good_stop",
+         "exit_reason": "stop", "delta_vs_held": 3.1, "data_gap": False},
+        {"ticker": "T1", "entry_ts": 1, "verdict": "lucky_exit",
+         "exit_reason": "target", "delta_vs_held": 2.0, "data_gap": False},
+        {"ticker": "T2", "entry_ts": 2, "verdict": "ungraded",
+         "exit_reason": "stop", "delta_vs_held": None, "data_gap": True},
+    ]
+    (tmp_path / "bot_trade_grades.jsonl").write_text(
+        "\n".join(json.dumps(g) for g in grades))
+    p = bot_status_payload(tmp_path)
+    assert len(p["grades"]) == 3
+    s = p["grade_summary"]
+    assert s["n"] == 3 and s["gaps"] == 1
+    assert s["verdicts"] == {"good_stop": 1, "lucky_exit": 1, "ungraded": 1}
+    assert s["exit_edge_usd"] == 5.1
+    assert s["stops_saved_usd"] == 3.1
+
+
+def test_status_payload_no_grades_file_is_safe(tmp_path):
+    _seed(tmp_path)
+    p = bot_status_payload(tmp_path)
+    assert p["grades"] == [] and p["grade_summary"]["n"] == 0

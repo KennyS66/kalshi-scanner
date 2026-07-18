@@ -169,6 +169,24 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 #log .a.enter { color:var(--green); } #log .a.exit { color:var(--blue); }
 #log .a.skip { color:var(--mute); } #log .a.halt, #log .a.feed_down, #log .a.error { color:var(--red); }
 #log .a.pause { color:var(--yellow); } #log .a.resume { color:var(--green); }
+
+/* ── settlement-grade verdict chips ── */
+.vchip { font-size:10px; font-weight:800; padding:2px 8px; border-radius:99px;
+         border:1px solid var(--border); background:var(--bg3); white-space:nowrap; }
+.vchip.clean_win    { color:var(--green);  border-color:var(--green-bd);  background:var(--green-bg); }
+.vchip.good_exit    { color:var(--green);  border-color:var(--green-bd);  background:var(--green-bg); }
+.vchip.good_stop    { color:var(--blue);   border-color:var(--blue-bd);   background:var(--blue-bg); }
+.vchip.lucky_exit   { color:var(--yellow); border-color:var(--yellow-bd); background:var(--yellow-bg); }
+.vchip.left_money   { color:var(--orange); background:var(--orange-bg); }
+.vchip.whipsaw_stop { color:var(--red);    border-color:var(--red-bd);    background:var(--red-bg); }
+.vchip.ungraded     { color:var(--mute); }
+.grade-strip { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+.grade-edge { font-family:var(--sans); font-size:12px; line-height:1.8; }
+.grade-edge b { font-variant-numeric:tabular-nums; }
+.notional { color:var(--mute); font-size:11px; }
+/* gate progress bar inside its tile */
+.gatebar { height:4px; background:var(--hair); border-radius:3px; margin-top:6px; overflow:hidden; }
+.gatebar i { display:block; height:100%; background:var(--blue); border-radius:3px; }
 </style></head><body>
 
 <header>
@@ -211,6 +229,8 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
     <div class="s" id="riskSub"></div></div>
   <div class="tile"><div class="k">range win line</div><div class="v" id="histWin">—</div>
     <div class="s" id="histWinSub"></div></div>
+  <div class="tile"><div class="k">gate progress</div><div class="v" id="gateProg">—</div>
+    <div class="s" id="gateProgSub"></div><div class="gatebar"><i id="gateBar" style="width:0%"></i></div></div>
 </div>
 
 <div class="grid">
@@ -228,7 +248,7 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <div class="panel">
     <h3>Open plays</h3>
     <div class="tbl-wrap"><table id="openTable"><thead><tr>
-      <th>ticker</th><th>side</th><th>qty</th><th>entry</th><th>live</th>
+      <th>ticker</th><th>side</th><th>qty</th><th>cost</th><th>entry</th><th>live</th>
       <th>uP&amp;L</th><th>target</th><th>stretch</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="empty" id="openEmpty" hidden>flat — waiting for a flow flip inside the buy range</div>
@@ -241,6 +261,13 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
       <th>stretch hit</th><th>touch</th><th>n</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="empty" id="calNote"></div>
+  </div>
+
+  <div class="panel">
+    <h3>Settlement grades <span class="dim" style="text-transform:none">(every exit vs holding to expiry)</span></h3>
+    <div class="grade-strip" id="gradeStrip"></div>
+    <div class="grade-edge" id="gradeEdge"></div>
+    <div class="empty" id="gradeEmpty" hidden>no settled trades graded yet</div>
   </div>
 
   <div class="panel">
@@ -267,8 +294,8 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <div class="panel wide">
     <h3>Trades</h3>
     <div class="tbl-wrap"><table id="tradeTable"><thead><tr>
-      <th>time</th><th>ticker</th><th>side</th><th>qty</th><th>in</th><th>out</th>
-      <th>reason</th><th>net</th>
+      <th>time</th><th>ticker</th><th>side</th><th>qty</th><th>cost</th><th>in</th><th>out</th>
+      <th>reason</th><th>net</th><th>vs settle</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="empty" id="tradeEmpty" hidden>no closed trades yet</div>
   </div>
@@ -461,7 +488,9 @@ async function pollBot() {
                      : '<span class="dim">—</span>';
     return `<tr><td>${esc(t)}</td>
       <td><span class="side-chip ${p.side.toLowerCase()}">${p.side}</span></td>
-      <td>${p.qty}</td><td>${(p.entry.price * 100).toFixed(1)}¢</td>
+      <td>${p.qty}</td>
+      <td class="notional">$${(p.entry.price * p.qty).toFixed(2)}</td>
+      <td>${(p.entry.price * 100).toFixed(1)}¢</td>
       <td>${liveTd}</td><td>${upnlTd}</td>
       <td>${r.sell_low != null ? r.sell_low.toFixed(1) + '¢' : '<span class="dim">—</span>'}</td>
       <td>${r.sell_high != null ? r.sell_high.toFixed(1) + '¢' : '<span class="dim">—</span>'}</td></tr>`;
@@ -507,14 +536,49 @@ async function pollBot() {
       `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${v.win_pct.toFixed(0)}%</td>
        <td class="${v.net_avg >= 0 ? 'pos' : 'neg'}">${money(v.net_avg)}</td></tr>`).join('');
 
+  // settlement grades: join to trades by ticker|entry_ts, fill summary panel
+  const VLABEL = {clean_win:'clean win', lucky_exit:'lucky exit', good_stop:'good stop',
+                  whipsaw_stop:'whipsaw', good_exit:'good exit', left_money:'left $',
+                  ungraded:'no data'};
+  const gmap = {};
+  (d.grades || []).forEach(g => gmap[g.ticker + '|' + g.entry_ts] = g);
+  const gs = d.grade_summary || {n: 0};
+  $('gradeEmpty').hidden = gs.n > 0;
+  $('gradeStrip').innerHTML = Object.entries(gs.verdicts || {})
+    .sort((x, y) => y[1] - x[1])
+    .map(([v, n]) => `<span class="vchip ${esc(v)}">${VLABEL[v] || esc(v)} × ${n}</span>`)
+    .join('');
+  $('gradeEdge').innerHTML = gs.n ? (
+    `exits vs holding to expiry: <b class="${gs.exit_edge_usd >= 0 ? 'pos' : 'neg'}">`
+    + `${money(gs.exit_edge_usd)}</b> across ${gs.n} settled`
+    + ` · stops alone <b class="${gs.stops_saved_usd >= 0 ? 'pos' : 'neg'}">`
+    + `${money(gs.stops_saved_usd)}</b>`
+    + (gs.gaps ? ` · <span class="dim">${gs.gaps} with feed gaps</span>` : '')) : '';
+
+  const GATE_N = 100;
+  $('gateProg').textContent = `${a.n}/${GATE_N}`;
+  $('gateProgSub').textContent = 'settled trades before sizing review';
+  $('gateBar').style.width = Math.min(100, a.n / GATE_N * 100).toFixed(0) + '%';
+
   const trades = (d.trades || []).slice().reverse();
-  $('tradeTable').tBodies[0].innerHTML = trades.map(t =>
-    `<tr><td class="dim">${new Date(t.exit_ts * 1000).toISOString().slice(5,16).replace('T',' ')}</td>
+  $('tradeTable').tBodies[0].innerHTML = trades.map(t => {
+    const g = gmap[t.ticker + '|' + t.entry_ts];
+    const vTd = g && g.verdict
+      ? `<span class="vchip ${esc(g.verdict)}"` +
+        (g.delta_vs_held != null
+          ? ` title="exit ${g.delta_vs_held >= 0 ? 'beat' : 'trailed'} holding by $${Math.abs(g.delta_vs_held).toFixed(2)}"` : '')
+        + `>${VLABEL[g.verdict] || esc(g.verdict)}</span>`
+      : '<span class="dim">settling…</span>';
+    return `<tr><td class="dim">${new Date(t.exit_ts * 1000).toISOString().slice(5,16).replace('T',' ')}</td>
      <td>${esc(t.ticker)}</td>
      <td><span class="side-chip ${t.side.toLowerCase()}">${t.side}</span></td>
-     <td>${t.qty}</td><td>${(t.entry_price * 100).toFixed(1)}¢</td>
+     <td>${t.qty}</td>
+     <td class="notional">$${(t.entry_price * t.qty).toFixed(2)}</td>
+     <td>${(t.entry_price * 100).toFixed(1)}¢</td>
      <td>${(t.exit_price * 100).toFixed(1)}¢</td><td>${esc(t.exit_reason)}</td>
-     <td class="${t.net_pnl >= 0 ? 'pos' : 'neg'}">${money(t.net_pnl)}</td></tr>`).join('');
+     <td class="${t.net_pnl >= 0 ? 'pos' : 'neg'}">${money(t.net_pnl)}</td>
+     <td>${vTd}</td></tr>`;
+  }).join('');
   $('tradeEmpty').hidden = trades.length > 0;
 
   $('log').innerHTML = (d.events || []).slice().reverse().map(e =>

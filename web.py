@@ -1308,6 +1308,25 @@ def _trade_stats(trades):
             "by_exit_reason": {k: block(v) for k, v in by_reason.items()}}
 
 
+def _grade_summary(grades: list) -> dict:
+    """Roll up trade_grader.py verdicts for the /bot screen."""
+    verdicts: dict = {}
+    for g in grades:
+        v = g.get("verdict", "?")
+        verdicts[v] = verdicts.get(v, 0) + 1
+    scored = [g for g in grades if g.get("delta_vs_held") is not None]
+    return {
+        "n": len(grades),
+        "verdicts": verdicts,
+        # actual exit P&L minus hold-to-settlement P&L, summed (gross):
+        # positive = the exit engine beat holding to expiry
+        "exit_edge_usd": round(sum(g["delta_vs_held"] for g in scored), 2),
+        "stops_saved_usd": round(sum(g["delta_vs_held"] for g in scored
+                                     if g.get("exit_reason") == "stop"), 2),
+        "gaps": sum(1 for g in grades if g.get("data_gap")),
+    }
+
+
 def bot_status_payload(bot_dir=None) -> dict:
     d = Path(bot_dir) if bot_dir else _BOT_DIR
     try:
@@ -1325,11 +1344,13 @@ def bot_status_payload(bot_dir=None) -> dict:
         tuner.pop("results", None)   # full sweep table is large; GUI shows summary
     except Exception:
         tuner = None
+    grades = _read_jsonl_tail(d / "bot_trade_grades.jsonl", 1000)
     return {"state": state, "stats": _trade_stats(trades),
             "trades": trades[-50:],
             "events": _read_jsonl_tail(d / "bot_events.jsonl", 50),
             "unlock": {"ok": ok, "reason": reason}, "config": cfg,
-            "ev_buckets": bucket_stats(trades), "tuner": tuner}
+            "ev_buckets": bucket_stats(trades), "tuner": tuner,
+            "grades": grades[-200:], "grade_summary": _grade_summary(grades)}
 
 
 def bot_control_write(bot_dir, cmd: str) -> int:
