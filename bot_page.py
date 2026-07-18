@@ -245,6 +245,12 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 
 <div class="grid">
   <div class="panel wide">
+    <h3>BTC <span class="dim" style="text-transform:none">(15m candles, last 8h · key level dashed)</span></h3>
+    <div id="cdWrap" style="position:relative"><svg id="cdSvg" height="200" style="display:block;width:100%"></svg>
+      <div id="cdTip" class="eqtip" hidden></div></div>
+  </div>
+
+  <div class="panel wide">
     <h3>Equity <span class="dim" style="text-transform:none">(cumulative net P&amp;L, last 50 settled · per-trade net below)</span></h3>
     <div id="eqWrap"><svg id="eqSvg" height="240"></svg><div id="eqTip" class="eqtip" hidden></div></div>
     <div class="empty" id="eqEmpty" hidden>no closed trades yet — the curve starts with the first settle</div>
@@ -460,6 +466,57 @@ async function pollCalibration() {
     $('calNote').textContent =
       `${st.total} range snapshots graded all-time; targets tuned to 90% win / 60% stretch`;
   }
+}
+
+/* ── BTC candle chart ── */
+let dayKey = null;   // day plan key level, drawn dashed when in range
+async function pollCandles() {
+  const d = await fj('/api/crypto/candles?mins=15&hours=8', null);
+  const svg = $('cdSvg'), wrap = $('cdWrap');
+  if (!d || !d.candles || d.candles.length < 2) { svg.innerHTML = ''; return; }
+  const cs = d.candles, W = wrap.clientWidth || 800, H = 200, padL = 56, padR = 10, top = 8, bot = 18;
+  let lo = Math.min(...cs.map(c => c.l)), hi = Math.max(...cs.map(c => c.h));
+  if (dayKey && dayKey > lo - 200 && dayKey < hi + 200) { lo = Math.min(lo, dayKey); hi = Math.max(hi, dayKey); }
+  const pad = (hi - lo) * 0.05 || 1; lo -= pad; hi += pad;
+  const Y = v => top + (hi - v) / (hi - lo) * (H - top - bot);
+  const X = i => padL + (i + 0.5) * (W - padL - padR) / cs.length;
+  const cw = Math.max(3, Math.min(16, (W - padL - padR) / cs.length - 3));
+  let h = '';
+  const step = Math.max(50, Math.round((hi - lo) / 4 / 50) * 50);
+  for (let g = Math.ceil(lo / step) * step; g <= hi; g += step)
+    h += `<line x1="${padL}" x2="${W - padR}" y1="${Y(g)}" y2="${Y(g)}" stroke="var(--hair)"/>`
+       + `<text x="${padL - 6}" y="${Y(g) + 3}" text-anchor="end" font-size="9" fill="var(--mute)">${g.toLocaleString()}</text>`;
+  if (dayKey && dayKey >= lo && dayKey <= hi)
+    h += `<line x1="${padL}" x2="${W - padR}" y1="${Y(dayKey)}" y2="${Y(dayKey)}" stroke="var(--yellow)"
+           stroke-dasharray="5 4" opacity=".7"/>
+          <text x="${W - padR}" y="${Y(dayKey) - 4}" text-anchor="end" font-size="9" fill="var(--yellow)">key ${dayKey.toLocaleString()}</text>`;
+  cs.forEach((c, i) => {
+    const up = c.c >= c.o, col = up ? 'var(--green)' : 'var(--red)';
+    const yO = Y(c.o), yC = Y(c.c);
+    h += `<line x1="${X(i)}" x2="${X(i)}" y1="${Y(c.h)}" y2="${Y(c.l)}" stroke="${col}" stroke-width="1.5"/>`
+       + `<rect x="${(X(i) - cw / 2).toFixed(1)}" y="${Math.min(yO, yC).toFixed(1)}" width="${cw.toFixed(1)}"
+           height="${Math.max(1.5, Math.abs(yO - yC)).toFixed(1)}" rx="1" fill="${col}"
+           ${up ? 'fill-opacity=".35" stroke="' + col + '"' : ''}/>`;
+  });
+  const xt = t => new Date(t * 1000).toISOString().slice(11, 16) + 'Z';
+  h += `<text x="${padL}" y="${H - 4}" font-size="9" fill="var(--mute)">${xt(cs[0].t)}</text>`
+     + `<text x="${W - padR}" y="${H - 4}" text-anchor="end" font-size="9" fill="var(--mute)">${xt(cs[cs.length - 1].t)}</text>`;
+  h += `<line id="cdHair" y1="${top}" y2="${H - bot}" stroke="var(--mute)" opacity="0" pointer-events="none"/>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W);
+  svg.innerHTML = h;
+  svg.onmousemove = ev => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(cs.length - 1,
+      Math.floor((ev.clientX - r.left - padL) / ((W - padL - padR) / cs.length))));
+    const c = cs[i], hair = $('cdHair');
+    hair.setAttribute('x1', X(i)); hair.setAttribute('x2', X(i)); hair.setAttribute('opacity', '.5');
+    const tip = $('cdTip'); tip.hidden = false;
+    const f = v => '$' + v.toLocaleString(undefined, {maximumFractionDigits: 0});
+    tip.innerHTML = `<span class="dim">${xt(c.t)}</span> `
+      + `O ${f(c.o)} H ${f(c.h)} L ${f(c.l)} C <b class="${c.c >= c.o ? 'pos' : 'neg'}">${f(c.c)}</b>`;
+    tip.style.left = Math.min(Math.max(0, X(i) - 120), W - 300) + 'px'; tip.style.top = '4px';
+  };
+  svg.onmouseleave = () => { $('cdTip').hidden = true; $('cdHair').setAttribute('opacity', '0'); };
 }
 
 /* ── equity chart: step-line cumulative + diverging per-trade bars ── */
@@ -736,8 +793,15 @@ async function pollBot() {
     + `${esc(e.ticker || '')} <span class="dim">${esc(e.reason || '')}</span></div>`).join('');
 }
 
-pollCalibration(); pollBot(); pollSignal();
+async function pollThesis() {
+  const t = await fj('/api/crypto/daily_thesis', null);
+  dayKey = t && t.level ? parseFloat(t.level) : null;
+}
+
+pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal();
 setInterval(pollBot, 3000);
 setInterval(pollSignal, 3000);
 setInterval(pollCalibration, 30000);
+setInterval(pollCandles, 30000);
+setInterval(pollThesis, 300000);
 </script></body></html>"""

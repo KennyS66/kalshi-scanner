@@ -1367,6 +1367,53 @@ def bot_status_payload(bot_dir=None) -> dict:
             "gate": _gate_split(trades)}
 
 
+def candles_from_log(path, mins: int, hours: int, now: float | None = None) -> list:
+    """OHLC candles bucketed from the feature log's ~6s spot ticks.
+
+    Tail-reads the last few MB so the growing log never slows the endpoint."""
+    now = time.time() if now is None else now
+    span = mins * 60
+    cutoff = now - hours * 3600
+    buckets: dict = {}
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            start = max(0, f.tell() - 4_000_000)
+            f.seek(start)
+            chunk = f.read().decode(errors="replace")
+    except OSError:
+        return []
+    lines = chunk.splitlines()
+    if start > 0:
+        lines = lines[1:]   # mid-file seek: first line is a partial record
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        ts, spot = row.get("ts"), row.get("spot")
+        if ts is None or spot is None or ts < cutoff:
+            continue
+        b = int(ts // span) * span
+        c = buckets.get(b)
+        if c is None:
+            buckets[b] = {"t": b, "o": spot, "h": spot, "l": spot, "c": spot}
+        else:
+            c["h"] = max(c["h"], spot)
+            c["l"] = min(c["l"], spot)
+            c["c"] = spot
+    return [buckets[k] for k in sorted(buckets)]
+
+
+@app.get("/api/crypto/candles")
+async def api_crypto_candles(mins: int = 15, hours: int = 8) -> JSONResponse:
+    mins = max(1, min(60, mins))
+    hours = max(1, min(48, hours))
+    return JSONResponse({"mins": mins,
+                         "candles": candles_from_log(
+                             _DATA_DIR / "signal_feature_log.jsonl", mins, hours)})
+
+
 def _gate_split(trades: list) -> dict:
     """Settled counts by tape regime for the dual live-unlock gate."""
     closed = [t for t in trades if t.get("status") == "closed"

@@ -124,3 +124,25 @@ def test_status_payload_by_session(tmp_path):
     p = bot_status_payload(tmp_path)
     assert list(p["stats"]["by_session"]) == ["wd|asia"]
     assert p["stats"]["by_session"]["wd|asia"]["n"] == 4
+
+
+def test_candles_from_log_buckets_ohlc(tmp_path):
+    from web import candles_from_log
+    log = tmp_path / "feat.jsonl"
+    rows = []
+    # two 15m buckets starting at t=900000 (aligned); spot path 100,105,95,102 | 103,110
+    for ts, spot in [(900010, 100.0), (900300, 105.0), (900600, 95.0),
+                     (900890, 102.0), (900910, 103.0), (901200, 110.0)]:
+        rows.append(json.dumps({"ts": ts, "spot": spot}))
+    rows.append("not json")
+    rows.append(json.dumps({"ts": 900950, "spot": None}))   # null spot skipped
+    log.write_text("\n".join(rows))
+    out = candles_from_log(log, mins=15, hours=2, now=901800)
+    assert [c["t"] for c in out] == [900000, 900900]
+    assert out[0] == {"t": 900000, "o": 100.0, "h": 105.0, "l": 95.0, "c": 102.0}
+    assert out[1]["o"] == 103.0 and out[1]["c"] == 110.0
+
+
+def test_candles_from_log_missing_file(tmp_path):
+    from web import candles_from_log
+    assert candles_from_log(tmp_path / "nope.jsonl", 15, 8, now=1000) == []
