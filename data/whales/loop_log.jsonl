@@ -160,3 +160,4 @@
 {"ts": 1784386174.0763004, "type": "STATUS", "spot": null, "msg": "candle chart build live"}
 {"ts": 1784386446.6675558, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784386918.280209, "type": "STATUS", "spot": null, "msg": "handing watch to Sonnet per Kenny; all systems green"}
+{"ts": 1784388940.3664246, "type": "STATUS", "spot": null, "msg": "bot resumed trading post-reset, day +3.57; breakout_watch watcher re-armed 64000-64600"}
