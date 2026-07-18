@@ -328,3 +328,26 @@ def test_entry_blockers_thin_edge_gate():
     assert entry_blockers(sig, off, {}, False, False, tight) == []
     # no ranges -> no edge check (range gate handles its own absence)
     assert entry_blockers(sig, cfg, {}, False, False, None) == []
+
+
+import pytest
+
+from bot_core import loss_headroom, trade_budget
+
+def test_loss_headroom_baseline_anchors_the_cap():
+    cfg = {"max_loss_usd": 100.0, "loss_cap_baseline": -61.3}
+    # at the baseline itself: full $100 budget left
+    assert loss_headroom(-61.3, cfg) == pytest.approx(100.0)
+    # $20 more lost since baseline: $80 left
+    assert loss_headroom(-81.3, cfg) == pytest.approx(80.0)
+    # profit above baseline never expands past the cap
+    assert loss_headroom(-40.0, cfg) == pytest.approx(100.0)
+    # without baseline: legacy behavior from absolute total
+    legacy = {"max_loss_usd": 100.0}
+    assert loss_headroom(-61.3, legacy) == pytest.approx(38.7)
+
+
+def test_trade_budget_ten_pct_with_fresh_cap():
+    cfg = {"max_loss_usd": 100.0, "loss_cap_baseline": -61.3,
+           "risk_pct": 0.10, "trade_risk_frac": 0.5}
+    assert trade_budget(500.0, -61.3, cfg) == pytest.approx(50.0)  # min(50, 100*0.5)

@@ -2,7 +2,7 @@
   "flip_threshold": 2.0,
   "min_entry_mins": 4.0,
   "exit_mins": 2.0,
-  "risk_pct": 0.02,
+  "risk_pct": 0.1,
   "day_stop_pct": 0.1,
   "max_open_plays": 3,
   "decided_lo": 0.08,
@@ -17,8 +17,9 @@
   "loop_deadman_mins": 45,
   "stop_loss_frac": 0.5,
   "max_loss_usd": 100.0,
-  "trade_risk_frac": 0.1,
+  "trade_risk_frac": 0.5,
   "flip_exit": false,
   "max_entry_momentum": 25.0,
-  "max_entries_per_market": 2
+  "max_entries_per_market": 2,
+  "loss_cap_baseline": -58.97
 }

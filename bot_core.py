@@ -169,9 +169,16 @@ def size_contracts(bankroll: float, price: float, risk_pct: float) -> int:
 
 
 def loss_headroom(total_pnl: float, cfg: dict) -> float:
-    """Dollars of max-loss budget left; profits never expand it past the cap."""
+    """Dollars of max-loss budget left; profits never expand it past the cap.
+
+    loss_cap_baseline (optional) re-anchors the cap: losses count only from
+    that P&L level (set it to the current total to grant a fresh budget
+    without touching history)."""
     cap = cfg.get("max_loss_usd") or 0.0
-    return max(0.0, cap + min(0.0, total_pnl)) if cap > 0 else float("inf")
+    if cap <= 0:
+        return float("inf")
+    baseline = cfg.get("loss_cap_baseline") or 0.0
+    return max(0.0, cap + min(0.0, total_pnl - baseline))
 
 
 def trade_budget(bankroll: float, total_pnl: float, cfg: dict) -> float:
