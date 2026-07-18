@@ -1304,14 +1304,21 @@ def _trade_stats(trades):
     today_rows = [t for t in closed
                   if t.get("exit_ts") is not None and _utc_day_str(t["exit_ts"]) == today_str]
     by_day = {}
+    by_session = {}
     for t in closed:
         if t.get("exit_ts"):
             d0 = _utc_day_str(t["exit_ts"])
             by_day[d0] = round(by_day.get(d0, 0.0) + t["net_pnl"], 2)
+            g = time.gmtime(t["exit_ts"])
+            sess = ("asia" if g.tm_hour < 7 else "europe" if g.tm_hour < 13
+                    else "us" if g.tm_hour < 21 else "late")
+            key = f"{'we' if g.tm_wday >= 5 else 'wd'}|{sess}"
+            by_session.setdefault(key, []).append(t)
     return {"all_time": block(closed),
             "today": block(today_rows),
             "by_exit_reason": {k: block(v) for k, v in by_reason.items()},
-            "by_day": dict(sorted(by_day.items())[-14:])}
+            "by_day": dict(sorted(by_day.items())[-14:]),
+            "by_session": {k: block(v) for k, v in sorted(by_session.items())}}
 
 
 def _grade_summary(grades: list) -> dict:

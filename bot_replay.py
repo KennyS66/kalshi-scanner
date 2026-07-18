@@ -40,9 +40,13 @@ def replay(log_path, out_dir, bankroll=500.0, cfg_overrides=None,
         shutil.rmtree(out)
     if rows is None:
         rows = _rows(log_path)
-    if cfg_overrides:
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "config.json").write_text(json.dumps(cfg_overrides))
+    # Curfews are a live-trading overlay; replay's job is measuring the raw
+    # strategy in every session (it is the evidence engine for reopening a
+    # curfewed zone). Explicit overrides may still turn them back on.
+    cfg = {"overnight_curfew": False, "weekend_curfew": False}
+    cfg.update(cfg_overrides or {})
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "config.json").write_text(json.dumps(cfg))
     it = iter(rows)
     bot = Bot(out, fetch_fn=lambda: next(it, None),
               offsets_file=offsets_file or (out / "banner_offsets.json"))

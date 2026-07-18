@@ -293,11 +293,15 @@ def test_size_for_budget():
 from bot_core import weekend_curfew_blocker
 
 def test_weekend_curfew_blocks_sat_sun_overnight():
-    cfg = {"weekend_curfew": True}
     sun_03z = 1784430000.0   # Sun 03:00Z — curfew window
     sun_14z = 1784469600.0   # Sun 14:00Z — after 13Z
-    fri_03z = 1784257200.0   # Fri 03:00Z — weekday
-    assert weekend_curfew_blocker(sun_03z, cfg) is not None
-    assert weekend_curfew_blocker(sun_14z, cfg) is None      # after 13Z ok
-    assert weekend_curfew_blocker(fri_03z, cfg) is None      # weekday ok
-    assert weekend_curfew_blocker(sun_03z, {"weekend_curfew": False}) is None
+    fri_03z = 1784257200.0   # Fri 03:00Z — weekday overnight
+    both_on = {"weekend_curfew": True, "overnight_curfew": True}
+    we_only = {"weekend_curfew": True, "overnight_curfew": False}
+    all_off = {"weekend_curfew": False, "overnight_curfew": False}
+    assert "overnight" in weekend_curfew_blocker(sun_03z, both_on)
+    assert "overnight" in weekend_curfew_blocker(fri_03z, both_on)   # nights too
+    assert weekend_curfew_blocker(sun_14z, both_on) is None          # 13Z+ open
+    assert "weekend" in weekend_curfew_blocker(sun_03z, we_only)
+    assert weekend_curfew_blocker(fri_03z, we_only) is None
+    assert weekend_curfew_blocker(sun_03z, all_off) is None

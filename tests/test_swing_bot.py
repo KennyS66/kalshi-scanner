@@ -60,6 +60,17 @@ def _sig(**over):
 def _mkbot(tmp_path, sigs, monkeypatch, bankroll=500.0):
     monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: bankroll)
     it = iter(sigs)
+    # curfews off: fixture sig timestamps are epoch-small (hour 00Z) and these
+    # tests exercise strategy mechanics, not the session-curfew overlay
+    cfg_p = tmp_path / "config.json"
+    if not cfg_p.exists():
+        cfg_p.write_text(json.dumps({"overnight_curfew": False,
+                                     "weekend_curfew": False}))
+    else:
+        cfg = json.loads(cfg_p.read_text())
+        cfg.setdefault("overnight_curfew", False)
+        cfg.setdefault("weekend_curfew", False)
+        cfg_p.write_text(json.dumps(cfg))
     # offsets_file under tmp_path (absent -> zero offsets) so tests never
     # read the machine's live banner_offsets.json
     return Bot(tmp_path, fetch_fn=lambda: next(it, None),
@@ -192,7 +203,9 @@ def test_paper_bankroll_override_sizes_trades_and_skips_balance_fetch(tmp_path, 
     calls = []
     monkeypatch.setattr(bot_broker, "_balance_dollars",
                         lambda: calls.append(1) or 123.0)
-    (tmp_path / "config.json").write_text(_json.dumps({"paper_bankroll": 400.0}))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"paper_bankroll": 400.0,
+         "overnight_curfew": False, "weekend_curfew": False}))
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     it = iter(sigs)
     # now_ts far past bankroll_ts=0 so the hourly guard WOULD fetch the live

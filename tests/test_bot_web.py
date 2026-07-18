@@ -117,3 +117,10 @@ def test_status_payload_by_day_and_gate_split(tmp_path):
     p = bot_status_payload(tmp_path)
     assert p["stats"]["by_day"] == {"1970-01-01": 0.2}
     assert p["gate"] == {"weekday": 4, "weekend": 0}
+
+
+def test_status_payload_by_session(tmp_path):
+    _seed(tmp_path)   # exits at epoch ~1s: Thu (wd) 00Z -> wd|asia
+    p = bot_status_payload(tmp_path)
+    assert list(p["stats"]["by_session"]) == ["wd|asia"]
+    assert p["stats"]["by_session"]["wd|asia"]["n"] == 4

@@ -253,6 +253,10 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <div class="panel">
     <h3>Daily P&amp;L <span class="dim" style="text-transform:none">(net per UTC day)</span></h3>
     <svg id="daySvg" height="150" style="display:block;width:100%"></svg>
+    <h3 style="margin-top:12px">Session map <span class="dim" style="text-transform:none">(capitalize / skip)</span></h3>
+    <div class="tbl-wrap"><table id="sessTable"><thead><tr>
+      <th>session</th><th>n</th><th>win%</th><th>net avg</th><th>zone</th>
+    </tr></thead><tbody></tbody></table></div>
   </div>
 
   <div class="panel">
@@ -692,6 +696,18 @@ async function pollBot() {
   })();
 
   renderEquity((d.trades || []).filter(t => t.status === 'closed'), gmap);
+
+  // session map: curfew zones (00-13Z) marked; others colored by measured EV
+  $('sessTable').tBodies[0].innerHTML =
+    Object.entries((d.stats && d.stats.by_session) || {}).map(([k, v]) => {
+      const curfewed = (cfg.overnight_curfew !== false) && /asia|europe/.test(k);
+      const zone = curfewed ? '<span class="neg" style="font-weight:800">CURFEW</span>'
+        : v.n < 12 ? `<span class="dim">${v.n}/12</span>`
+        : v.net_avg >= 0 ? '<span class="pos">play</span>'
+        : '<span class="neg">bleeds</span>';
+      return `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${v.win_pct.toFixed(0)}%</td>
+        <td class="${v.net_avg >= 0 ? 'pos' : 'neg'}">${money(v.net_avg)}</td><td>${zone}</td></tr>`;
+    }).join('');
 
   const trades = (d.trades || []).slice().reverse();
   $('tradeTable').tBodies[0].innerHTML = trades.map(t => {
