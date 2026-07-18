@@ -165,3 +165,6 @@
 {"ts": 1784393827.5153654, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784394715.540907, "type": "STATUS", "spot": null, "msg": "thin-edge gate live (min 2c net at target)"}
 {"ts": 1784394984.9265168, "type": "STATUS", "spot": null, "msg": "rebound tracking live; 8/26 stops were recoverable"}
+{"ts": 1784395797.8827853, "type": "STATUS", "spot": null, "msg": "10% sizing + fresh $100 cap live"}
+{"ts": 1784396515.2448874, "type": "STATUS", "spot": null, "msg": "sizing $25 base / $150 halt applied"}
+{"ts": 1784397187.449983, "type": "STATUS", "spot": null, "msg": "quiet iter"}
