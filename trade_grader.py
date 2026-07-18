@@ -156,8 +156,13 @@ class FeatureIndex:
         self.pos = 0
         self.by_ticker = {}
 
-    def refresh(self, now=None):
+    def refresh(self, now=None, keep_from=None):
+        """keep_from: keep ticks at/after this ts even if older than KEEP_S
+        (backfill grading of old trades needs their ticks protected)."""
         now = time.time() if now is None else now
+        cutoff = now - KEEP_S
+        if keep_from is not None:
+            cutoff = min(cutoff, keep_from)
         try:
             size = self.path.stat().st_size
         except OSError:
@@ -166,7 +171,7 @@ class FeatureIndex:
             self.pos = 0
             self.by_ticker = {}
         if size == self.pos:
-            self._prune(now)
+            self._prune(cutoff)
             return
         with open(self.path) as f:
             f.seek(self.pos)
@@ -183,13 +188,13 @@ class FeatureIndex:
                      "floor_strike": row.get("floor_strike"),
                      "price": row.get("price")})
             self.pos = f.tell()
-        self._prune(now)
+        self._prune(cutoff)
 
-    def _prune(self, now):
+    def _prune(self, cutoff):
         for ticker in list(self.by_ticker):
             ticks = self.by_ticker[ticker]
             newest = ticks[-1]["ts"] if ticks and ticks[-1]["ts"] else None
-            if newest is None or newest < now - KEEP_S:
+            if newest is None or newest < cutoff:
                 del self.by_ticker[ticker]
 
     def ticks(self, ticker):
@@ -249,7 +254,8 @@ def run_cycle(idx, now=None):
         pending.append(t)
     if not pending:
         return 0
-    idx.refresh(now=now)
+    oldest = min(t["entry_ts"] for t in pending)
+    idx.refresh(now=now, keep_from=oldest - 3600)
     thesis = read_jsonl(THESIS_PATH)
     regime = read_jsonl(REGIME_PATH)
     n = 0

@@ -255,6 +255,29 @@ def test_run_cycle_grades_settled_trades_and_dedups(tmp_path, monkeypatch):
     assert len(tg.read_jsonl(grades)) == 1
 
 
+def test_run_cycle_backfills_trades_older_than_prune_window(tmp_path, monkeypatch):
+    """Regression: pending trades must protect their ticks from KEEP_S pruning."""
+    trades = tmp_path / "bot_trades.jsonl"
+    grades = tmp_path / "bot_trade_grades.jsonl"
+    feat = tmp_path / "signal_feature_log.jsonl"
+    for name, path in [("TRADES_PATH", trades), ("GRADES_PATH", grades),
+                       ("FEATURES_PATH", feat),
+                       ("THESIS_PATH", tmp_path / "t.jsonl"),
+                       ("REGIME_PATH", tmp_path / "r.jsonl"),
+                       ("ARCHIVE_DIR", tmp_path / "archive")]:
+        monkeypatch.setattr(tg, name, path)
+    old = make_trade()                       # entry TS_JUL17, expiry +600
+    _write_lines(trades, [old], mode="w")
+    _write_lines(feat, [tick(TS_JUL17 + 100, price=0.55),
+                        tick(expiry_of(old) - 30, spot=64010.0,
+                             strike=63950.0, price=0.97)], mode="w")
+    idx = tg.FeatureIndex(feat)
+    now = TS_JUL17 + 10 * 86400              # 10 days later, far past KEEP_S
+    assert tg.run_cycle(idx, now=now) == 1
+    rows = tg.read_jsonl(grades)
+    assert rows[0]["settled"] == "YES" and rows[0]["data_gap"] is False
+
+
 def test_run_cycle_survives_corrupt_trade_row(tmp_path, monkeypatch):
     trades = tmp_path / "bot_trades.jsonl"
     grades = tmp_path / "bot_trade_grades.jsonl"

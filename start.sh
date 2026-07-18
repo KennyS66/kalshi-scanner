@@ -58,6 +58,7 @@ start_bg exit_watcher   "exit_watcher.py"  "$PY" -u exit_watcher.py
 start_bg target_grader  "target_grader.py" "$PY" -u target_grader.py
 start_bg swing_bot      "swing_bot.py"     "$PY" -u swing_bot.py
 start_bg bot_tuner      "bot_tuner.py"     "$PY" -u bot_tuner.py --daemon
+start_bg trade_grader   "trade_grader.py"  "$PY" -u trade_grader.py
 
 echo
 echo "Scanner: http://localhost:9050  (dashboards: /whales, /crypto)"
