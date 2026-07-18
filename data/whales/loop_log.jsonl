@@ -171,3 +171,5 @@
 {"ts": 1784399652.8987296, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784401040.8795323, "type": "STATUS", "spot": null, "msg": "EV gate rebuilt on daytime-only evidence per standing audit"}
 {"ts": 1784401764.2265682, "type": "STATUS", "spot": null, "msg": "scale-out live: half banks at win line, half rides to stretch"}
+{"ts": 1784402224.0201435, "type": "STATUS", "spot": null, "msg": "profit lock live: arm +$15, keep 50% of peak, half-size when armed"}
+{"ts": 1784404980.8548026, "type": "STATUS", "spot": null, "msg": "heartbeat \u2014 releasing deadman"}
