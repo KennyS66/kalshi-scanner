@@ -42,6 +42,9 @@ GRID = {
     "max_entries_per_market": [0, 2],
     "decided_lo": [0.05, 0.08],   # tighter band skips near-decided lottery
     "decided_hi": [0.95, 0.92],   # entries (the 5.6c NO x151 stop on Jul 15)
+    "stop_loss_frac": [0.5, 1.0], # 1.0 = no mid-trade stop (time exit bounds);
+    "min_edge_c": [2.0, 4.0],     # replay 2026-07-18: stop-off +$27/day, edge4 +$10
+    "scale_out": [True, False],
 }
 QUICK_GRID = {
     "flip_threshold": [2.0, 3.0],
