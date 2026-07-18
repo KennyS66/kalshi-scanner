@@ -176,3 +176,6 @@
 {"ts": 1784405829.3180008, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784407693.8631487, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784408632.2007968, "type": "EVENT", "spot": null, "msg": "CONTINUATION confirmed above 64600; trend_up 64600-65000 journaled"}
+{"ts": 1784409550.7688284, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784411413.464933, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784411515.3941052, "type": "EVENT", "spot": null, "msg": "day halt #2: -60.73; flat; 00Z roll in ~1h40m"}
