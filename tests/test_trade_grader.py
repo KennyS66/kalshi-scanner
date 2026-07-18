@@ -200,3 +200,76 @@ def test_feature_index_missing_file_is_safe(tmp_path):
     idx = FeatureIndex(tmp_path / "nope.jsonl")
     idx.refresh()
     assert idx.ticks("A") == []
+
+
+import gzip
+
+import trade_grader as tg
+
+
+def test_archive_features_writes_once_per_day(tmp_path, monkeypatch):
+    feat = tmp_path / "signal_feature_log.jsonl"
+    _write_lines(feat, [tick(100)], mode="w")
+    monkeypatch.setattr(tg, "FEATURES_PATH", feat)
+    monkeypatch.setattr(tg, "ARCHIVE_DIR", tmp_path / "archive")
+    now = 1784333262.0  # 2026-07-18 UTC
+    assert tg.archive_features(now) is True
+    day_dir = tmp_path / "archive" / "2026-07-18"
+    gz = day_dir / "signal_feature_log.jsonl.gz"
+    assert gz.exists()
+    with gzip.open(gz, "rt") as f:
+        assert "floor_strike" in f.read()
+    assert tg.archive_features(now) is False   # second call same day: skip
+
+
+def test_run_cycle_grades_settled_trades_and_dedups(tmp_path, monkeypatch):
+    trades = tmp_path / "bot_trades.jsonl"
+    grades = tmp_path / "bot_trade_grades.jsonl"
+    feat = tmp_path / "signal_feature_log.jsonl"
+    thesis = tmp_path / "daily_thesis.jsonl"
+    regime = tmp_path / "intraday_regime.jsonl"
+    for name, path in [("TRADES_PATH", trades), ("GRADES_PATH", grades),
+                       ("FEATURES_PATH", feat), ("THESIS_PATH", thesis),
+                       ("REGIME_PATH", regime),
+                       ("ARCHIVE_DIR", tmp_path / "archive")]:
+        monkeypatch.setattr(tg, name, path)
+
+    trade = make_trade()                       # expiry = TS_JUL17 + 600
+    exp = expiry_of(trade)
+    _write_lines(trades, [trade,
+                          make_trade(status="open", ticker="T-OPEN"),
+                          make_trade(ticker="T-FUTURE",
+                                     entry_sig={"mins_left": 9999.0})], mode="w")
+    _write_lines(feat, [tick(exp - 30, spot=64010.0, strike=63950.0, price=0.97)],
+                 mode="w")
+    _write_lines(thesis, [{"date": "2026-07-17", "bias": "UP",
+                           "conviction": 1, "level": "64000"}], mode="w")
+    _write_lines(regime, [], mode="w")
+
+    idx = tg.FeatureIndex(feat)
+    now = exp + tg.GRADE_DELAY_S + 1
+    assert tg.run_cycle(idx, now=now) == 1     # only the settled closed trade
+    rows = tg.read_jsonl(grades)
+    assert len(rows) == 1 and rows[0]["verdict"] == "whipsaw_stop"
+    assert tg.run_cycle(idx, now=now) == 0     # dedup: nothing regraded
+    assert len(tg.read_jsonl(grades)) == 1
+
+
+def test_run_cycle_survives_corrupt_trade_row(tmp_path, monkeypatch):
+    trades = tmp_path / "bot_trades.jsonl"
+    grades = tmp_path / "bot_trade_grades.jsonl"
+    feat = tmp_path / "signal_feature_log.jsonl"
+    for name, path in [("TRADES_PATH", trades), ("GRADES_PATH", grades),
+                       ("FEATURES_PATH", feat),
+                       ("THESIS_PATH", tmp_path / "t.jsonl"),
+                       ("REGIME_PATH", tmp_path / "r.jsonl"),
+                       ("ARCHIVE_DIR", tmp_path / "archive")]:
+        monkeypatch.setattr(tg, name, path)
+    good = make_trade()
+    bad = {"status": "closed", "ticker": "T-BAD"}   # missing everything else
+    _write_lines(trades, [bad, good], mode="w")
+    _write_lines(feat, [tick(expiry_of(good) - 30, spot=64010.0,
+                             strike=63950.0)], mode="w")
+    idx = tg.FeatureIndex(feat)
+    now = expiry_of(good) + tg.GRADE_DELAY_S + 1
+    assert tg.run_cycle(idx, now=now) == 1          # bad row skipped, good graded

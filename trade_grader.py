@@ -194,3 +194,89 @@ class FeatureIndex:
 
     def ticks(self, ticker):
         return self.by_ticker.get(ticker, [])
+
+
+def read_jsonl(path):
+    rows = []
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return rows
+
+
+def append_jsonl(path, row):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def archive_features(now):
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    out = Path(ARCHIVE_DIR) / day / "signal_feature_log.jsonl.gz"
+    if out.exists() or not Path(FEATURES_PATH).exists():
+        return False
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".gz.tmp")
+    with open(FEATURES_PATH, "rb") as src, gzip.open(tmp, "wb") as dst:
+        while chunk := src.read(1 << 20):
+            dst.write(chunk)
+    tmp.rename(out)
+    return True
+
+
+def run_cycle(idx, now=None):
+    now = time.time() if now is None else now
+    try:
+        archive_features(now)
+    except OSError as e:
+        print(f"archive error: {e}", file=sys.stderr)
+    graded = {trade_key(g) for g in read_jsonl(GRADES_PATH)}
+    pending = []
+    for t in read_jsonl(TRADES_PATH):
+        if t.get("status") != "closed":
+            continue
+        try:
+            if trade_key(t) in graded or now < expiry_of(t) + GRADE_DELAY_S:
+                continue
+        except (KeyError, TypeError):
+            continue
+        pending.append(t)
+    if not pending:
+        return 0
+    idx.refresh(now=now)
+    thesis = read_jsonl(THESIS_PATH)
+    regime = read_jsonl(REGIME_PATH)
+    n = 0
+    for t in pending:
+        try:
+            row = grade_trade(t, idx.ticks(t["ticker"]), thesis, regime)
+            append_jsonl(GRADES_PATH, row)
+            n += 1
+        except Exception as e:
+            print(f"grade error {t.get('ticker')}: {e}", file=sys.stderr)
+    return n
+
+
+def main():
+    once = "--once" in sys.argv
+    idx = FeatureIndex(FEATURES_PATH)
+    while True:
+        try:
+            n = run_cycle(idx)
+            if n:
+                print(f"graded {n} trade(s)", flush=True)
+        except Exception as e:
+            print(f"cycle error: {e}", file=sys.stderr)
+        if once:
+            break
+        time.sleep(POLL_SEC)
+
+
+if __name__ == "__main__":
+    main()
