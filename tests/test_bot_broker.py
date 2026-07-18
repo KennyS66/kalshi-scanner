@@ -50,8 +50,17 @@ import bot_broker
 from bot_broker import fetch_bankroll, live_unlock_ok, LiveBroker, FALLBACK_BANKROLL
 
 
-def _trades(n, avg):
-    return [{"net_pnl": avg, "status": "closed"} for _ in range(n)]
+_MON = 1784592000.0   # 2026-07-20 12:00Z (Monday)
+_SAT = 1784419200.0   # 2026-07-18 12:00Z (Saturday)
+
+
+def _trades(n, avg, n_weekend=None):
+    """n closed trades; half weekend/half weekday unless n_weekend given."""
+    if n_weekend is None:
+        n_weekend = n // 2
+    return [{"net_pnl": avg, "status": "closed",
+             "exit_ts": _SAT if i < n_weekend else _MON}
+            for i in range(n)]
 
 
 def test_fetch_bankroll_returns_none_on_failure(monkeypatch):
@@ -68,11 +77,21 @@ def test_fetch_bankroll_returns_dollars(monkeypatch):
 def test_live_unlock_requires_all_four_conditions():
     cfg_on = {"live_requested": True}
     env_on = {"BOT_LIVE": "1"}
-    ok, _ = live_unlock_ok(_trades(100, 0.01), cfg_on, env_on)
+    ok, _ = live_unlock_ok(_trades(200, 0.01), cfg_on, env_on)
     assert ok
-    assert not live_unlock_ok(_trades(99, 0.01), cfg_on, env_on)[0]      # < 100 trades
-    assert not live_unlock_ok(_trades(100, -0.01), cfg_on, env_on)[0]    # negative EV
-    assert not live_unlock_ok(_trades(100, 0.01), {"live_requested": False}, env_on)[0]
+    assert not live_unlock_ok(_trades(199, 0.01), cfg_on, env_on)[0]     # a band < 100
+    assert not live_unlock_ok(_trades(200, -0.01), cfg_on, env_on)[0]    # negative EV
+    assert not live_unlock_ok(_trades(200, 0.01), {"live_requested": False}, env_on)[0]
+
+
+def test_live_unlock_requires_100_weekday_and_100_weekend():
+    cfg_on, env_on = {"live_requested": True}, {"BOT_LIVE": "1"}
+    # 150 weekend + 50 weekday: plenty total, weekday sample short
+    ok, why = live_unlock_ok(_trades(200, 0.01, n_weekend=150), cfg_on, env_on)
+    assert not ok and "weekday" in why
+    # 150 weekday + 50 weekend: weekend sample short
+    ok, why = live_unlock_ok(_trades(200, 0.01, n_weekend=50), cfg_on, env_on)
+    assert not ok and "weekend" in why
     assert not live_unlock_ok(_trades(100, 0.01), cfg_on, {})[0]         # no BOT_LIVE
 
 

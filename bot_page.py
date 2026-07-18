@@ -646,9 +646,11 @@ async function pollBot() {
     + `${money(gs.stops_saved_usd)}</b>`
     + (gs.gaps ? ` · <span class="dim">${gs.gaps} with feed gaps</span>` : '')) : '';
 
-  const GATE_N = 100;
+  const GATE_N = 200;   // 100 weekday + 100 weekend settled before live test
   $('gateProg').textContent = `${a.n}/${GATE_N}`;
-  $('gateProgSub').textContent = 'settled trades before sizing review';
+  $('gateProgSub').textContent = (d.unlock && !d.unlock.ok && d.unlock.reason.includes('weekday'))
+    ? d.unlock.reason.replace('settled paper trades: ', '')
+    : 'weekday + weekend settles before live test';
   $('gateBar').style.width = Math.min(100, a.n / GATE_N * 100).toFixed(0) + '%';
 
   renderEquity((d.trades || []).filter(t => t.status === 'closed'), gmap);

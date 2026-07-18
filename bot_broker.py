@@ -59,11 +59,17 @@ def fetch_bankroll():
 
 
 def live_unlock_ok(trades: list, cfg: dict, env: dict):
-    """The four-condition unlock bar from the spec. Returns (ok, reason)."""
+    """The unlock bar: 100 settled on weekday tape AND 100 on weekend tape
+    (regimes differ; per Kenny 2026-07-17 both must be proven), positive net
+    avg, GUI toggle, env flag. Returns (ok, reason)."""
+    import time as _t
     closed = [t for t in trades if t.get("status") == "closed"
               and t.get("net_pnl") is not None]
-    if len(closed) < 100:
-        return False, f"only {len(closed)}/100 settled paper trades"
+    wd = [t for t in closed if _t.gmtime(t.get("exit_ts") or 0).tm_wday < 5]
+    we_n, wd_n = len(closed) - len(wd), len(wd)
+    if wd_n < 100 or we_n < 100:
+        return False, (f"settled paper trades: {wd_n}/100 weekday, "
+                       f"{we_n}/100 weekend")
     avg = sum(t["net_pnl"] for t in closed) / len(closed)
     if avg <= 0:
         return False, f"net avg {avg:+.4f} <= 0 — no proven edge"
