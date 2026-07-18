@@ -74,3 +74,75 @@ def test_hold_path_stats_no_ticks_in_window():
     assert hold_path_stats([], "YES", 0.5, 100, 200) == (None, None)
     outside = [tick(50), tick(300)]
     assert hold_path_stats(outside, "YES", 0.5, 100, 200) == (None, None)
+
+
+from trade_grader import day_context, grade_trade, trade_key
+
+THESIS = [
+    {"date": "2026-07-17", "bias": "UP", "conviction": 1, "level": "64000"},
+    {"date": "2026-07-18", "bias": "WAIT", "conviction": 1, "level": "64000"},
+]
+# 2026-07-17 12:00:00 UTC
+TS_JUL17 = 1784289600.0
+REGIMES = [
+    {"ts": TS_JUL17 - 3600, "regime": "range", "range_lo": 63000.0, "range_hi": 64000.0},
+    {"ts": TS_JUL17 + 3600, "regime": "breakout_watch", "range_lo": 63400.0, "range_hi": 64100.0},
+]
+
+
+def test_day_context_joins_thesis_by_utc_date_and_latest_regime():
+    ctx = day_context(TS_JUL17, THESIS, REGIMES)
+    assert ctx["day_bias"] == "UP"
+    assert ctx["day_key"] == 64000.0          # cast from string
+    assert ctx["day_conviction"] == 1
+    assert ctx["regime"] == "range"           # latest entry at/before entry_ts
+    assert ctx["regime_lo"] == 63000.0
+
+
+def test_day_context_missing_rows_is_safe():
+    ctx = day_context(TS_JUL17, [], [])
+    assert ctx["day_bias"] is None and ctx["regime"] == "none"
+
+
+def make_trade(**kw):
+    t = {"ticker": "T-1", "mode": "paper", "side": "YES", "qty": 10,
+         "entry_price": 0.60, "exit_price": 0.30,
+         "entry_ts": TS_JUL17, "exit_ts": TS_JUL17 + 300,
+         "fees": 0.4, "net_pnl": -3.4, "exit_reason": "stop",
+         "entry_sig": {"mins_left": 10.0}, "status": "closed"}
+    t.update(kw)
+    return t
+
+
+def test_grade_trade_whipsaw_stop_full_row():
+    trade = make_trade()
+    exp = expiry_of(trade)  # TS_JUL17 + 600
+    ticks = [tick(TS_JUL17 + 60, price=0.65), tick(TS_JUL17 + 200, price=0.28),
+             tick(exp - 30, spot=64010.0, strike=63950.0, price=0.97)]
+    row = grade_trade(trade, ticks, THESIS, REGIMES)
+    assert row["verdict"] == "whipsaw_stop"
+    assert row["settled"] == "YES" and row["settle_basis"] == "strike"
+    assert row["held_pnl_gross"] == pytest.approx(4.0)    # 10*(1-0.60)
+    assert row["delta_vs_held"] == pytest.approx(-7.0)    # 10*(0.30-0.60) - 4.0
+    assert row["mfe"] == pytest.approx(0.05)
+    assert row["mae"] == pytest.approx(0.32)
+    assert row["day_bias"] == "UP" and row["aligned"] is True
+    assert row["data_gap"] is False
+    assert row["exit_reason"] == "stop" and row["net_pnl"] == -3.4
+    assert trade_key(row) == trade_key(trade)
+
+
+def test_grade_trade_unknown_settlement_flags_gap():
+    trade = make_trade()
+    row = grade_trade(trade, [], THESIS, REGIMES)
+    assert row["verdict"] == "ungraded"
+    assert row["settled"] == "unknown"
+    assert row["held_pnl_gross"] is None and row["delta_vs_held"] is None
+    assert row["data_gap"] is True
+
+
+def test_aligned_null_when_bias_not_directional():
+    trade = make_trade(entry_ts=TS_JUL17 + 86400.0,
+                       exit_ts=TS_JUL17 + 86400.0 + 300)  # Jul 18 -> WAIT
+    row = grade_trade(trade, [], THESIS, REGIMES)
+    assert row["aligned"] is None

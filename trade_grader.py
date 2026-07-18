@@ -78,3 +78,63 @@ def hold_path_stats(ticks, side, entry_price, entry_ts, exit_ts):
     mfe = round(max(prices) - entry_price, 4)
     mae = round(entry_price - min(prices), 4)
     return mfe, mae
+
+
+def trade_key(row):
+    return f"{row['ticker']}|{row['entry_ts']}"
+
+
+def day_context(entry_ts, thesis_rows, regime_rows):
+    date = time.strftime("%Y-%m-%d", time.gmtime(entry_ts))
+    ctx = {"day_bias": None, "day_key": None, "day_conviction": None,
+           "regime": "none", "regime_lo": None, "regime_hi": None}
+    for row in thesis_rows:
+        if row.get("date") == date:
+            ctx["day_bias"] = row.get("bias")
+            try:
+                ctx["day_key"] = float(row.get("level"))
+            except (TypeError, ValueError):
+                ctx["day_key"] = None
+            ctx["day_conviction"] = row.get("conviction")
+    latest = None
+    for row in regime_rows:
+        ts = row.get("ts")
+        if ts is not None and ts <= entry_ts and (latest is None or ts > latest["ts"]):
+            latest = row
+    if latest is not None:
+        ctx["regime"] = latest.get("regime", "none")
+        ctx["regime_lo"] = latest.get("range_lo")
+        ctx["regime_hi"] = latest.get("range_hi")
+    return ctx
+
+
+def grade_trade(trade, ticks, thesis_rows, regime_rows):
+    side, qty = trade["side"], trade["qty"]
+    entry, exit_ = trade["entry_price"], trade["exit_price"]
+    settled, basis = infer_settlement(ticks, expiry_of(trade))
+    mfe, mae = hold_path_stats(ticks, side, entry,
+                               trade["entry_ts"], trade["exit_ts"])
+    if settled == "unknown":
+        held = delta = None
+    else:
+        payout = 1.0 if settled == side else 0.0
+        held = round(qty * (payout - entry), 2)
+        delta = round(qty * (exit_ - entry) - held, 2)
+    ctx = day_context(trade["entry_ts"], thesis_rows, regime_rows)
+    if ctx["day_bias"] in ("UP", "DOWN"):
+        aligned = (side == "YES") == (ctx["day_bias"] == "UP")
+    else:
+        aligned = None
+    return {
+        "ticker": trade["ticker"], "entry_ts": trade["entry_ts"],
+        "exit_ts": trade["exit_ts"], "side": side, "qty": qty,
+        "entry_price": entry, "exit_price": exit_,
+        "net_pnl": trade.get("net_pnl"), "exit_reason": trade.get("exit_reason"),
+        "settled": settled, "settle_basis": basis,
+        "held_pnl_gross": held, "delta_vs_held": delta,
+        "mfe": mfe, "mae": mae,
+        "verdict": verdict_for(trade.get("exit_reason"), side, settled),
+        **ctx, "aligned": aligned,
+        "data_gap": settled == "unknown" or mfe is None,
+        "graded_ts": time.time(),
+    }
