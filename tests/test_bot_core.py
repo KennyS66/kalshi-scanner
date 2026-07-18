@@ -208,16 +208,34 @@ from bot_core import (entry_bucket, bucket_stats, update_bucket_stats,
                       ev_gate_blocker)
 
 
-def _trade(side="YES", pnl=1.0, ask=0.50, mins=8.0):
+def _trade(side="YES", pnl=1.0, ask=0.50, mins=8.0, mom=5.0):
     return {"status": "closed", "side": side, "net_pnl": pnl,
             "entry_sig": {"yes_ask": ask, "no_ask": round(1 - ask, 2),
-                          "mins_left": mins}}
+                          "mins_left": mins, "momentum": mom}}
 
 
 def test_entry_bucket_bands():
-    assert entry_bucket("YES", {"yes_ask": 0.30, "mins_left": 5}) == "YES|cheap|4-7m"
-    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8}) == "YES|mid|7-11m"
-    assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12}) == "NO|rich|11m+"
+    assert entry_bucket("YES", {"yes_ask": 0.30, "mins_left": 5,
+                                "momentum": 3.0}) == "YES|cheap|4-7m|weak"
+    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8,
+                                "momentum": -2.0}) == "YES|mid|7-11m|against"
+    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8,
+                                "momentum": 12.0}) == "YES|mid|7-11m|strong"
+    assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12,
+                                "momentum": -9.0}) == "NO|rich|11m+|strong"
+    assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12,
+                                "momentum": -4.0}) == "NO|rich|11m+|weak"
+    assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12,
+                                "momentum": 4.0}) == "NO|rich|11m+|against"
+
+
+def test_entry_bucket_flow_neutral_and_missing_momentum_are_weak():
+    # zero or absent momentum reads as weak conviction, not against
+    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8,
+                                "momentum": 0.0}).endswith("|weak")
+    assert entry_bucket("NO",  {"no_ask": 0.50, "mins_left": 8,
+                                "momentum": 0.0}).endswith("|weak")
+    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8}).endswith("|weak")
 
 
 def test_bucket_stats_and_incremental_update_agree():
@@ -228,8 +246,8 @@ def test_bucket_stats_and_incremental_update_agree():
     for t in trades[:3]:
         update_bucket_stats(inc, t["side"], t["entry_sig"], t["net_pnl"])
     assert agg == inc
-    assert agg["YES|mid|7-11m"] == {"n": 2, "wins": 1, "net": 0.5,
-                                    "net_avg": 0.25, "win_pct": 50.0}
+    assert agg["YES|mid|7-11m|weak"] == {"n": 2, "wins": 1, "net": 0.5,
+                                         "net_avg": 0.25, "win_pct": 50.0}
 
 
 def test_ev_gate_blocks_only_proven_negative_buckets():

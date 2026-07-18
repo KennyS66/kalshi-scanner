@@ -273,13 +273,15 @@ def test_use_ranges_false_restores_unGated_entry(tmp_path, monkeypatch):
     assert bot.state["open_plays"]["M1"]["ranges"] is None
 
 
-def _losing_trade_row(ask=0.52, mins=10.0):
+def _losing_trade_row(ask=0.52, mins=10.0, mom=30.0):
+    # momentum matches _sig()'s strong band so the journal poisons the same
+    # bucket the live entry lands in
     return {"status": "closed", "side": "YES", "net_pnl": -0.5,
             "ticker": "OLD", "qty": 1, "entry_price": ask, "exit_price": 0.4,
             "entry_ts": 1.0, "exit_ts": 2.0, "fees": 0.02, "exit_reason": "time",
             "mode": "paper",
             "entry_sig": {"yes_ask": ask, "no_ask": round(1 - ask, 2),
-                          "mins_left": mins}}
+                          "mins_left": mins, "momentum": mom}}
 
 
 def test_ev_gate_skips_poisoned_bucket_from_journal(tmp_path, monkeypatch):

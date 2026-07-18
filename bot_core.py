@@ -242,13 +242,24 @@ def should_stop_exit(play: dict, sig: dict, cfg: dict) -> bool:
 # entries once it holds >= ev_gate_min_samples closed trades AND its net
 # average is negative — small samples and profitable buckets never gate.
 
+MOM_ALIGN_STRONG = 8.0   # aligned-momentum floor for the "strong" band
+
+
 def entry_bucket(side: str, sig: dict) -> str:
     m = sig.get("mins_left") or 0.0
     mb = "4-7m" if m < 7 else "7-11m" if m < 11 else "11m+"
     ask = sig.get("yes_ask") if side == "YES" else sig.get("no_ask")
     c = (ask or 0.0) * 100
     pb = "cheap" if c < 35 else "mid" if c <= 65 else "rich"
-    return f"{side}|{pb}|{mb}"
+    # flow-conviction band: momentum signed toward the held side. Graded
+    # stops cluster on weak-conviction entries (aligned but tepid), so the
+    # gate buckets on strength and can learn that skip once a band shows
+    # >= min_samples of negative EV. The signal layer already keeps raw
+    # against-flow entries rare; they get their own band as a tripwire.
+    am = (sig.get("momentum") or 0.0) * (1 if side == "YES" else -1)
+    fl = ("against" if am < 0 else
+          "weak" if am < MOM_ALIGN_STRONG else "strong")
+    return f"{side}|{pb}|{mb}|{fl}"
 
 
 def update_bucket_stats(stats: dict, side: str, entry_sig: dict,
