@@ -138,3 +138,59 @@ def grade_trade(trade, ticks, thesis_rows, regime_rows):
         "data_gap": settled == "unknown" or mfe is None,
         "graded_ts": time.time(),
     }
+
+
+KEEP_S = 48 * 3600
+
+
+class FeatureIndex:
+    """Incremental per-ticker view of signal_feature_log.jsonl.
+
+    Full read on first refresh (backfill needs history); afterwards reads
+    only newly appended bytes. If the file shrinks (fresh-start reset),
+    starts over from byte 0.
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.pos = 0
+        self.by_ticker = {}
+
+    def refresh(self, now=None):
+        now = time.time() if now is None else now
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        if size < self.pos:
+            self.pos = 0
+            self.by_ticker = {}
+        if size == self.pos:
+            self._prune(now)
+            return
+        with open(self.path) as f:
+            f.seek(self.pos)
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                ticker = row.get("ticker")
+                if not ticker:
+                    continue
+                self.by_ticker.setdefault(ticker, []).append(
+                    {"ts": row.get("ts"), "spot": row.get("spot"),
+                     "floor_strike": row.get("floor_strike"),
+                     "price": row.get("price")})
+            self.pos = f.tell()
+        self._prune(now)
+
+    def _prune(self, now):
+        for ticker in list(self.by_ticker):
+            ticks = self.by_ticker[ticker]
+            newest = ticks[-1]["ts"] if ticks and ticks[-1]["ts"] else None
+            if newest is None or newest < now - KEEP_S:
+                del self.by_ticker[ticker]
+
+    def ticks(self, ticker):
+        return self.by_ticker.get(ticker, [])

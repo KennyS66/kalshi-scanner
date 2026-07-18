@@ -146,3 +146,57 @@ def test_aligned_null_when_bias_not_directional():
                        exit_ts=TS_JUL17 + 86400.0 + 300)  # Jul 18 -> WAIT
     row = grade_trade(trade, [], THESIS, REGIMES)
     assert row["aligned"] is None
+
+
+import json as _json
+
+from trade_grader import FeatureIndex
+
+
+def _write_lines(path, rows, mode="a"):
+    with open(path, mode) as f:
+        for r in rows:
+            f.write(_json.dumps(r) + "\n")
+
+
+def test_feature_index_incremental_read(tmp_path):
+    log = tmp_path / "feat.jsonl"
+    _write_lines(log, [tick(100, ticker="A"), tick(110, ticker="B")], mode="w")
+    idx = FeatureIndex(log)
+    idx.refresh(now=150.0)
+    assert len(idx.ticks("A")) == 1 and len(idx.ticks("B")) == 1
+    _write_lines(log, [tick(120, ticker="A")])
+    idx.refresh(now=150.0)
+    assert len(idx.ticks("A")) == 2          # incremental append picked up
+    assert idx.ticks("A")[-1]["ts"] == 120
+    assert idx.ticks("MISSING") == []
+
+
+def test_feature_index_skips_bad_lines_and_handles_truncation(tmp_path):
+    log = tmp_path / "feat.jsonl"
+    _write_lines(log, [tick(100, ticker="A")], mode="w")
+    with open(log, "a") as f:
+        f.write("not json\n")
+    idx = FeatureIndex(log)
+    idx.refresh(now=150.0)
+    assert len(idx.ticks("A")) == 1
+    # fresh-start style truncation: file replaced with smaller content
+    _write_lines(log, [tick(200, ticker="C")], mode="w")
+    idx.refresh(now=250.0)
+    assert idx.ticks("A") == [] and len(idx.ticks("C")) == 1
+
+
+def test_feature_index_prunes_stale_tickers(tmp_path):
+    log = tmp_path / "feat.jsonl"
+    now = 1784333262.0
+    _write_lines(log, [tick(now - 60 * 3600, ticker="OLD"),
+                       tick(now - 60, ticker="NEW")], mode="w")
+    idx = FeatureIndex(log)
+    idx.refresh(now=now)
+    assert idx.ticks("OLD") == [] and len(idx.ticks("NEW")) == 1
+
+
+def test_feature_index_missing_file_is_safe(tmp_path):
+    idx = FeatureIndex(tmp_path / "nope.jsonl")
+    idx.refresh()
+    assert idx.ticks("A") == []
