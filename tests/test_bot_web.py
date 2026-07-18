@@ -110,3 +110,10 @@ def test_status_payload_no_grades_file_is_safe(tmp_path):
     _seed(tmp_path)
     p = bot_status_payload(tmp_path)
     assert p["grades"] == [] and p["grade_summary"]["n"] == 0
+
+
+def test_status_payload_by_day_and_gate_split(tmp_path):
+    _seed(tmp_path)   # 4 trades, exit_ts 1..4 (1970-01-01, a Thursday)
+    p = bot_status_payload(tmp_path)
+    assert p["stats"]["by_day"] == {"1970-01-01": 0.2}
+    assert p["gate"] == {"weekday": 4, "weekend": 0}

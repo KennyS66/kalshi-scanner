@@ -1303,9 +1303,15 @@ def _trade_stats(trades):
     today_str = _utc_day_str(time.time())
     today_rows = [t for t in closed
                   if t.get("exit_ts") is not None and _utc_day_str(t["exit_ts"]) == today_str]
+    by_day = {}
+    for t in closed:
+        if t.get("exit_ts"):
+            d0 = _utc_day_str(t["exit_ts"])
+            by_day[d0] = round(by_day.get(d0, 0.0) + t["net_pnl"], 2)
     return {"all_time": block(closed),
             "today": block(today_rows),
-            "by_exit_reason": {k: block(v) for k, v in by_reason.items()}}
+            "by_exit_reason": {k: block(v) for k, v in by_reason.items()},
+            "by_day": dict(sorted(by_day.items())[-14:])}
 
 
 def _grade_summary(grades: list) -> dict:
@@ -1350,7 +1356,17 @@ def bot_status_payload(bot_dir=None) -> dict:
             "events": _read_jsonl_tail(d / "bot_events.jsonl", 50),
             "unlock": {"ok": ok, "reason": reason}, "config": cfg,
             "ev_buckets": bucket_stats(trades), "tuner": tuner,
-            "grades": grades[-200:], "grade_summary": _grade_summary(grades)}
+            "grades": grades[-200:], "grade_summary": _grade_summary(grades),
+            "gate": _gate_split(trades)}
+
+
+def _gate_split(trades: list) -> dict:
+    """Settled counts by tape regime for the dual live-unlock gate."""
+    closed = [t for t in trades if t.get("status") == "closed"
+              and t.get("net_pnl") is not None]
+    wd = sum(1 for t in closed
+             if time.gmtime(t.get("exit_ts") or 0).tm_wday < 5)
+    return {"weekday": wd, "weekend": len(closed) - wd}
 
 
 def bot_control_write(bot_dir, cmd: str) -> int:

@@ -239,14 +239,20 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <div class="tile"><div class="k">range win line</div><div class="v" id="histWin">—</div>
     <div class="s" id="histWinSub"></div></div>
   <div class="tile"><div class="k">gate progress</div><div class="v" id="gateProg">—</div>
-    <div class="s" id="gateProgSub"></div><div class="gatebar"><i id="gateBar" style="width:0%"></i></div></div>
+    <div class="s" id="gateWd">wd —</div><div class="gatebar"><i id="gateWdBar" style="width:0%"></i></div>
+    <div class="s" id="gateWe">we —</div><div class="gatebar"><i id="gateWeBar" style="width:0%;background:var(--purple)"></i></div></div>
 </div>
 
 <div class="grid">
   <div class="panel wide">
     <h3>Equity <span class="dim" style="text-transform:none">(cumulative net P&amp;L, last 50 settled · per-trade net below)</span></h3>
-    <div id="eqWrap"><svg id="eqSvg" height="196"></svg><div id="eqTip" class="eqtip" hidden></div></div>
+    <div id="eqWrap"><svg id="eqSvg" height="240"></svg><div id="eqTip" class="eqtip" hidden></div></div>
     <div class="empty" id="eqEmpty" hidden>no closed trades yet — the curve starts with the first settle</div>
+  </div>
+
+  <div class="panel">
+    <h3>Daily P&amp;L <span class="dim" style="text-transform:none">(net per UTC day)</span></h3>
+    <svg id="daySvg" height="150" style="display:block;width:100%"></svg>
   </div>
 
   <div class="panel">
@@ -280,6 +286,7 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 
   <div class="panel">
     <h3>Settlement grades <span class="dim" style="text-transform:none">(every exit vs holding to expiry)</span></h3>
+    <div id="gradeMix" style="display:flex;gap:2px;height:10px;border-radius:5px;overflow:hidden;margin-bottom:10px"></div>
     <div class="grade-strip" id="gradeStrip"></div>
     <div class="grade-edge" id="gradeEdge"></div>
     <div class="empty" id="gradeEmpty" hidden>no settled trades graded yet</div>
@@ -459,8 +466,8 @@ function renderEquity(trades, gmap) {
   $('eqEmpty').hidden = trades.length > 0;
   wrap.hidden = trades.length === 0;
   if (!trades.length) return;
-  const W = wrap.clientWidth || 600, H = 196;
-  const padL = 46, padR = 12, curveT = 10, curveB = 122, barsT = 140, barsB = 188;
+  const W = wrap.clientWidth || 600, H = 240;
+  const padL = 46, padR = 12, curveT = 10, curveB = 130, barsT = 150, barsB = 232;
   const plotW = W - padL - padR, n = trades.length;
   const X = i => padL + (n === 1 ? plotW / 2 : i * plotW / (n - 1));
   // cumulative series, domain always includes 0
@@ -591,10 +598,12 @@ async function pollBot() {
   const floor = cfg.ev_gate_min_samples || 12;
   const buckets = Object.entries(d.ev_buckets || {})
     .sort((x, y) => y[1].n - x[1].n);
+  const evMax = Math.max(...buckets.map(([, v]) => Math.abs(v.net_avg)), 0.01);
   $('evTable').tBodies[0].innerHTML = buckets.map(([b, v]) => {
     const gated = v.n >= floor && v.net_avg < 0;
     return `<tr><td>${esc(b)}</td><td>${v.n}</td><td>${v.win_pct.toFixed(0)}%</td>
-      <td class="${v.net_avg >= 0 ? 'pos' : 'neg'}">${money(v.net_avg)}</td>
+      <td class="${v.net_avg >= 0 ? 'pos' : 'neg'}">${money(v.net_avg)}
+        <div class="gatebar" style="margin-top:2px;width:52px"><i style="width:${(Math.abs(v.net_avg) / evMax * 100).toFixed(0)}%;background:var(--${v.net_avg >= 0 ? 'green' : 'red'})"></i></div></td>
       <td>${gated ? '<span class="neg" style="font-weight:800">SKIP</span>'
                   : v.n < floor ? `<span class="dim">${v.n}/${floor}</span>`
                   : '<span class="pos">open</span>'}</td></tr>`;
@@ -639,6 +648,14 @@ async function pollBot() {
     .sort((x, y) => y[1] - x[1])
     .map(([v, n]) => `<span class="vchip ${esc(v)}">${VLABEL[v] || esc(v)} × ${n}</span>`)
     .join('');
+  const VCOL = {clean_win: 'green', good_exit: 'green', good_stop: 'blue',
+                lucky_exit: 'yellow', left_money: 'orange', whipsaw_stop: 'red',
+                ungraded: 'mute'};
+  $('gradeMix').innerHTML = Object.keys(VCOL)
+    .filter(v => (gs.verdicts || {})[v])
+    .map(v => `<div title="${VLABEL[v]} × ${gs.verdicts[v]}"
+      style="flex:${gs.verdicts[v]};background:var(--${VCOL[v]});opacity:.85"></div>`)
+    .join('');
   $('gradeEdge').innerHTML = gs.n ? (
     `exits vs holding to expiry: <b class="${gs.exit_edge_usd >= 0 ? 'pos' : 'neg'}">`
     + `${money(gs.exit_edge_usd)}</b> across ${gs.n} settled`
@@ -646,12 +663,33 @@ async function pollBot() {
     + `${money(gs.stops_saved_usd)}</b>`
     + (gs.gaps ? ` · <span class="dim">${gs.gaps} with feed gaps</span>` : '')) : '';
 
-  const GATE_N = 200;   // 100 weekday + 100 weekend settled before live test
-  $('gateProg').textContent = `${a.n}/${GATE_N}`;
-  $('gateProgSub').textContent = (d.unlock && !d.unlock.ok && d.unlock.reason.includes('weekday'))
-    ? d.unlock.reason.replace('settled paper trades: ', '')
-    : 'weekday + weekend settles before live test';
-  $('gateBar').style.width = Math.min(100, a.n / GATE_N * 100).toFixed(0) + '%';
+  // dual gate: 100 weekday + 100 weekend settled before live test
+  const g8 = d.gate || {weekday: 0, weekend: 0};
+  $('gateProg').textContent = `${a.n}/200`;
+  $('gateWd').textContent = `weekday ${g8.weekday}/100`;
+  $('gateWe').textContent = `weekend ${g8.weekend}/100`;
+  $('gateWdBar').style.width = Math.min(100, g8.weekday) + '%';
+  $('gateWeBar').style.width = Math.min(100, g8.weekend) + '%';
+
+  // daily P&L columns
+  (() => {
+    const days = Object.entries((d.stats && d.stats.by_day) || {});
+    const svg = $('daySvg'); if (!days.length) { svg.innerHTML = ''; return; }
+    const DW = svg.clientWidth || 300, DH = 150, top = 16, bot = 18;
+    const mx = Math.max(...days.map(([, v]) => Math.abs(v)), 0.01);
+    const zero = top + (DH - top - bot) / 2, half = (DH - top - bot) / 2;
+    const bw = Math.min(42, DW / days.length - 8);
+    let h = `<line x1="0" x2="${DW}" y1="${zero}" y2="${zero}" stroke="var(--border)"/>`;
+    days.forEach(([day, v], i) => {
+      const x = (i + 0.5) * DW / days.length, y = zero - v / mx * half;
+      h += `<rect x="${(x - bw / 2).toFixed(1)}" y="${Math.min(y, zero).toFixed(1)}" width="${bw.toFixed(1)}"
+             height="${Math.max(1, Math.abs(y - zero)).toFixed(1)}" rx="2" fill="var(--${v >= 0 ? 'green' : 'red'})"/>
+            <text x="${x}" y="${(v >= 0 ? y - 4 : y + 11)}" text-anchor="middle" font-size="9"
+             fill="var(--fg)" font-weight="700">${money(v)}</text>
+            <text x="${x}" y="${DH - 4}" text-anchor="middle" font-size="9" fill="var(--mute)">${day.slice(5)}</text>`;
+    });
+    svg.setAttribute('viewBox', `0 0 ${DW} ${DH}`); svg.innerHTML = h;
+  })();
 
   renderEquity((d.trades || []).filter(t => t.status === 'closed'), gmap);
 
