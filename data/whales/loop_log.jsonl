@@ -144,3 +144,5 @@
 {"ts": 1784355550.2205622, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784357967.5201185, "type": "STATUS", "spot": null, "msg": "quiet iter"}
 {"ts": 1784360409.2836688, "type": "STATUS", "spot": null, "msg": "quiet iter"}
+{"ts": 1784362868.9204774, "type": "STATUS", "spot": null, "msg": "quiet iter; watching day-stop proximity"}
+{"ts": 1784364734.1990094, "type": "STATUS", "spot": null, "msg": "quiet iter"}
