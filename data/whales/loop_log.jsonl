@@ -181,3 +181,7 @@
 {"ts": 1784411515.3941052, "type": "EVENT", "spot": null, "msg": "day halt #2: -60.73; flat; 00Z roll in ~1h40m"}
 {"ts": 1784413272.5061712, "type": "STATUS", "spot": null, "msg": "quiet iter; day-halted till 00Z"}
 {"ts": 1784415774.5021434, "type": "STATUS", "spot": null, "msg": "quiet iter; halted till 00Z"}
+{"ts": 1784416419.5171309, "type": "EVENT", "spot": null, "msg": "replay-validated config applied: stop off (time-exit bounds trades), edge floor 4c; forward test begins at 00Z"}
+{"ts": 1784416704.325074, "type": "STATUS", "spot": null, "msg": "standing by for 00Z roll; forward test armed"}
+{"ts": 1784416855.540038, "type": "STATUS", "spot": null, "msg": "manual restart per Kenny: fresh day budget, new stop-off/edge-4 rules live"}
+{"ts": 1784419285.4860857, "type": "STATUS", "spot": null, "msg": "00Z setup: fresh thesis pulled, trend_up carried, Sunday curfew governs entries until 13Z"}
