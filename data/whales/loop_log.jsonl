@@ -223,3 +223,7 @@
 {"ts": 1784489048.2856612, "type": "STATUS", "spot": null, "msg": "hourly check: trend_down 64000-64600 regime, watchers healthy"}
 {"ts": 1784489552.6970508, "type": "HB", "spot": 64386.69, "msg": "level watcher alive"}
 {"ts": 1784490768.6547477, "type": "HB", "spot": 64345.39, "msg": "level watcher alive"}
+{"ts": 1784491974.388714, "type": "HB", "spot": 64466.19, "msg": "level watcher alive"}
+{"ts": 1784492708.4865816, "type": "STATUS", "spot": null, "msg": "hourly check: trend_down 64000-64600 regime, watchers healthy"}
+{"ts": 1784493191.6234324, "type": "HB", "spot": 64464.04, "msg": "level watcher alive"}
+{"ts": 1784494422.6015425, "type": "HB", "spot": 64448.43, "msg": "level watcher alive"}
