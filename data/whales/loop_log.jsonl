@@ -200,3 +200,6 @@
 {"ts": 1784450654.2733772, "type": "STATUS", "spot": null, "msg": "quiet iter; curfew"}
 {"ts": 1784453113.7868257, "type": "STATUS", "spot": null, "msg": "quiet iter; curfew"}
 {"ts": 1784454974.5557528, "type": "STATUS", "spot": null, "msg": "quiet iter; below support, watching fail line"}
+{"ts": 1784470646.9947858, "type": "STATUS", "spot": 64500.74, "msg": "marketloop resumed (weekend data run). WAIT day, key 65000; regime trend_up 64600-65000; spot 64500 below rlo \u2014 watching for confirmed breakdown vs reclaim"}
+{"ts": 1784471483.961532, "type": "EVENT", "spot": 64403.68, "msg": "BREAKDOWN CONFIRMED: 64.6k lost (12min sustain), spot 64404. Regime -> trend_down 64000-64600. 64.6k now resistance; watching 64k."}
+{"ts": 1784472674.532101, "type": "HB", "spot": 64583.99, "msg": "level watcher alive"}
