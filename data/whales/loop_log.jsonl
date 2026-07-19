@@ -207,3 +207,7 @@
 {"ts": 1784474410.2561631, "type": "STATUS", "spot": null, "msg": "hourly check: trend_down regime 64000-64600 intact, watcher baekfy8rn armed"}
 {"ts": 1784475076.5855265, "type": "HB", "spot": 64464.26, "msg": "level watcher alive"}
 {"ts": 1784476277.789689, "type": "HB", "spot": 64508.6, "msg": "level watcher alive"}
+{"ts": 1784477478.618768, "type": "HB", "spot": 64486.12, "msg": "level watcher alive"}
+{"ts": 1784478068.178541, "type": "STATUS", "spot": null, "msg": "hourly check: regime trend_down 64000-64600, watcher armed"}
+{"ts": 1784478680.180515, "type": "HB", "spot": 64543.52, "msg": "level watcher alive"}
+{"ts": 1784479881.580831, "type": "HB", "spot": 64541.53, "msg": "level watcher alive"}
