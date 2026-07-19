@@ -219,3 +219,7 @@
 {"ts": 1784485388.5454066, "type": "STATUS", "spot": null, "msg": "hourly check: 64.6k probe was rejected (no confirmed reclaim); trend_down 64000-64600 regime intact"}
 {"ts": 1784485913.1583118, "type": "HB", "spot": 64330.08, "msg": "level watcher alive"}
 {"ts": 1784487116.1532025, "type": "HB", "spot": 64348.49, "msg": "level watcher alive"}
+{"ts": 1784488331.3679037, "type": "HB", "spot": 64407.37, "msg": "level watcher alive"}
+{"ts": 1784489048.2856612, "type": "STATUS", "spot": null, "msg": "hourly check: trend_down 64000-64600 regime, watchers healthy"}
+{"ts": 1784489552.6970508, "type": "HB", "spot": 64386.69, "msg": "level watcher alive"}
+{"ts": 1784490768.6547477, "type": "HB", "spot": 64345.39, "msg": "level watcher alive"}
