@@ -231,3 +231,6 @@
 {"ts": 1784496367.4004083, "type": "STATUS", "spot": null, "msg": "hourly check: trend_down 64000-64600 regime, watchers healthy"}
 {"ts": 1784496861.1825433, "type": "HB", "spot": 64382.37, "msg": "level watcher alive"}
 {"ts": 1784498085.7305946, "type": "HB", "spot": 64359.52, "msg": "level watcher alive"}
+{"ts": 1784499302.5804253, "type": "HB", "spot": 64628.0, "msg": "level watcher alive"}
+{"ts": 1784500001.4563549, "type": "EVENT", "spot": 64727.51, "msg": "RECLAIM CONFIRMED: 64.6k regained (12min sustain), spot 64728. Regime -> range 64600-65000; watching 64.6k hold and 65k day key overhead."}
+{"ts": 1784501217.7537212, "type": "HB", "spot": 64712.8, "msg": "level watcher alive"}
