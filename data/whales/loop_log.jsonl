@@ -185,3 +185,4 @@
 {"ts": 1784416704.325074, "type": "STATUS", "spot": null, "msg": "standing by for 00Z roll; forward test armed"}
 {"ts": 1784416855.540038, "type": "STATUS", "spot": null, "msg": "manual restart per Kenny: fresh day budget, new stop-off/edge-4 rules live"}
 {"ts": 1784419285.4860857, "type": "STATUS", "spot": null, "msg": "00Z setup: fresh thesis pulled, trend_up carried, Sunday curfew governs entries until 13Z"}
+{"ts": 1784421736.3351562, "type": "STATUS", "spot": null, "msg": "quiet iter; Sunday curfew"}
