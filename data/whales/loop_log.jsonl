@@ -314,3 +314,8 @@
 {"ts": 1784568428.8644955, "type": "STATUS", "spot": null, "msg": "hourly check: trend_up 65000-65500, watchers healthy"}
 {"ts": 1784568921.1201968, "type": "HB", "spot": 65361.62, "msg": "level watcher alive"}
 {"ts": 1784570126.0174625, "type": "HB", "spot": 65507.72, "msg": "level watcher alive"}
+{"ts": 1784570768.4799998, "type": "EVENT", "spot": 65567.84, "msg": "BREAK UP CONFIRMED: 65.5k broken (12min sustain), spot 65568. Regime -> trend_up 65500-66000. Trend day continuing."}
+{"ts": 1784571957.3437982, "type": "HB", "spot": 65563.35, "msg": "level watcher alive"}
+{"ts": 1784572087.1891706, "type": "STATUS", "spot": null, "msg": "hourly check: trend_up 65500-66000, watchers healthy"}
+{"ts": 1784572962.7840395, "type": "EVENT", "spot": 65392.02, "msg": "FADE: 65.5k break failed (12min back below), spot 65392. 2nd leg stalled. Regime -> range 65000-65500, 65k still holding as trend floor."}
+{"ts": 1784574148.891201, "type": "HB", "spot": 65151.31, "msg": "level watcher alive"}
