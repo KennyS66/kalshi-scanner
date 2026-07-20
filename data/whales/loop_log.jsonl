@@ -310,3 +310,7 @@
 {"ts": 1784564769.9465432, "type": "STATUS", "spot": null, "msg": "tight check post-breakout: trend_up 65000-65500"}
 {"ts": 1784565303.184124, "type": "HB", "spot": 65406.1, "msg": "level watcher alive"}
 {"ts": 1784566508.712972, "type": "HB", "spot": 65352.53, "msg": "level watcher alive"}
+{"ts": 1784567714.3298469, "type": "HB", "spot": 65390.0, "msg": "level watcher alive"}
+{"ts": 1784568428.8644955, "type": "STATUS", "spot": null, "msg": "hourly check: trend_up 65000-65500, watchers healthy"}
+{"ts": 1784568921.1201968, "type": "HB", "spot": 65361.62, "msg": "level watcher alive"}
+{"ts": 1784570126.0174625, "type": "HB", "spot": 65507.72, "msg": "level watcher alive"}
