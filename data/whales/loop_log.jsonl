@@ -277,3 +277,7 @@
 {"ts": 1784535359.8788857, "type": "HB", "spot": 64252.37, "msg": "level watcher alive"}
 {"ts": 1784536562.4646049, "type": "HB", "spot": 64140.0, "msg": "level watcher alive"}
 {"ts": 1784537375.7535388, "type": "EVENT", "spot": 63975.99, "msg": "64k flipped again (2nd break in 2h) \u2014 reclassified as whipsaw noise like 64.6k earlier. Watch widened to 63000/65000."}
+{"ts": 1784538562.7441335, "type": "HB", "spot": 63973.99, "msg": "level watcher alive"}
+{"ts": 1784538850.444289, "type": "STATUS", "spot": null, "msg": "hourly check: range 63000-65000 wide band; watchers healthy"}
+{"ts": 1784539764.691775, "type": "HB", "spot": 64137.36, "msg": "level watcher alive"}
+{"ts": 1784540967.9403064, "type": "HB", "spot": 64204.5, "msg": "level watcher alive"}
