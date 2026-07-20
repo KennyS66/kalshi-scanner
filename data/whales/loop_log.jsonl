@@ -306,3 +306,7 @@
 {"ts": 1784562368.0422764, "type": "STATUS", "spot": null, "msg": "tight check: 65k test ongoing"}
 {"ts": 1784562621.0432181, "type": "HB", "spot": 65272.31, "msg": "level watcher alive"}
 {"ts": 1784562906.7155108, "type": "EVENT", "spot": 65482.91, "msg": "BREAK UP CONFIRMED: 65k day key broken (12min sustain), spot 65483. Regime -> trend_up 65000-65500. First genuine key break today."}
+{"ts": 1784564093.2632806, "type": "HB", "spot": 65500.04, "msg": "level watcher alive"}
+{"ts": 1784564769.9465432, "type": "STATUS", "spot": null, "msg": "tight check post-breakout: trend_up 65000-65500"}
+{"ts": 1784565303.184124, "type": "HB", "spot": 65406.1, "msg": "level watcher alive"}
+{"ts": 1784566508.712972, "type": "HB", "spot": 65352.53, "msg": "level watcher alive"}
