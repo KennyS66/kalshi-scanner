@@ -289,3 +289,6 @@
 {"ts": 1784546169.0167162, "type": "STATUS", "spot": null, "msg": "11:16Z check: range 63000-65000 wide band; watchers healthy; ~2h to curfew lift"}
 {"ts": 1784546983.6892562, "type": "HB", "spot": 64300.03, "msg": "level watcher alive"}
 {"ts": 1784548186.0140803, "type": "HB", "spot": 64903.14, "msg": "level watcher alive"}
+{"ts": 1784549388.6718347, "type": "HB", "spot": 64809.35, "msg": "level watcher alive"}
+{"ts": 1784550591.068923, "type": "HB", "spot": 64637.82, "msg": "level watcher alive"}
+{"ts": 1784551793.1939394, "type": "HB", "spot": 64665.23, "msg": "level watcher alive"}
