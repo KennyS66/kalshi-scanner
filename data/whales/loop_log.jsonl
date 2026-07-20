@@ -273,3 +273,7 @@
 {"ts": 1784532327.6426198, "type": "HB", "spot": 64033.99, "msg": "level watcher alive"}
 {"ts": 1784532968.7213078, "type": "EVENT", "spot": 64078.71, "msg": "RECLAIM CONFIRMED: 64k regained (12min sustain), spot 64079. Regime -> range 64000-65000."}
 {"ts": 1784534156.4263122, "type": "HB", "spot": 64183.02, "msg": "level watcher alive"}
+{"ts": 1784535191.444701, "type": "STATUS", "spot": null, "msg": "hourly check: range 64000-65000, watchers healthy"}
+{"ts": 1784535359.8788857, "type": "HB", "spot": 64252.37, "msg": "level watcher alive"}
+{"ts": 1784536562.4646049, "type": "HB", "spot": 64140.0, "msg": "level watcher alive"}
+{"ts": 1784537375.7535388, "type": "EVENT", "spot": 63975.99, "msg": "64k flipped again (2nd break in 2h) \u2014 reclassified as whipsaw noise like 64.6k earlier. Watch widened to 63000/65000."}
