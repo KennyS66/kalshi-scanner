@@ -324,3 +324,7 @@
 {"ts": 1784576574.849993, "type": "HB", "spot": 65080.82, "msg": "level watcher alive"}
 {"ts": 1784577305.8972702, "type": "STATUS", "spot": null, "msg": "tight check: 65k floor test"}
 {"ts": 1784577786.8931231, "type": "HB", "spot": 65035.39, "msg": "level watcher alive"}
+{"ts": 1784578994.5457714, "type": "HB", "spot": 65269.8, "msg": "level watcher alive"}
+{"ts": 1784580203.9387472, "type": "HB", "spot": 65259.99, "msg": "level watcher alive"}
+{"ts": 1784580965.92216, "type": "STATUS", "spot": null, "msg": "hourly check: range 65000-65500, watchers healthy"}
+{"ts": 1784581415.953124, "type": "HB", "spot": 65292.71, "msg": "level watcher alive"}
