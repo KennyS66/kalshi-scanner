@@ -300,3 +300,9 @@
 {"ts": 1784557152.1282668, "type": "STATUS", "spot": null, "msg": "hourly check: range 63000-65000, watchers healthy"}
 {"ts": 1784557805.0721362, "type": "HB", "spot": 64415.35, "msg": "level watcher alive"}
 {"ts": 1784559007.753547, "type": "HB", "spot": 64264.13, "msg": "level watcher alive"}
+{"ts": 1784560210.9612007, "type": "HB", "spot": 64753.59, "msg": "level watcher alive"}
+{"ts": 1784560816.236695, "type": "STATUS", "spot": null, "msg": "hourly check: range 63000-65000, watchers healthy"}
+{"ts": 1784561415.9193394, "type": "HB", "spot": 64918.0, "msg": "level watcher alive"}
+{"ts": 1784562368.0422764, "type": "STATUS", "spot": null, "msg": "tight check: 65k test ongoing"}
+{"ts": 1784562621.0432181, "type": "HB", "spot": 65272.31, "msg": "level watcher alive"}
+{"ts": 1784562906.7155108, "type": "EVENT", "spot": 65482.91, "msg": "BREAK UP CONFIRMED: 65k day key broken (12min sustain), spot 65483. Regime -> trend_up 65000-65500. First genuine key break today."}
