@@ -268,3 +268,8 @@
 {"ts": 1784528706.0712664, "type": "STATUS", "spot": null, "msg": "tight check: 64k floor test"}
 {"ts": 1784529531.9367528, "type": "HB", "spot": 63870.0, "msg": "level watcher alive"}
 {"ts": 1784529937.8122668, "type": "EVENT", "spot": 63752.32, "msg": "BREAKDOWN CONFIRMED: 64k range floor lost (12min sustain after 1h test), spot 63752. Regime -> trend_down 63000-64000. This is the wide-band edge, not 64.6k noise."}
+{"ts": 1784531124.9253428, "type": "HB", "spot": 63922.95, "msg": "level watcher alive"}
+{"ts": 1784531539.9551938, "type": "STATUS", "spot": null, "msg": "europe session open: trend_down 63000-64000 intact, spot 63888"}
+{"ts": 1784532327.6426198, "type": "HB", "spot": 64033.99, "msg": "level watcher alive"}
+{"ts": 1784532968.7213078, "type": "EVENT", "spot": 64078.71, "msg": "RECLAIM CONFIRMED: 64k regained (12min sustain), spot 64079. Regime -> range 64000-65000."}
+{"ts": 1784534156.4263122, "type": "HB", "spot": 64183.02, "msg": "level watcher alive"}
