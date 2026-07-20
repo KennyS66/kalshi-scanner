@@ -319,3 +319,8 @@
 {"ts": 1784572087.1891706, "type": "STATUS", "spot": null, "msg": "hourly check: trend_up 65500-66000, watchers healthy"}
 {"ts": 1784572962.7840395, "type": "EVENT", "spot": 65392.02, "msg": "FADE: 65.5k break failed (12min back below), spot 65392. 2nd leg stalled. Regime -> range 65000-65500, 65k still holding as trend floor."}
 {"ts": 1784574148.891201, "type": "HB", "spot": 65151.31, "msg": "level watcher alive"}
+{"ts": 1784575362.3559544, "type": "HB", "spot": 65094.42, "msg": "level watcher alive"}
+{"ts": 1784575749.82766, "type": "STATUS", "spot": null, "msg": "hourly check: range 65000-65500 (trend stalled), watchers healthy"}
+{"ts": 1784576574.849993, "type": "HB", "spot": 65080.82, "msg": "level watcher alive"}
+{"ts": 1784577305.8972702, "type": "STATUS", "spot": null, "msg": "tight check: 65k floor test"}
+{"ts": 1784577786.8931231, "type": "HB", "spot": 65035.39, "msg": "level watcher alive"}
