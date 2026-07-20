@@ -1,18 +1,18 @@
 {
   "yes": {
-    "sell_low_offset_c": 0.0,
-    "sell_high_offset_c": 0.0,
-    "low_hit_rate": 0.9,
-    "high_hit_rate": 0.9,
-    "buy_touch_rate": 1.0,
-    "n": 10
-  },
-  "no": {
-    "sell_low_offset_c": 3.0,
+    "sell_low_offset_c": 2.5,
     "sell_high_offset_c": 0.0,
     "low_hit_rate": 1.0,
-    "high_hit_rate": 0.889,
-    "buy_touch_rate": 0.9,
-    "n": 9
+    "high_hit_rate": 0.857,
+    "buy_touch_rate": 0.7,
+    "n": 7
+  },
+  "no": {
+    "sell_low_offset_c": 5.5,
+    "sell_high_offset_c": 2.5,
+    "low_hit_rate": 0.2,
+    "high_hit_rate": 0.1,
+    "buy_touch_rate": 1.0,
+    "n": 10
   }
 }
