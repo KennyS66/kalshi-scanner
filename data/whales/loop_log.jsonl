@@ -328,3 +328,7 @@
 {"ts": 1784580203.9387472, "type": "HB", "spot": 65259.99, "msg": "level watcher alive"}
 {"ts": 1784580965.92216, "type": "STATUS", "spot": null, "msg": "hourly check: range 65000-65500, watchers healthy"}
 {"ts": 1784581415.953124, "type": "HB", "spot": 65292.71, "msg": "level watcher alive"}
+{"ts": 1784582624.8475614, "type": "HB", "spot": 65284.87, "msg": "level watcher alive"}
+{"ts": 1784583830.6588836, "type": "HB", "spot": 65314.56, "msg": "level watcher alive"}
+{"ts": 1784584635.1185012, "type": "STATUS", "spot": null, "msg": "21Z late session: range 65000-65500 holding, day_pnl +15.70"}
+{"ts": 1784585043.9764209, "type": "HB", "spot": 65134.02, "msg": "level watcher alive"}
