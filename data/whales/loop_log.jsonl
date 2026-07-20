@@ -238,3 +238,8 @@
 {"ts": 1784503662.6822891, "type": "HB", "spot": 64622.05, "msg": "level watcher alive"}
 {"ts": 1784503688.6720784, "type": "STATUS", "spot": null, "msg": "hourly check: range 64600-65000, watchers healthy; day rolls at 00Z"}
 {"ts": 1784504874.055187, "type": "HB", "spot": 64670.01, "msg": "level watcher alive"}
+{"ts": 1784506099.052527, "type": "HB", "spot": 64749.6, "msg": "level watcher alive"}
+{"ts": 1784507309.4891818, "type": "HB", "spot": 64853.68, "msg": "level watcher alive"}
+{"ts": 1784507370.1703148, "type": "STATUS", "spot": 64852, "msg": "00Z day roll: bot rolled clean (weekend window closed, Sun settles banked). Thesis stale->WAIT, key 65000; range 64600-65000; spot 64852 approaching 65k"}
+{"ts": 1784508525.420641, "type": "HB", "spot": 64684.83, "msg": "level watcher alive"}
+{"ts": 1784509361.3342783, "type": "EVENT", "spot": 64480.96, "msg": "BREAKDOWN CONFIRMED (2nd time): 64.6k lost again after ~64.85k rejection, spot 64481. Regime -> breakout_watch 64000-64600. Whipsaw-prone tape."}
