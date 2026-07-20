@@ -296,3 +296,7 @@
 {"ts": 1784553499.2514174, "type": "STATUS", "spot": 64656.83, "msg": "13Z us open: curfew lifted, bot entered first weekday trade (NO x29@0.51). Range 63000-65000 intact."}
 {"ts": 1784554199.3919868, "type": "HB", "spot": 64473.01, "msg": "level watcher alive"}
 {"ts": 1784555401.5827973, "type": "HB", "spot": 64662.05, "msg": "level watcher alive"}
+{"ts": 1784556603.0943875, "type": "HB", "spot": 64405.98, "msg": "level watcher alive"}
+{"ts": 1784557152.1282668, "type": "STATUS", "spot": null, "msg": "hourly check: range 63000-65000, watchers healthy"}
+{"ts": 1784557805.0721362, "type": "HB", "spot": 64415.35, "msg": "level watcher alive"}
+{"ts": 1784559007.753547, "type": "HB", "spot": 64264.13, "msg": "level watcher alive"}
