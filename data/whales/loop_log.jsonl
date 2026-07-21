@@ -355,3 +355,9 @@
 {"ts": 1784603171.8478062, "type": "HB", "spot": 65418.42, "msg": "level watcher alive"}
 {"ts": 1784604373.4193187, "type": "HB", "spot": 65430.68, "msg": "level watcher alive"}
 {"ts": 1784605574.8599691, "type": "HB", "spot": 65453.29, "msg": "level watcher alive"}
+{"ts": 1784606776.6041875, "type": "HB", "spot": 65641.13, "msg": "level watcher alive"}
+{"ts": 1784607207.595494, "type": "EVENT", "spot": 65563.53, "msg": "BREAK UP CONFIRMED: 65.5k re-broken (12min sustain), spot 65564. Regime -> trend_up 65500-66000, trend resuming."}
+{"ts": 1784608393.775116, "type": "HB", "spot": 65500.04, "msg": "level watcher alive"}
+{"ts": 1784608868.7612264, "type": "STATUS", "spot": null, "msg": "hourly check: trend_up 65500-66000, curfew-off config confirmed stable, watchers healthy"}
+{"ts": 1784609595.0690298, "type": "HB", "spot": 65477.43, "msg": "level watcher alive"}
+{"ts": 1784609700.407624, "type": "EVENT", "spot": 65455.53, "msg": "FADE: 65.5k break failed again, spot 65456. Regime -> range 65000-65500. Also shipped: session-tagged EV-gate GUI on /bot with click-to-filter, fixed daytime_trades hiding night bucket data."}
