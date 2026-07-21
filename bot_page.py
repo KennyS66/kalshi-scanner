@@ -194,7 +194,7 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 .grade-edge b { font-variant-numeric:tabular-nums; }
 .notional { color:var(--mute); font-size:11px; }
 /* gate progress bar inside its tile */
-.gatebar { height:4px; background:var(--hair); border-radius:3px; margin-top:6px; overflow:hidden; }
+.gatebar { height:4px; background:var(--border); border-radius:3px; margin-top:6px; overflow:hidden; }
 .gatebar i { display:block; height:100%; background:var(--blue); border-radius:3px; }
 
 /* ── tabs ── */
