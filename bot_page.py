@@ -63,6 +63,15 @@ header {
 .badge.running { color:var(--green);  border-color:var(--green-bd);  background:var(--green-bg); }
 .badge.paused  { color:var(--yellow); border-color:var(--yellow-bd); background:var(--yellow-bg); }
 .badge.halted, .badge.offline { color:var(--red); border-color:var(--red-bd); background:var(--red-bg); }
+.badge.sess { font-size:9px; padding:2px 8px; cursor:pointer; }
+.badge.sess.wd_day    { color:var(--blue);   border-color:var(--blue-bd);   background:var(--blue-bg); }
+.badge.sess.wd_night  { color:var(--blue);   border-color:var(--blue-bd);   opacity:.55; }
+.badge.sess.we_day    { color:var(--purple); border-color:var(--purple-bd, var(--border)); background:var(--purple-bg); }
+.badge.sess.we_night  { color:var(--purple); border-color:var(--purple-bd, var(--border)); opacity:.55; }
+.badge.sess.off { opacity:.25; filter:grayscale(1); }
+.ev-summary { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+.ev-summary .tile { flex:1 1 130px; border:1px solid var(--hair); border-left:1px solid var(--hair);
+                    border-radius:8px; padding:8px 12px; background:var(--bg2); }
 .spot-btc { color:var(--orange); font-weight:800; font-size:15px; font-variant-numeric:tabular-nums; }
 .clock { color:var(--mute); font-size:12px; margin-left:auto; font-variant-numeric:tabular-nums; }
 .nav-link { color:var(--mute); font-size:11px; text-decoration:none;
@@ -310,9 +319,10 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   </div>
 
   <div class="panel">
-    <h3>EV gate <span class="dim" style="text-transform:none">(learned skip buckets)</span></h3>
+    <h3>EV gate <span class="dim" style="text-transform:none">(learned skip buckets, by session)</span></h3>
+    <div class="ev-summary" id="evSummary"></div>
     <div class="tbl-wrap"><table id="evTable"><thead><tr>
-      <th>bucket</th><th>n</th><th>win%</th><th>net avg</th><th>gate</th>
+      <th>session</th><th>bucket</th><th>n</th><th>win%</th><th>net avg</th><th>gate</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="empty" id="evEmpty" hidden>no closed trades bucketed yet</div>
     <div class="empty" id="evNote"></div>
@@ -390,6 +400,8 @@ function drawMeter(r, askC) {
 
 let offsets = {yes:{}, no:{}};
 let lastSig = null;
+let evFilter = null;      // null = all sessions, else 'weekday_day' etc.
+let lastBotData = null, lastBotCfg = null;   // cached for the session-filter re-render
 // mirrors backtest_gate.fee: per-contract Kalshi fee, ceil to the cent
 const kfee = p => Math.ceil(7 * p * (1 - p)) / 100;
 // mirrors PaperBroker.sell: achievable sell = ask - spread, floor 1c
@@ -595,6 +607,62 @@ function renderEquity(trades, gmap) {
 }
 window.addEventListener('resize', () => _eq && renderEquity(_eq.trades, _eq.gmap));
 
+function renderEvGate(d, cfg) {
+  const floor = cfg.ev_gate_min_samples || 12;
+  const SESSIONS = ['weekday_day', 'weekday_night', 'weekend_day', 'weekend_night'];
+  const sessCls = s => ({weekday_day:'wd_day', weekday_night:'wd_night',
+                         weekend_day:'we_day', weekend_night:'we_night'}[s] || '');
+  const sessLabel = s => ({weekday_day:'WD·day', weekday_night:'WD·night',
+                           weekend_day:'WE·day', weekend_night:'WE·night'}[s] || (s || '?'));
+  // bucket key: side|price|mins|momentum|session — split off the trailing
+  // session tag rather than assuming a fixed part count, so an older/
+  // shorter bucket key (pre-session-tagging history) degrades gracefully.
+  const splitBucket = b => {
+    const i = b.lastIndexOf('|');
+    const sess = SESSIONS.includes(b.slice(i + 1)) ? b.slice(i + 1) : null;
+    return {label: sess ? b.slice(0, i) : b, sess};
+  };
+  const allBuckets = Object.entries(d.ev_buckets || {})
+    .map(([b, v]) => ({...splitBucket(b), n: v.n, win_pct: v.win_pct, net_avg: v.net_avg}));
+
+  // Per-session rollup: total trades, win%, net avg, and how many buckets
+  // within that session have reached the gate floor vs are still gated
+  // negative — this is the "gate progress by market" view at a glance,
+  // no need to scan the raw bucket table to answer it.
+  $('evSummary').innerHTML = SESSIONS.map(s => {
+    const bs = allBuckets.filter(x => x.sess === s);
+    const n = bs.reduce((a, x) => a + x.n, 0);
+    const net = bs.reduce((a, x) => a + x.n * x.net_avg, 0);
+    const wins = bs.reduce((a, x) => a + x.n * x.win_pct / 100, 0);
+    const gated = bs.filter(x => x.n >= floor && x.net_avg < 0).length;
+    const active = evFilter === s;
+    return `<div class="tile" style="cursor:pointer;${active ? 'border-color:var(--blue-bd)' : ''}"
+              onclick="evFilter = evFilter === '${s}' ? null : '${s}'; renderEvGate(lastBotData, lastBotCfg)">
+        <div class="k"><span class="badge sess ${sessCls(s)}">${sessLabel(s)}</span></div>
+        <div class="v">${n ? money(net) : '—'}</div>
+        <div class="s">${n} trades${n ? `, ${(100 * wins / n).toFixed(0)}% win` : ''}${gated ? ` · ${gated} gated` : ''}</div>
+      </div>`;
+  }).join('');
+
+  const shown = evFilter ? allBuckets.filter(x => x.sess === evFilter) : allBuckets;
+  shown.sort((x, y) => y.n - x.n);
+  const evMax = Math.max(...shown.map(x => Math.abs(x.net_avg)), 0.01);
+  $('evTable').tBodies[0].innerHTML = shown.map(x => {
+    const gated = x.n >= floor && x.net_avg < 0;
+    return `<tr><td>${x.sess ? `<span class="badge sess ${sessCls(x.sess)}">${sessLabel(x.sess)}</span>` : '<span class="dim">—</span>'}</td>
+      <td>${esc(x.label)}</td><td>${x.n}</td><td>${x.win_pct.toFixed(0)}%</td>
+      <td class="${x.net_avg >= 0 ? 'pos' : 'neg'}">${money(x.net_avg)}
+        <div class="gatebar" style="margin-top:2px;width:52px"><i style="width:${(Math.abs(x.net_avg) / evMax * 100).toFixed(0)}%;background:var(--${x.net_avg >= 0 ? 'green' : 'red'})"></i></div></td>
+      <td>${gated ? '<span class="neg" style="font-weight:800">SKIP</span>'
+                  : x.n < floor ? `<span class="dim">${x.n}/${floor}</span>`
+                  : '<span class="pos">open</span>'}</td></tr>`;
+  }).join('');
+  $('evEmpty').hidden = shown.length > 0;
+  $('evNote').textContent = cfg.ev_gate === false
+    ? 'EV gate disabled in config'
+    : `buckets skip only at ≥${floor} samples with negative net avg — click a session tile to filter`;
+}
+
 async function pollBot() {
   const d = await fj('/api/bot/status', null);
   if (!d) { $('runBadge').textContent = 'API ERR'; $('runBadge').className = 'badge offline'; return; }
@@ -656,23 +724,8 @@ async function pollBot() {
   }).join('');
   $('openEmpty').hidden = open.length > 0;
 
-  const floor = cfg.ev_gate_min_samples || 12;
-  const buckets = Object.entries(d.ev_buckets || {})
-    .sort((x, y) => y[1].n - x[1].n);
-  const evMax = Math.max(...buckets.map(([, v]) => Math.abs(v.net_avg)), 0.01);
-  $('evTable').tBodies[0].innerHTML = buckets.map(([b, v]) => {
-    const gated = v.n >= floor && v.net_avg < 0;
-    return `<tr><td>${esc(b)}</td><td>${v.n}</td><td>${v.win_pct.toFixed(0)}%</td>
-      <td class="${v.net_avg >= 0 ? 'pos' : 'neg'}">${money(v.net_avg)}
-        <div class="gatebar" style="margin-top:2px;width:52px"><i style="width:${(Math.abs(v.net_avg) / evMax * 100).toFixed(0)}%;background:var(--${v.net_avg >= 0 ? 'green' : 'red'})"></i></div></td>
-      <td>${gated ? '<span class="neg" style="font-weight:800">SKIP</span>'
-                  : v.n < floor ? `<span class="dim">${v.n}/${floor}</span>`
-                  : '<span class="pos">open</span>'}</td></tr>`;
-  }).join('');
-  $('evEmpty').hidden = buckets.length > 0;
-  $('evNote').textContent = cfg.ev_gate === false
-    ? 'EV gate disabled in config'
-    : `buckets skip only at ≥${floor} samples with negative net avg`;
+  lastBotData = d; lastBotCfg = cfg;
+  renderEvGate(d, cfg);
 
   const tn = d.tuner;
   if (tn) {
