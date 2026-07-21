@@ -254,6 +254,24 @@ def test_bucket_stats_and_incremental_update_agree():
                                                   "net_avg": 0.25, "win_pct": 50.0}
 
 
+from bot_core import pool_by_date_stats
+
+
+def test_pool_by_date_stats_groups_by_exit_date_and_entry_session():
+    trades = [
+        {"status": "closed", "net_pnl": 1.5, "exit_ts": 50000.0,   # 13:53Z Thu
+         "entry_ts": 47000.0, "entry_sig": {}},                     # 13:03Z -> weekday_day
+        {"status": "closed", "net_pnl": -0.5, "exit_ts": 50100.0,
+         "entry_ts": 1000.0, "entry_sig": {"ts": 1000.0}},         # 00:16Z -> weekday_night
+        {"status": "open"},                                         # ignored
+        {"status": "closed", "net_pnl": 2.0},                       # no exit_ts -> ignored
+    ]
+    out = pool_by_date_stats(trades)
+    day = "1970-01-01"
+    assert out[day]["weekday_day"] == 1.5
+    assert out[day]["weekday_night"] == -0.5
+
+
 def test_ev_gate_blocks_only_proven_negative_buckets():
     cfg = dict(DEFAULT_CONFIG)
     sig = {"yes_ask": 0.50, "no_ask": 0.50, "mins_left": 8}

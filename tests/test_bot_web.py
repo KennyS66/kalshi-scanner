@@ -126,6 +126,16 @@ def test_status_payload_by_session(tmp_path):
     assert p["stats"]["by_session"]["wd|asia"]["n"] == 4
 
 
+def test_status_payload_includes_pool_by_date(tmp_path):
+    trades = [{"status": "closed", "net_pnl": 0.2, "entry_ts": 1.0, "exit_ts": 100.0,
+              "entry_sig": {"ts": 1.0}}]
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(json.dumps(t) for t in trades))
+    p = bot_status_payload(tmp_path)
+    assert "1970-01-01" in p["pool_by_date"]
+    assert p["pool_by_date"]["1970-01-01"]["weekday_night"] == 0.2
+
+
 def test_candles_from_log_buckets_ohlc(tmp_path):
     from web import candles_from_log
     log = tmp_path / "feat.jsonl"

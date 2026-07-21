@@ -1367,7 +1367,7 @@ def bot_status_payload(bot_dir=None) -> dict:
     from bot_core import load_config
     cfg = load_config(d / "config.json")
     ok, reason = live_unlock_ok(trades, cfg, dict(os.environ))
-    from bot_core import bucket_stats, compute_findings
+    from bot_core import bucket_stats, compute_findings, pool_by_date_stats
     try:
         tuner = json.loads((d / "tuner_report.json").read_text())
         tuner.pop("results", None)   # full sweep table is large; GUI shows summary
@@ -1382,6 +1382,7 @@ def bot_status_payload(bot_dir=None) -> dict:
             "ev_buckets": ev_buckets, "tuner": tuner,
             "grades": grades[-200:], "grade_summary": _grade_summary(grades),
             "gate": _gate_split(trades),
+            "pool_by_date": pool_by_date_stats(trades),
             "findings": compute_findings(trades, state, cfg, ev_buckets)}
 
 

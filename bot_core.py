@@ -420,6 +420,24 @@ def bucket_stats(trades: list) -> dict:
     return stats
 
 
+def pool_by_date_stats(trades: list) -> dict:
+    """{utc_exit_date: {pool: net_pnl_sum}} for closed trades — the entry's
+    session_tag (same entry_ts fallback as bucket_stats) attributes each
+    trade to a pool; the EXIT date buckets it by day for the Deep Dive
+    per-date breakdown."""
+    out = {}
+    for t in trades:
+        if t.get("status") != "closed" or t.get("net_pnl") is None or not t.get("exit_ts"):
+            continue
+        day = time.strftime("%Y-%m-%d", time.gmtime(t["exit_ts"]))
+        sig = dict(t.get("entry_sig") or {})
+        sig.setdefault("ts", t.get("entry_ts"))
+        pool = session_tag(sig.get("ts"))
+        d = out.setdefault(day, {})
+        d[pool] = round(d.get(pool, 0.0) + t["net_pnl"], 4)
+    return out
+
+
 # ── Flagged findings: the dashboard doing some of the noticing ────────────
 # Each rule is a small, independent function of (trades, state, cfg,
 # ev_buckets). One bad rule can't take down the others — compute_findings
