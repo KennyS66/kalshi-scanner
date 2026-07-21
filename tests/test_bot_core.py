@@ -368,3 +368,41 @@ def test_should_stretch_exit():
     assert should_stretch_exit(play, hit) is True
     assert should_stretch_exit(play, miss) is False
     assert should_stretch_exit({"side": "YES"}, hit) is False   # no ranges
+
+
+import time as _time
+from bot_core import compute_findings, POOL_NAMES
+
+
+def _state_with_pools(**pool_overrides):
+    pools = {p: {"bankroll": 125.0, "day_pnl": 0.0, "day_high": 0.0,
+                 "total_pnl": 0.0, "halted": False, "loss_capped": False}
+             for p in POOL_NAMES}
+    for pool, over in pool_overrides.items():
+        pools[pool].update(over)
+    return {"paused": False, "heartbeat": _time.time(), "pools": pools}
+
+
+def test_finding_day_giveback_is_per_pool_and_names_it():
+    state = _state_with_pools(weekend_night={"day_high": 20.0, "day_pnl": 5.0})
+    out = compute_findings([], state, {}, {})
+    # narrow to the day-giveback finding's own titles: with ev_buckets={},
+    # _finding_thin_session (out of scope here) emits "Still learning
+    # weekday_day" for every pool, which would otherwise spuriously
+    # satisfy/defeat a bare substring check against the raw title list.
+    giveback = [f["title"] for f in out if f["title"].startswith("Day giving back gains")]
+    assert any("weekend_night" in t for t in giveback)
+    assert not any("weekday_day" in t for t in giveback)
+
+
+def test_finding_bot_health_reports_only_halted_pools():
+    state = _state_with_pools(weekday_night={"halted": True})
+    out = compute_findings([], state, {}, {})
+    hit = next(f for f in out if f["title"] == "Bot halted")
+    assert hit["detail"] == "weekday_night"
+
+
+def test_finding_bot_health_ignores_missing_pools_key():
+    # legacy raw state dict (pre-migration, read straight off disk by web.py)
+    out = compute_findings([], {"paused": False, "heartbeat": _time.time()}, {}, {})
+    assert not any(f["title"] == "Bot halted" for f in out)

@@ -500,8 +500,10 @@ class Bot:
         if not flip:
             return
         ranges = self._ranges_for(flip, sig)
+        pool = session_tag(sig.get("ts"))
+        ps = self.state.get("pools", {}).get(pool, {})
         blockers = entry_blockers(sig, self.cfg, self.state["open_plays"],
-                                  self.state["halted"], self.state["paused"],
+                                  ps.get("halted", False), self.state["paused"],
                                   ranges)
         ev = ev_gate_blocker(flip, sig, self.ev_stats, self.cfg)
         if ev:
@@ -509,7 +511,7 @@ class Bot:
         cur = weekend_curfew_blocker(sig.get("ts") or time.time(), self.cfg)
         if cur:
             blockers.append(cur)
-        if self.state.get("loss_capped"):
+        if ps.get("loss_capped"):
             blockers.append("max_loss_cap")
         mcap = self.cfg.get("max_entries_per_market") or 0
         n_mkt = self.state.get("market_entries", {}).get(ticker, 0)

@@ -445,20 +445,26 @@ def _finding_bucket_bleeding(trades, state, cfg, ev_buckets):
 
 
 def _finding_day_giveback(trades, state, cfg, ev_buckets):
-    high, pnl = state.get("day_high") or 0.0, state.get("day_pnl") or 0.0
-    if high > 0 and (high - pnl) > high * 0.5:
-        return [{"severity": "warn", "title": "Day giving back gains",
-                 "detail": f"peaked at {high:+.2f}, now {pnl:+.2f} "
-                           f"({(high - pnl) / high * 100:.0f}% given back)"}]
-    return []
+    out = []
+    for pool in POOL_NAMES:
+        ps = (state.get("pools") or {}).get(pool) or {}
+        high, pnl = ps.get("day_high") or 0.0, ps.get("day_pnl") or 0.0
+        if high > 0 and (high - pnl) > high * 0.5:
+            out.append({"severity": "warn", "title": f"Day giving back gains: {pool}",
+                        "detail": f"peaked at {high:+.2f}, now {pnl:+.2f} "
+                                  f"({(high - pnl) / high * 100:.0f}% given back)"})
+    return out
 
 
 def _finding_bot_health(trades, state, cfg, ev_buckets):
     out = []
     if state.get("paused"):
         out.append({"severity": "warn", "title": "Bot paused", "detail": ""})
-    if state.get("halted"):
-        out.append({"severity": "warn", "title": "Bot halted", "detail": ""})
+    halted_pools = [p for p in POOL_NAMES
+                    if ((state.get("pools") or {}).get(p) or {}).get("halted")]
+    if halted_pools:
+        out.append({"severity": "warn", "title": "Bot halted",
+                    "detail": ", ".join(halted_pools)})
     age = time.time() - (state.get("heartbeat") or 0)
     if age > 30:
         out.append({"severity": "warn", "title": "Feed stale",

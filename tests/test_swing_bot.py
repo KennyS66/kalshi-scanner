@@ -191,6 +191,24 @@ def test_pool_halt_blocks_only_that_pools_entries(tmp_path, monkeypatch):
     assert any("halted" in e["reason"] for e in skips)
 
 
+def test_loss_capped_pool_blocks_only_that_pools_entries(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"overnight_curfew": False, "weekend_curfew": False}))
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),               # M1, weekday_night
+        _sig(ticker="M2", ts=47800.0),
+        _sig(ticker="M2", whale_trend=3.0, momentum=30.0, ts=47805.0), # M2, weekday_day
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    bot.state["pools"]["weekday_night"]["loss_capped"] = True
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" not in bot.state["open_plays"]
+    assert "M2" in bot.state["open_plays"]
+
+
 def test_day_stop_halt_flattens_only_that_pools_plays(tmp_path, monkeypatch):
     # The live feed only ever tracks one active 15m market at a time — any
     # open play whose ticker doesn't match the tick's fetched sig gets
@@ -547,7 +565,13 @@ def test_sizing_shrinks_with_consumed_loss_budget(tmp_path, monkeypatch):
     # $125 pool (500/4) -> base budget 125*.02=$2.50 -> 4 contracts w/ full headroom.
     # total_pnl -91 -> headroom 9 -> trade_risk_frac .10 -> $0.90 budget -> 1
     # contract: the loss-budget constraint now binds instead of the bankroll one.
-    rows = [dict(_losing_trade_row(), net_pnl=-91.0)]
+    # exit_ts is pushed off fresh_state()'s default "day" (_utc_day(0.0)) so
+    # _migrate_pools's today-only day_pnl/day_high backfill doesn't also
+    # count this loss toward day_pnl -- that would trip the (unrelated)
+    # day-stop halt and block the entry outright, masking the loss-budget
+    # sizing effect this test is isolating. Only total_pnl (all-time, always
+    # backfilled) should be exercised here.
+    rows = [dict(_losing_trade_row(), net_pnl=-91.0, exit_ts=90000.0)]
     (tmp_path / TRADES_FILE).write_text(json.dumps(rows[0]))
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     bot = _mkbot(tmp_path, sigs, monkeypatch)
