@@ -381,3 +381,9 @@
 {"ts": 1784619304.8260949, "type": "HB", "spot": 65966.52, "msg": "level watcher alive"}
 {"ts": 1784620401.9315543, "type": "HB", "spot": 66135.37, "msg": "level watcher alive"}
 {"ts": 1784620506.20638, "type": "HB", "spot": 66162.28, "msg": "level watcher alive"}
+{"ts": 1784621603.2757928, "type": "HB", "spot": 66125.17, "msg": "level watcher alive"}
+{"ts": 1784621707.1589453, "type": "HB", "spot": 66235.63, "msg": "level watcher alive"}
+{"ts": 1784622707.3789763, "type": "EVENT", "spot": 66176.0, "msg": "BREAK UP CONFIRMED: 66k round broken (12min sustain), spot 66176. Regime -> trend_up 66000-66500. Multi-hour trend extending."}
+{"ts": 1784622908.4210901, "type": "HB", "spot": 66180.9, "msg": "level watcher alive"}
+{"ts": 1784623899.6287298, "type": "HB", "spot": 66211.15, "msg": "level watcher alive"}
+{"ts": 1784624109.7640948, "type": "HB", "spot": 66193.69, "msg": "level watcher alive"}
