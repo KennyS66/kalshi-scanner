@@ -197,6 +197,39 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 .gatebar { height:4px; background:var(--hair); border-radius:3px; margin-top:6px; overflow:hidden; }
 .gatebar i { display:block; height:100%; background:var(--blue); border-radius:3px; }
 
+/* ── tabs ── */
+.tabs { display:flex; gap:2px; margin:14px 20px 0; }
+.tab-btn { background:var(--bg2); border:1px solid var(--border); border-bottom:none;
+           color:var(--mute); font:inherit; font-size:11px; font-weight:800; letter-spacing:.5px;
+           text-transform:uppercase; padding:7px 16px; border-radius:8px 8px 0 0; cursor:pointer; }
+.tab-btn.active { color:var(--fg); background:var(--bg3); }
+.tab-btn:hover:not(.active) { color:var(--fg); }
+#overviewTab, #deepdiveTab { border-top:1px solid var(--border); padding-top:1px; }
+.section-label { font-size:10px; font-weight:800; letter-spacing:1px; text-transform:uppercase;
+                 color:var(--mute); margin:14px 20px 2px; }
+.section-label:first-child { margin-top:6px; }
+
+/* ── flagged findings ── */
+.findings { margin:14px 20px 0; display:flex; flex-direction:column; border:1px solid var(--border);
+            border-radius:var(--radius); overflow:hidden; background:var(--bg2); box-shadow:var(--card-shadow); }
+.finding-row { display:flex; align-items:baseline; gap:10px; padding:7px 14px; font-size:12px;
+               border-top:1px solid var(--hair); }
+.finding-row:first-child { border-top:none; }
+.finding-row .fi-sev { font-size:9px; font-weight:900; padding:1px 7px; border-radius:99px; flex-shrink:0; }
+.finding-row .fi-sev.warn { color:var(--red); border:1px solid var(--red-bd); background:var(--red-bg); }
+.finding-row .fi-sev.info { color:var(--blue); border:1px solid var(--blue-bd); background:var(--blue-bg); }
+.finding-row .fi-title { font-weight:700; flex-shrink:0; }
+.finding-row .fi-detail { color:var(--mute); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.findings.clear { padding:8px 14px; font-size:12px; color:var(--green); }
+
+/* ── loop log (compact, embedded on Overview) ── */
+.looplog-row { display:flex; gap:8px; padding:3px 14px; font-size:11px; border-top:1px solid var(--hair);
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.looplog-row:first-child { border-top:none; }
+.looplog-row .lg-ts { color:var(--mute); flex-shrink:0; font-variant-numeric:tabular-nums; }
+.looplog-row .lg-type { flex-shrink:0; font-weight:800; font-size:9px; color:var(--blue); align-self:center; }
+.looplog-row .lg-msg { color:var(--fg); overflow:hidden; text-overflow:ellipsis; }
+
 /* ── equity chart ── */
 #eqWrap { position:relative; }
 #eqWrap svg { display:block; width:100%; }
@@ -218,133 +251,163 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <span class="clock" id="clock"></span>
 </header>
 
-<div class="range-banner" id="rangeBanner">
-  <div class="range-head">
-    <span class="range-side" id="rangeSide">—</span>
-    <span class="range-buy" id="rangeBuy">BUY —</span>
-    <span class="range-arr">→</span>
-    <span class="range-sell" id="rangeSell">SELL —</span>
-    <span class="gate-chip wait" id="gateChip">…</span>
-  </div>
-  <div class="range-sub" id="rangeSub">calibrated from graded banner-target history</div>
-  <div class="meter-wrap">
-    <div class="meter" id="meter"></div>
-  </div>
+<div class="tabs">
+  <button class="tab-btn active" id="tabBtnOverview" onclick="switchTab('overview')">Overview</button>
+  <button class="tab-btn" id="tabBtnDeepdive" onclick="switchTab('deepdive')">Deep Dive</button>
 </div>
 
-<div class="tiles">
-  <div class="tile hero"><div class="k">day p&amp;l</div><div class="v" id="dayPnl">—</div>
-    <div class="s" id="dayStop"></div></div>
-  <div class="tile"><div class="k">bankroll</div><div class="v" id="bankroll">—</div>
-    <div class="s" id="bankrollSub"></div></div>
-  <div class="tile"><div class="k">loss budget</div><div class="v" id="lossBudget">—</div>
-    <div class="s" id="lossBudgetSub"></div></div>
-  <div class="tile"><div class="k">win rate</div><div class="v" id="winRate">—</div>
-    <div class="s" id="winRateSub"></div></div>
-  <div class="tile"><div class="k">net avg / trade</div><div class="v" id="netAvg">—</div>
-    <div class="s" id="nTrades"></div></div>
-  <div class="tile"><div class="k">open plays</div><div class="v" id="nOpen">—</div>
-    <div class="s" id="riskSub"></div></div>
-  <div class="tile"><div class="k">range win line</div><div class="v" id="histWin">—</div>
-    <div class="s" id="histWinSub"></div></div>
-  <div class="tile"><div class="k">gate progress</div><div class="v" id="gateProg">—</div>
-    <div class="s" id="gateWd">wd —</div><div class="gatebar"><i id="gateWdBar" style="width:0%"></i></div>
-    <div class="s" id="gateWe">we —</div><div class="gatebar"><i id="gateWeBar" style="width:0%;background:var(--purple)"></i></div></div>
-</div>
+<div id="overviewTab">
+  <div class="findings" id="findingsBox"></div>
 
-<div class="grid">
-  <div class="panel wide">
-    <h3>BTC <span class="dim" style="text-transform:none">(15m candles, last 8h · key level dashed)</span></h3>
-    <div id="cdWrap" style="position:relative"><svg id="cdSvg" height="200" style="display:block;width:100%"></svg>
-      <div id="cdTip" class="eqtip" hidden></div></div>
+  <div class="tiles">
+    <div class="tile hero"><div class="k">day p&amp;l</div><div class="v" id="dayPnl">—</div>
+      <div class="s" id="dayStop"></div></div>
+    <div class="tile"><div class="k">bankroll</div><div class="v" id="bankroll">—</div>
+      <div class="s" id="bankrollSub"></div></div>
+    <div class="tile"><div class="k">loss budget</div><div class="v" id="lossBudget">—</div>
+      <div class="s" id="lossBudgetSub"></div></div>
+    <div class="tile"><div class="k">win rate</div><div class="v" id="winRate">—</div>
+      <div class="s" id="winRateSub"></div></div>
+    <div class="tile"><div class="k">net avg / trade</div><div class="v" id="netAvg">—</div>
+      <div class="s" id="nTrades"></div></div>
+    <div class="tile"><div class="k">open plays</div><div class="v" id="nOpen">—</div>
+      <div class="s" id="riskSub"></div></div>
+    <div class="tile"><div class="k">range win line</div><div class="v" id="histWin">—</div>
+      <div class="s" id="histWinSub"></div></div>
+    <div class="tile"><div class="k">gate progress</div><div class="v" id="gateProg">—</div>
+      <div class="s" id="gateWd">wd —</div><div class="gatebar"><i id="gateWdBar" style="width:0%"></i></div>
+      <div class="s" id="gateWe">we —</div><div class="gatebar"><i id="gateWeBar" style="width:0%;background:var(--purple)"></i></div></div>
   </div>
 
-  <div class="panel wide">
-    <h3>Equity <span class="dim" style="text-transform:none">(cumulative net P&amp;L, last 50 settled · per-trade net below)</span></h3>
-    <div id="eqWrap"><svg id="eqSvg" height="240"></svg><div id="eqTip" class="eqtip" hidden></div></div>
-    <div class="empty" id="eqEmpty" hidden>no closed trades yet — the curve starts with the first settle</div>
-  </div>
-
-  <div class="panel">
-    <h3>Daily P&amp;L <span class="dim" style="text-transform:none">(net per UTC day)</span></h3>
-    <svg id="daySvg" height="150" style="display:block;width:100%"></svg>
-    <h3 style="margin-top:12px">Session map <span class="dim" style="text-transform:none">(capitalize / skip)</span></h3>
-    <div class="tbl-wrap"><table id="sessTable"><thead><tr>
-      <th>session</th><th>n</th><th>win%</th><th>net avg</th><th>zone</th>
-    </tr></thead><tbody></tbody></table></div>
-  </div>
-
-  <div class="panel">
-    <h3>Controls</h3>
-    <div class="controls">
-      <button class="warn" onclick="ctl('pause')">Pause</button>
-      <button class="go" onclick="ctl('resume')">Resume</button>
-      <button class="danger" onclick="ctl('flatten')">Flatten</button>
-      <button id="liveToggle" disabled>LIVE 🔒</button>
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <div class="panel">
+      <h3>Equity <span class="dim" style="text-transform:none">(cumulative net P&amp;L, last 50 settled · per-trade net below)</span></h3>
+      <div id="eqWrap"><svg id="eqSvg" height="240"></svg><div id="eqTip" class="eqtip" hidden></div></div>
+      <div class="empty" id="eqEmpty" hidden>no closed trades yet — the curve starts with the first settle</div>
     </div>
-    <div class="unlock" id="unlock"></div>
+
+    <div class="panel">
+      <h3>Daily P&amp;L <span class="dim" style="text-transform:none">(net per UTC day)</span></h3>
+      <svg id="daySvg" height="240" style="display:block;width:100%"></svg>
+    </div>
   </div>
 
-  <div class="panel">
-    <h3>Open plays</h3>
-    <div class="tbl-wrap"><table id="openTable"><thead><tr>
-      <th>ticker</th><th>side</th><th>qty</th><th>cost</th><th>entry</th><th>live</th>
-      <th>uP&amp;L</th><th>target</th><th>stretch</th>
-    </tr></thead><tbody></tbody></table></div>
-    <div class="empty" id="openEmpty" hidden>flat — waiting for a flow flip inside the buy range</div>
+  <div class="panel wide" style="margin:14px 20px 0">
+    <h3>Loop log <span class="dim" style="text-transform:none">(live marketloop commentary — full feed at /trade)</span></h3>
+    <div id="looplogBody"></div>
+  </div>
+</div>
+
+<div id="deepdiveTab" hidden>
+  <div class="section-label">Performance</div>
+  <div class="grid">
+    <div class="panel wide">
+      <h3>BTC <span class="dim" style="text-transform:none">(15m candles, last 8h · key level dashed)</span></h3>
+      <div id="cdWrap" style="position:relative"><svg id="cdSvg" height="200" style="display:block;width:100%"></svg>
+        <div id="cdTip" class="eqtip" hidden></div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Session map <span class="dim" style="text-transform:none">(capitalize / skip)</span></h3>
+      <div class="tbl-wrap"><table id="sessTable"><thead><tr>
+        <th>session</th><th>n</th><th>win%</th><th>net avg</th><th>zone</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <h3>Settlement grades <span class="dim" style="text-transform:none">(every exit vs holding to expiry)</span></h3>
+      <div id="gradeMix" style="display:flex;gap:2px;height:10px;border-radius:5px;overflow:hidden;margin-bottom:10px"></div>
+      <div class="grade-strip" id="gradeStrip"></div>
+      <div class="grade-edge" id="gradeEdge"></div>
+      <div class="empty" id="gradeEmpty" hidden>no settled trades graded yet</div>
+    </div>
+
+    <div class="panel">
+      <h3>Exit reasons</h3>
+      <div class="tbl-wrap"><table id="reasonTable"><thead><tr>
+        <th>reason</th><th>n</th><th>win%</th><th>net avg</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
   </div>
 
-  <div class="panel">
-    <h3>Range calibration <span class="dim" style="text-transform:none">(learned from graded history)</span></h3>
-    <div class="tbl-wrap"><table id="calTable"><thead><tr>
-      <th>side</th><th>sell-low off</th><th>sell-high off</th><th>win hit</th>
-      <th>stretch hit</th><th>touch</th><th>n</th>
-    </tr></thead><tbody></tbody></table></div>
-    <div class="empty" id="calNote"></div>
+  <div class="section-label">Risk &amp; Health</div>
+  <div class="grid">
+    <div class="panel">
+      <h3>Controls</h3>
+      <div class="controls">
+        <button class="warn" onclick="ctl('pause')">Pause</button>
+        <button class="go" onclick="ctl('resume')">Resume</button>
+        <button class="danger" onclick="ctl('flatten')">Flatten</button>
+        <button id="liveToggle" disabled>LIVE 🔒</button>
+      </div>
+      <div class="unlock" id="unlock"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Open plays</h3>
+      <div class="tbl-wrap"><table id="openTable"><thead><tr>
+        <th>ticker</th><th>side</th><th>qty</th><th>cost</th><th>entry</th><th>live</th>
+        <th>uP&amp;L</th><th>target</th><th>stretch</th>
+      </tr></thead><tbody></tbody></table></div>
+      <div class="empty" id="openEmpty" hidden>flat — waiting for a flow flip inside the buy range</div>
+    </div>
+
+    <div class="panel">
+      <h3>Range calibration <span class="dim" style="text-transform:none">(learned from graded history)</span></h3>
+      <div class="tbl-wrap"><table id="calTable"><thead><tr>
+        <th>side</th><th>sell-low off</th><th>sell-high off</th><th>win hit</th>
+        <th>stretch hit</th><th>touch</th><th>n</th>
+      </tr></thead><tbody></tbody></table></div>
+      <div class="empty" id="calNote"></div>
+    </div>
   </div>
 
-  <div class="panel">
-    <h3>Settlement grades <span class="dim" style="text-transform:none">(every exit vs holding to expiry)</span></h3>
-    <div id="gradeMix" style="display:flex;gap:2px;height:10px;border-radius:5px;overflow:hidden;margin-bottom:10px"></div>
-    <div class="grade-strip" id="gradeStrip"></div>
-    <div class="grade-edge" id="gradeEdge"></div>
-    <div class="empty" id="gradeEmpty" hidden>no settled trades graded yet</div>
-  </div>
+  <div class="section-label">Strategy Detail</div>
+  <div class="grid">
+    <div class="panel wide">
+      <div class="range-banner" id="rangeBanner" style="margin:0">
+        <div class="range-head">
+          <span class="range-side" id="rangeSide">—</span>
+          <span class="range-buy" id="rangeBuy">BUY —</span>
+          <span class="range-arr">→</span>
+          <span class="range-sell" id="rangeSell">SELL —</span>
+          <span class="gate-chip wait" id="gateChip">…</span>
+        </div>
+        <div class="range-sub" id="rangeSub">calibrated from graded banner-target history</div>
+        <div class="meter-wrap">
+          <div class="meter" id="meter"></div>
+        </div>
+      </div>
+    </div>
 
-  <div class="panel">
-    <h3>Exit reasons</h3>
-    <div class="tbl-wrap"><table id="reasonTable"><thead><tr>
-      <th>reason</th><th>n</th><th>win%</th><th>net avg</th>
-    </tr></thead><tbody></tbody></table></div>
-  </div>
+    <div class="panel wide">
+      <h3>EV gate <span class="dim" style="text-transform:none">(learned skip buckets, by session)</span></h3>
+      <div class="ev-summary" id="evSummary"></div>
+      <div class="tbl-wrap"><table id="evTable"><thead><tr>
+        <th>session</th><th>bucket</th><th>n</th><th>win%</th><th>net avg</th><th>gate</th>
+      </tr></thead><tbody></tbody></table></div>
+      <div class="empty" id="evEmpty" hidden>no closed trades bucketed yet</div>
+      <div class="empty" id="evNote"></div>
+    </div>
 
-  <div class="panel">
-    <h3>EV gate <span class="dim" style="text-transform:none">(learned skip buckets, by session)</span></h3>
-    <div class="ev-summary" id="evSummary"></div>
-    <div class="tbl-wrap"><table id="evTable"><thead><tr>
-      <th>session</th><th>bucket</th><th>n</th><th>win%</th><th>net avg</th><th>gate</th>
-    </tr></thead><tbody></tbody></table></div>
-    <div class="empty" id="evEmpty" hidden>no closed trades bucketed yet</div>
-    <div class="empty" id="evNote"></div>
-  </div>
+    <div class="panel">
+      <h3>Replay tuner <span class="dim" style="text-transform:none">(nightly, suggestion only)</span></h3>
+      <div id="tunerBody" class="empty">no tuner report yet</div>
+    </div>
 
-  <div class="panel">
-    <h3>Replay tuner <span class="dim" style="text-transform:none">(nightly, suggestion only)</span></h3>
-    <div id="tunerBody" class="empty">no tuner report yet</div>
-  </div>
+    <div class="panel wide">
+      <h3>Trades</h3>
+      <div class="tbl-wrap"><table id="tradeTable"><thead><tr>
+        <th>time</th><th>ticker</th><th>side</th><th>qty</th><th>cost</th><th>in</th><th>out</th>
+        <th>reason</th><th>net</th><th>vs settle</th>
+      </tr></thead><tbody></tbody></table></div>
+      <div class="empty" id="tradeEmpty" hidden>no closed trades yet</div>
+    </div>
 
-  <div class="panel wide">
-    <h3>Trades</h3>
-    <div class="tbl-wrap"><table id="tradeTable"><thead><tr>
-      <th>time</th><th>ticker</th><th>side</th><th>qty</th><th>cost</th><th>in</th><th>out</th>
-      <th>reason</th><th>net</th><th>vs settle</th>
-    </tr></thead><tbody></tbody></table></div>
-    <div class="empty" id="tradeEmpty" hidden>no closed trades yet</div>
-  </div>
-
-  <div class="panel wide">
-    <h3>Decision log</h3>
-    <div id="log"></div>
+    <div class="panel wide">
+      <h3>Decision log</h3>
+      <div id="log"></div>
+    </div>
   </div>
 </div>
 
@@ -365,6 +428,45 @@ async function ctl(cmd) {
     headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd})});
   pollBot();
 }
+
+function switchTab(name) {
+  const overview = name === 'overview';
+  $('overviewTab').hidden = !overview;
+  $('deepdiveTab').hidden = overview;
+  $('tabBtnOverview').classList.toggle('active', overview);
+  $('tabBtnDeepdive').classList.toggle('active', !overview);
+}
+
+function renderFindings(findings) {
+  const box = $('findingsBox');
+  if (!findings || !findings.length) {
+    box.className = 'findings clear';
+    box.innerHTML = '✓ nothing flagged';
+    return;
+  }
+  box.className = 'findings';
+  box.innerHTML = findings.map(f => `<div class="finding-row">
+      <span class="fi-sev ${f.severity}">${f.severity}</span>
+      <span class="fi-title">${esc(f.title)}</span>
+      <span class="fi-detail">${esc(f.detail || '')}</span>
+    </div>`).join('');
+}
+
+async function pollLoopLog() {
+  const j = await fj('/api/loop_log?limit=100', null);
+  const rows = ((j && (j.entries || j.rows)) || []).filter(e => e.type !== 'HB').slice(0, 20);
+  const el = $('looplogBody');
+  if (!rows.length) { el.innerHTML = '<div class="empty">no recent commentary</div>'; return; }
+  el.innerHTML = rows.map(e => {
+    const t = new Date(e.ts * 1000).toISOString().slice(11, 19);
+    return `<div class="looplog-row">
+        <span class="lg-ts">${t}</span>
+        <span class="lg-type">${esc(e.type || '')}</span>
+        <span class="lg-msg">${esc(e.msg || '')}</span>
+      </div>`;
+  }).join('');
+}
+setInterval(pollLoopLog, 15000);
 
 setInterval(() =>
   $('clock').textContent = new Date().toISOString().slice(11,19) + 'Z', 1000);
@@ -726,6 +828,7 @@ async function pollBot() {
 
   lastBotData = d; lastBotCfg = cfg;
   renderEvGate(d, cfg);
+  renderFindings(d.findings);
 
   const tn = d.tuner;
   if (tn) {
@@ -789,7 +892,7 @@ async function pollBot() {
   (() => {
     const days = Object.entries((d.stats && d.stats.by_day) || {});
     const svg = $('daySvg'); if (!days.length) { svg.innerHTML = ''; return; }
-    const DW = svg.clientWidth || 300, DH = 150, top = 16, bot = 18;
+    const DW = svg.clientWidth || 300, DH = 240, top = 16, bot = 18;
     const mx = Math.max(...days.map(([, v]) => Math.abs(v)), 0.01);
     const zero = top + (DH - top - bot) / 2, half = (DH - top - bot) / 2;
     const bw = Math.min(42, DW / days.length - 8);
@@ -851,7 +954,7 @@ async function pollThesis() {
   dayKey = t && t.level ? parseFloat(t.level) : null;
 }
 
-pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal();
+pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal(); pollLoopLog();
 setInterval(pollBot, 3000);
 setInterval(pollSignal, 3000);
 setInterval(pollCalibration, 30000);
