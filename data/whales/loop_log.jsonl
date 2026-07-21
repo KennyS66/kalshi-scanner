@@ -352,3 +352,6 @@
 {"ts": 1784601970.685103, "type": "HB", "spot": 65305.78, "msg": "level watcher alive"}
 {"ts": 1784602490.49352, "type": "EVENT", "spot": null, "msg": "Investigated giveback-loss pattern: confirmed it is entirely time/rolled exits (stop is off by design since Jul18, validated). Built regime-conditional exit_mins infra (bot_core.py RegimeTracker + should_time_exit) but the raw-price efficiency-ratio classifier failed validation against known live breakouts, so left it INERT (config unchanged, replay-confirmed bit-identical). Committed 8400047. Restarted swing_bot.py to sync code, verified zero behavior change."}
 {"ts": 1784603086.5785177, "type": "EVENT", "spot": null, "msg": "Shipped session-tagged EV-gate buckets (weekday/weekend x day/night) + session_report.py. Fixed a real gap: entry_sig snapshot never preserved ts, so session tagging would have silently resolved to unknown. Restarted swing_bot.py, verified clean reboot + bucket split took effect as predicted. Committed e3a9b2a."}
+{"ts": 1784603171.8478062, "type": "HB", "spot": 65418.42, "msg": "level watcher alive"}
+{"ts": 1784604373.4193187, "type": "HB", "spot": 65430.68, "msg": "level watcher alive"}
+{"ts": 1784605574.8599691, "type": "HB", "spot": 65453.29, "msg": "level watcher alive"}
