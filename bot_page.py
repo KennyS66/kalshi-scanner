@@ -261,6 +261,9 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 
   <div class="ev-summary" id="poolTiles"></div>
 
+  <div class="section-label">EV gate progress <span class="dim" style="text-transform:none">(buckets past the sample floor, by session)</span></div>
+  <div class="ev-summary" id="evProgTiles"></div>
+
   <div class="tiles">
     <div class="tile"><div class="k">win rate</div><div class="v" id="winRate">—</div>
       <div class="s" id="winRateSub"></div></div>
@@ -780,6 +783,26 @@ function renderEvGate(d, cfg) {
         <div class="s">${n} trades${n ? `, ${(100 * wins / n).toFixed(0)}% win` : ''}${gated ? ` · ${gated} gated` : ''}</div>
       </div>`;
   }).join('');
+
+  // Overview's readiness view: what fraction of this session's learned
+  // buckets have collected enough samples (>= floor) for the gate to have
+  // judged them at all yet, regardless of verdict — "how much more data do
+  // we need" rather than the win/loss rollup evSummary already shows.
+  const evProgEl = $('evProgTiles');
+  if (evProgEl) {
+    evProgEl.innerHTML = SESSIONS.map(s => {
+      const bs = allBuckets.filter(x => x.sess === s);
+      const total = bs.length;
+      const ready = bs.filter(x => x.n >= floor).length;
+      const pct = total ? Math.round(100 * ready / total) : 0;
+      return `<div class="tile">
+          <div class="k"><span class="badge sess ${sessCls(s)}">${sessLabel(s)}</span></div>
+          <div class="v">${total ? `${ready}/${total}` : '—'}</div>
+          <div class="s">buckets past ${floor}-sample floor</div>
+          <div class="gatebar"><i style="width:${pct}%"></i></div>
+        </div>`;
+    }).join('');
+  }
 
   const shown = evFilter ? allBuckets.filter(x => x.sess === evFilter) : allBuckets;
   shown.sort((x, y) => y.n - x.n);
