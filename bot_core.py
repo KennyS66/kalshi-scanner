@@ -370,6 +370,9 @@ def session_tag(ts) -> str:
     return f"{wd}_{dn}"
 
 
+POOL_NAMES = ("weekday_day", "weekday_night", "weekend_day", "weekend_night")
+
+
 def entry_bucket(side: str, sig: dict) -> str:
     m = sig.get("mins_left") or 0.0
     mb = "4-7m" if m < 7 else "7-11m" if m < 11 else "11m+"
@@ -470,7 +473,7 @@ def _finding_thin_session(trades, state, cfg, ev_buckets):
         sess = bucket.rsplit("|", 1)[-1]
         totals[sess] = totals.get(sess, 0) + d.get("n", 0)
     out = []
-    for sess in ("weekday_day", "weekday_night", "weekend_day", "weekend_night"):
+    for sess in POOL_NAMES:
         n = totals.get(sess, 0)
         if n < floor:
             out.append({"severity": "info", "title": f"Still learning {sess}",

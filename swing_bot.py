@@ -27,10 +27,16 @@ def _utc_day(ts: float) -> str:
     return dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
 
 
+def _fresh_pool(bankroll: float = 125.0) -> dict:
+    return {"bankroll": bankroll, "day_pnl": 0.0, "day_high": 0.0,
+            "total_pnl": 0.0, "halted": False, "loss_capped": False}
+
+
 def fresh_state() -> dict:
-    return {"mode": "paper", "paused": False, "halted": False,
-            "day": _utc_day(0.0), "day_pnl": 0.0, "day_high": 0.0,
-            "bankroll": 500.0, "bankroll_ts": 0.0,
+    return {"mode": "paper", "paused": False,
+            "day": _utc_day(0.0),
+            "pools": {p: _fresh_pool() for p in POOL_NAMES},
+            "bankroll_ts": 0.0,
             "open_plays": {}, "heartbeat": 0.0, "last_control_nonce": 0}
 
 
@@ -65,8 +71,11 @@ def roll_day_if_needed(state: dict, now_ts: float) -> bool:
     today = _utc_day(now_ts)
     if state.get("day") == today:
         return False
-    state.update({"day": today, "day_pnl": 0.0, "day_high": 0.0,
-                  "halted": False, "market_entries": {}})
+    for ps in state.get("pools", {}).values():
+        ps["day_pnl"] = 0.0
+        ps["day_high"] = 0.0
+        ps["halted"] = False
+    state.update({"day": today, "market_entries": {}})
     return True
 
 
@@ -83,7 +92,7 @@ from bot_core import (FlipDetector, RegimeTracker, load_config, entry_blockers,
                       size_for_budget, trade_budget, loss_headroom,
                       compute_side_ranges, load_offsets,
                       bucket_stats, update_bucket_stats, ev_gate_blocker,
-                      weekend_curfew_blocker)
+                      weekend_curfew_blocker, session_tag, POOL_NAMES)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
@@ -94,6 +103,39 @@ BANKROLL_REFRESH_SECS = 3600
 
 def _snap(sig: dict) -> dict:
     return {k: sig.get(k) for k in SIG_SNAPSHOT_KEYS}
+
+
+def _migrate_pools(trades: list, paper_bankroll: float, today: str) -> dict:
+    """One-time backfill for the old single-bankroll schema: splits the
+    configured paper_bankroll evenly across the 4 pools, then attributes
+    every closed trade to a pool via session_tag(entry_ts) — same
+    entry_ts-fallback bucket_stats() uses — to seed total_pnl (full
+    history) and day_pnl/day_high (today's trades only, replayed in
+    exit-ts order so day_high tracks the same running peak
+    _check_profit_lock would have produced live)."""
+    per_pool = (paper_bankroll or 500.0) / 4
+    pools = {p: _fresh_pool(per_pool) for p in POOL_NAMES}
+    todays_rows = {p: [] for p in POOL_NAMES}
+    for t in trades:
+        if t.get("status") != "closed" or t.get("net_pnl") is None:
+            continue
+        sig = dict(t.get("entry_sig") or {})
+        sig.setdefault("ts", t.get("entry_ts"))
+        pool = session_tag(sig.get("ts"))
+        if pool not in pools:
+            continue   # "unknown": entry_ts missing on very old rows
+        pools[pool]["total_pnl"] = round(pools[pool]["total_pnl"] + t["net_pnl"], 4)
+        if t.get("exit_ts") and _utc_day(t["exit_ts"]) == today:
+            todays_rows[pool].append(t)
+    for pool, rows in todays_rows.items():
+        rows.sort(key=lambda t: t.get("exit_ts") or 0)
+        running = peak = 0.0
+        for t in rows:
+            running = round(running + t["net_pnl"], 4)
+            peak = max(peak, running)
+        pools[pool]["day_pnl"] = running
+        pools[pool]["day_high"] = peak
+    return pools
 
 
 def fetch_signal():
@@ -133,13 +175,18 @@ class Bot:
         self.regime = RegimeTracker()
         self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
         self.feed_fails = 0
-        # EV-gate stats + lifetime P&L: seeded from the closed-trade journal
-        # at boot, then kept current incrementally in _exit.
+        # EV-gate stats + pool P&L: seeded from the closed-trade journal at
+        # boot, then kept current incrementally in _enter/_scale_out/_exit.
+        # Migration guard: only backfill pools from trade history if this is
+        # an old-schema state file (no "pools" key yet) — once pools exist,
+        # never re-derive them (day_pnl/total_pnl already accumulate
+        # incrementally going forward; re-running this would double-count).
         trades = self._read_trades()
         self.ev_stats = bucket_stats(trades)
-        self.state["total_pnl"] = round(sum(
-            t["net_pnl"] for t in trades
-            if t.get("status") == "closed" and t.get("net_pnl") is not None), 4)
+        if "pools" not in self.state:
+            self.state["pools"] = _migrate_pools(
+                trades, self.cfg.get("paper_bankroll") or 500.0,
+                self.state.get("day"))
 
     def _read_trades(self):
         try:

@@ -9,7 +9,7 @@ from swing_bot import (fresh_state, load_state, save_state, read_control,
 
 def test_state_roundtrip_atomic(tmp_path):
     s = fresh_state()
-    s["day_pnl"] = -3.21
+    s["pools"]["weekday_night"]["day_pnl"] = -3.21
     s["open_plays"]["T1"] = {"side": "YES", "qty": 5}
     save_state(tmp_path, s)
     assert load_state(tmp_path) == s
@@ -33,10 +33,35 @@ def test_read_control_only_fires_on_new_nonce(tmp_path):
 
 def test_roll_day_resets_pnl_and_halt():
     s = fresh_state()
-    s.update({"day": "2020-01-01", "day_pnl": -50.0, "halted": True})
+    s["day"] = "2020-01-01"
+    s["pools"]["weekday_night"]["day_pnl"] = -50.0
+    s["pools"]["weekday_night"]["halted"] = True
+    s["pools"]["weekend_day"]["day_pnl"] = -7.0     # every pool resets together
+    s["pools"]["weekend_day"]["halted"] = True
     assert roll_day_if_needed(s, time.time()) is True
-    assert s["day_pnl"] == 0.0 and s["halted"] is False
+    for p in s["pools"].values():
+        assert p["day_pnl"] == 0.0 and p["halted"] is False
     assert roll_day_if_needed(s, time.time()) is False  # same day now
+
+
+def test_migrate_pools_backfills_total_and_todays_day_pnl():
+    from swing_bot import _migrate_pools
+    trades = [
+        {"status": "closed", "net_pnl": -10.0, "entry_ts": 1.0, "exit_ts": 100.0,
+         "entry_sig": {}},                                     # weekday_night, today
+        {"status": "closed", "net_pnl": 5.0, "entry_ts": 1.0, "exit_ts": 200.0,
+         "entry_sig": {}},                                     # weekday_night, today
+        {"status": "closed", "net_pnl": -50.0, "entry_ts": 1.0,
+         "exit_ts": -86400.0, "entry_sig": {}},                 # weekday_night, NOT today
+        {"status": "open"},                                     # ignored
+    ]
+    pools = _migrate_pools(trades, paper_bankroll=400.0, today="1970-01-01")
+    assert pools["weekday_night"]["bankroll"] == 100.0          # 400/4
+    assert pools["weekday_night"]["total_pnl"] == -55.0         # all 3 closed rows
+    assert pools["weekday_night"]["day_pnl"] == -5.0            # only today's 2 rows
+    assert pools["weekday_night"]["day_high"] == 0.0            # peaked at 0 (first leg -10, never positive)
+    assert pools["weekday_day"]["total_pnl"] == 0.0
+    assert pools["weekday_day"]["bankroll"] == 100.0
 
 
 def test_append_jsonl(tmp_path):
@@ -604,6 +629,8 @@ def test_profit_lock_halts_on_giveback_and_halves_size(tmp_path, monkeypatch):
 def test_profit_lock_not_armed_below_threshold():
     from swing_bot import fresh_state, roll_day_if_needed
     s = fresh_state()
-    s.update({"day": "2020-01-01", "day_pnl": 5.0, "day_high": 20.0})
+    s["day"] = "2020-01-01"
+    s["pools"]["weekday_night"]["day_pnl"] = 5.0
+    s["pools"]["weekday_night"]["day_high"] = 20.0
     roll_day_if_needed(s, time.time())
-    assert s["day_high"] == 0.0                # watermark resets each day
+    assert s["pools"]["weekday_night"]["day_high"] == 0.0  # watermark resets each day
