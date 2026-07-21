@@ -356,6 +356,20 @@ def weekend_curfew_blocker(now_ts: float, cfg: dict):
     return None
 
 
+def session_tag(ts) -> str:
+    """weekday_day / weekday_night / weekend_day / weekend_night, reusing
+    the same weekday split as the [100 weekday + 100 weekend] live-unlock
+    gate and the same day/night boundary as the overnight curfew
+    (CURFEW_END_HOUR) — no new boundaries invented, just made explicit in
+    the bucket key instead of handled by blunt inclusion/exclusion."""
+    if not ts:
+        return "unknown"
+    g = time.gmtime(ts)
+    wd = "weekend" if g.tm_wday >= 5 else "weekday"
+    dn = "day" if g.tm_hour >= CURFEW_END_HOUR else "night"
+    return f"{wd}_{dn}"
+
+
 def entry_bucket(side: str, sig: dict) -> str:
     m = sig.get("mins_left") or 0.0
     mb = "4-7m" if m < 7 else "7-11m" if m < 11 else "11m+"
@@ -370,7 +384,8 @@ def entry_bucket(side: str, sig: dict) -> str:
     am = (sig.get("momentum") or 0.0) * (1 if side == "YES" else -1)
     fl = ("against" if am < 0 else
           "weak" if am < MOM_ALIGN_STRONG else "strong")
-    return f"{side}|{pb}|{mb}|{fl}"
+    sess = session_tag(sig.get("ts"))
+    return f"{side}|{pb}|{mb}|{fl}|{sess}"
 
 
 def update_bucket_stats(stats: dict, side: str, entry_sig: dict,
@@ -398,13 +413,19 @@ def daytime_trades(trades: list) -> list:
 
 
 def bucket_stats(trades: list) -> dict:
-    """Aggregate closed trades (with entry_sig snapshots) into buckets."""
+    """Aggregate closed trades (with entry_sig snapshots) into buckets.
+
+    entry_sig may predate the entry_sig snapshot carrying its own 'ts'
+    (SIG_SNAPSHOT_KEYS grew that field later) — fall back to the trade's
+    top-level entry_ts, always present, so session_tag works on the full
+    trade history, not just trades closed after the snapshot fix."""
     stats = {}
     for t in trades:
         if t.get("status") != "closed" or t.get("net_pnl") is None:
             continue
-        update_bucket_stats(stats, t.get("side", "?"),
-                            t.get("entry_sig") or {}, t["net_pnl"])
+        sig = dict(t.get("entry_sig") or {})
+        sig.setdefault("ts", t.get("entry_ts"))
+        update_bucket_stats(stats, t.get("side", "?"), sig, t["net_pnl"])
     return stats
 
 

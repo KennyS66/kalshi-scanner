@@ -88,7 +88,7 @@ from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
 SIG_SNAPSHOT_KEYS = ("price", "yes_ask", "no_ask", "mins_left",
-                     "whale_trend", "momentum", "buy_pressure")
+                     "whale_trend", "momentum", "buy_pressure", "ts")
 BANKROLL_REFRESH_SECS = 3600
 
 
