@@ -215,27 +215,31 @@ def _trade(side="YES", pnl=1.0, ask=0.50, mins=8.0, mom=5.0):
 
 
 def test_entry_bucket_bands():
+    # no "ts" in these sigs -> session_tag resolves to "unknown"
     assert entry_bucket("YES", {"yes_ask": 0.30, "mins_left": 5,
-                                "momentum": 3.0}) == "YES|cheap|4-7m|weak"
+                                "momentum": 3.0}) == "YES|cheap|4-7m|weak|unknown"
     assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8,
-                                "momentum": -2.0}) == "YES|mid|7-11m|against"
+                                "momentum": -2.0}) == "YES|mid|7-11m|against|unknown"
     assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8,
-                                "momentum": 12.0}) == "YES|mid|7-11m|strong"
+                                "momentum": 12.0}) == "YES|mid|7-11m|strong|unknown"
     assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12,
-                                "momentum": -9.0}) == "NO|rich|11m+|strong"
+                                "momentum": -9.0}) == "NO|rich|11m+|strong|unknown"
     assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12,
-                                "momentum": -4.0}) == "NO|rich|11m+|weak"
+                                "momentum": -4.0}) == "NO|rich|11m+|weak|unknown"
     assert entry_bucket("NO",  {"no_ask": 0.70, "mins_left": 12,
-                                "momentum": 4.0}) == "NO|rich|11m+|against"
+                                "momentum": 4.0}) == "NO|rich|11m+|against|unknown"
 
 
 def test_entry_bucket_flow_neutral_and_missing_momentum_are_weak():
-    # zero or absent momentum reads as weak conviction, not against
-    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8,
-                                "momentum": 0.0}).endswith("|weak")
-    assert entry_bucket("NO",  {"no_ask": 0.50, "mins_left": 8,
-                                "momentum": 0.0}).endswith("|weak")
-    assert entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8}).endswith("|weak")
+    # zero or absent momentum reads as weak conviction, not against —
+    # check the flow-band segment specifically since a session suffix
+    # now follows it
+    flow_band = lambda b: b.split("|")[3]
+    assert flow_band(entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8,
+                                          "momentum": 0.0})) == "weak"
+    assert flow_band(entry_bucket("NO",  {"no_ask": 0.50, "mins_left": 8,
+                                          "momentum": 0.0})) == "weak"
+    assert flow_band(entry_bucket("YES", {"yes_ask": 0.50, "mins_left": 8})) == "weak"
 
 
 def test_bucket_stats_and_incremental_update_agree():
@@ -246,8 +250,8 @@ def test_bucket_stats_and_incremental_update_agree():
     for t in trades[:3]:
         update_bucket_stats(inc, t["side"], t["entry_sig"], t["net_pnl"])
     assert agg == inc
-    assert agg["YES|mid|7-11m|weak"] == {"n": 2, "wins": 1, "net": 0.5,
-                                         "net_avg": 0.25, "win_pct": 50.0}
+    assert agg["YES|mid|7-11m|weak|unknown"] == {"n": 2, "wins": 1, "net": 0.5,
+                                                  "net_avg": 0.25, "win_pct": 50.0}
 
 
 def test_ev_gate_blocks_only_proven_negative_buckets():
