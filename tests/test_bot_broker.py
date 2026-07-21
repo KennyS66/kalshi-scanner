@@ -50,17 +50,28 @@ import bot_broker
 from bot_broker import fetch_bankroll, live_unlock_ok, LiveBroker, FALLBACK_BANKROLL
 
 
-_MON = 1784592000.0   # 2026-07-20 12:00Z (Monday)
-_SAT = 1784419200.0   # 2026-07-18 12:00Z (Saturday)
+_TUE_NIGHT = 1784592000.0            # 2026-07-21 00:00Z Tue -> weekday_night
+_TUE_DAY = _TUE_NIGHT + 14 * 3600     # 2026-07-21 14:00Z Tue -> weekday_day
+_SUN_NIGHT = 1784419200.0            # 2026-07-19 00:00Z Sun -> weekend_night
+_SUN_DAY = _SUN_NIGHT + 14 * 3600     # 2026-07-19 14:00Z Sun -> weekend_day
+_SESSION_TS = {"weekday_day": _TUE_DAY, "weekday_night": _TUE_NIGHT,
+               "weekend_day": _SUN_DAY, "weekend_night": _SUN_NIGHT}
 
 
-def _trades(n, avg, n_weekend=None):
-    """n closed trades; half weekend/half weekday unless n_weekend given."""
-    if n_weekend is None:
-        n_weekend = n // 2
-    return [{"net_pnl": avg, "status": "closed",
-             "exit_ts": _SAT if i < n_weekend else _MON}
-            for i in range(n)]
+def _session_trades(session, n, avg):
+    ts = _SESSION_TS[session]
+    return [{"net_pnl": avg, "status": "closed", "entry_ts": ts} for _ in range(n)]
+
+
+def _all_sessions_trades(n=100, avg=0.01, overrides=None):
+    """100 trades at +0.01 avg in each of the 4 sessions by default --
+    overrides={session: (n, avg)} to make specific sessions fall short."""
+    overrides = overrides or {}
+    out = []
+    for s in _SESSION_TS:
+        sn, savg = overrides.get(s, (n, avg))
+        out += _session_trades(s, sn, savg)
+    return out
 
 
 def test_fetch_bankroll_returns_none_on_failure(monkeypatch):
@@ -77,28 +88,43 @@ def test_fetch_bankroll_returns_dollars(monkeypatch):
 def test_live_unlock_requires_all_four_conditions():
     cfg_on = {"live_requested": True}
     env_on = {"BOT_LIVE": "1"}
-    ok, _ = live_unlock_ok(_trades(200, 0.01), cfg_on, env_on)
+    ok, _ = live_unlock_ok(_all_sessions_trades(), cfg_on, env_on)
     assert ok
-    assert not live_unlock_ok(_trades(199, 0.01), cfg_on, env_on)[0]     # a band < 100
-    assert not live_unlock_ok(_trades(200, -0.01), cfg_on, env_on)[0]    # negative EV
-    assert not live_unlock_ok(_trades(200, 0.01), {"live_requested": False}, env_on)[0]
+    # one session a trade short of the floor
+    short = _all_sessions_trades(overrides={"weekday_day": (99, 0.01)})
+    assert not live_unlock_ok(short, cfg_on, env_on)[0]
+    # one session net-negative
+    neg = _all_sessions_trades(overrides={"weekend_night": (100, -0.01)})
+    assert not live_unlock_ok(neg, cfg_on, env_on)[0]
+    assert not live_unlock_ok(_all_sessions_trades(), {"live_requested": False}, env_on)[0]
 
 
-def test_live_unlock_requires_100_weekday_and_100_weekend():
+def test_live_unlock_requires_100_and_positive_avg_in_every_session():
+    """Per Kenny 2026-07-21: the bar is 100 settled + positive net avg in
+    EACH of the 4 sessions independently -- a strong weekday can't mask a
+    losing weekend, or vice versa."""
     cfg_on, env_on = {"live_requested": True}, {"BOT_LIVE": "1"}
-    # 150 weekend + 50 weekday: plenty total, weekday sample short
-    ok, why = live_unlock_ok(_trades(200, 0.01, n_weekend=150), cfg_on, env_on)
-    assert not ok and "weekday" in why
-    # 150 weekday + 50 weekend: weekend sample short
-    ok, why = live_unlock_ok(_trades(200, 0.01, n_weekend=50), cfg_on, env_on)
-    assert not ok and "weekend" in why
-    assert not live_unlock_ok(_trades(100, 0.01), cfg_on, {})[0]         # no BOT_LIVE
+    # every session short by name in the reason
+    for session in _SESSION_TS:
+        trades = _all_sessions_trades(overrides={session: (50, 0.01)})
+        ok, why = live_unlock_ok(trades, cfg_on, env_on)
+        assert not ok and session in why, (session, why)
+    # a session with 100 trades but a negative average is named too
+    trades = _all_sessions_trades(overrides={"weekend_day": (100, -0.5)})
+    ok, why = live_unlock_ok(trades, cfg_on, env_on)
+    assert not ok and "weekend_day" in why and "net avg" in why
+    # a globally-positive blended average no longer masks one bad session --
+    # weekday_day carries huge profit, weekend_night is a small loss
+    trades = _all_sessions_trades(overrides={
+        "weekday_day": (100, 5.0), "weekend_night": (100, -0.01)})
+    assert not live_unlock_ok(trades, cfg_on, env_on)[0]
+    assert not live_unlock_ok(_all_sessions_trades(), cfg_on, {})[0]  # no BOT_LIVE
 
 
 def test_live_broker_locked_raises():
     import pytest
     with pytest.raises(RuntimeError, match="live trading locked"):
-        LiveBroker(_trades(3, 0.01), {"live_requested": True}, {})
+        LiveBroker(_session_trades("weekday_day", 3, 0.01), {"live_requested": True}, {})
 
 
 def test_fallback_bankroll_is_500():

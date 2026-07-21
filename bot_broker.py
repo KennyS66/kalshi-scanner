@@ -59,20 +59,37 @@ def fetch_bankroll():
 
 
 def live_unlock_ok(trades: list, cfg: dict, env: dict):
-    """The unlock bar: 100 settled on weekday tape AND 100 on weekend tape
-    (regimes differ; per Kenny 2026-07-17 both must be proven), positive net
-    avg, GUI toggle, env flag. Returns (ok, reason)."""
-    import time as _t
+    """The unlock bar: 100 settled trades AND a positive net avg, each
+    independently proven in EVERY session (weekday_day, weekday_night,
+    weekend_day, weekend_night — per Kenny 2026-07-21, replacing the
+    original 2026-07-17 weekday+weekend-combined bar). A strong weekday
+    can no longer mask a negative weekend average, or vice versa — each
+    of the 4 tape regimes must clear the bar on its own. Session is taken
+    from the entry, same as bot_core.session_tag's other callers (EV
+    buckets, pool attribution, session_report.py), not the exit — this
+    was previously exit_ts-keyed and weekday/weekend-only; both changed
+    together since the finer split needs the finer (entry-based) tag.
+    Returns (ok, reason)."""
+    from bot_core import session_tag, POOL_NAMES
     closed = [t for t in trades if t.get("status") == "closed"
               and t.get("net_pnl") is not None]
-    wd = [t for t in closed if _t.gmtime(t.get("exit_ts") or 0).tm_wday < 5]
-    we_n, wd_n = len(closed) - len(wd), len(wd)
-    if wd_n < 100 or we_n < 100:
-        return False, (f"settled paper trades: {wd_n}/100 weekday, "
-                       f"{we_n}/100 weekend")
-    avg = sum(t["net_pnl"] for t in closed) / len(closed)
-    if avg <= 0:
-        return False, f"net avg {avg:+.4f} <= 0 — no proven edge"
+    by_session = {p: [] for p in POOL_NAMES}
+    for t in closed:
+        sig = dict(t.get("entry_sig") or {})
+        sig.setdefault("ts", t.get("entry_ts"))
+        tag = session_tag(sig.get("ts"))
+        if tag in by_session:
+            by_session[tag].append(t["net_pnl"])
+    short = []
+    for p in POOL_NAMES:
+        pnls = by_session[p]
+        n = len(pnls)
+        if n < 100:
+            short.append(f"{p} {n}/100")
+        elif sum(pnls) / n <= 0:
+            short.append(f"{p} net avg {sum(pnls) / n:+.4f} <= 0")
+    if short:
+        return False, "not proven: " + "; ".join(short)
     if not cfg.get("live_requested"):
         return False, "GUI live toggle not set"
     if env.get("BOT_LIVE") != "1":
