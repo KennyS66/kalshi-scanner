@@ -128,7 +128,7 @@ def test_full_round_trip_flip_entry_and_flip_exit(tmp_path, monkeypatch):
     assert t["entry_price"] == 0.52 and t["exit_price"] == 0.58  # 0.60 - spread
     assert t["exit_reason"] == "flip"
     assert bot.state["open_plays"] == {}
-    assert bot.state["day_pnl"] == t["net_pnl"]
+    assert bot.state["pools"]["weekday_night"]["day_pnl"] == t["net_pnl"]
 
 
 def test_time_exit_at_two_minutes(tmp_path, monkeypatch):
@@ -243,9 +243,9 @@ def test_paper_bankroll_override_sizes_trades_and_skips_balance_fetch(tmp_path, 
     bot.tick(now_ts=2_000_000_000.0)
     bot.tick(now_ts=2_000_000_005.0)
     assert calls == []                                   # no live balance fetch
-    assert bot.state["bankroll"] == 400.0                # from config, not 123/500
-    # $400 * 2% = $8 budget; yes_ask 0.52 + fee 0.02 = 0.54 -> 14 contracts
-    assert bot.state["open_plays"]["M1"]["qty"] == 14
+    assert bot.state["pools"]["weekday_night"]["bankroll"] == 100.0  # 400/4, not 400
+    # $100 pool * 2% = $2 budget; yes_ask 0.52 + fee 0.02 = 0.54 -> 3 contracts
+    assert bot.state["open_plays"]["M1"]["qty"] == 3
 
 
 def test_target_exit_at_calibrated_sell_low(tmp_path, monkeypatch):
@@ -493,15 +493,17 @@ def test_max_loss_cap_releases_when_config_raised(tmp_path, monkeypatch):
 
 
 def test_sizing_shrinks_with_consumed_loss_budget(tmp_path, monkeypatch):
-    # total_pnl -50 -> headroom 50 -> budget $5 -> 9 contracts at 0.52+fee
-    rows = [dict(_losing_trade_row(), net_pnl=-50.0)]
+    # $125 pool (500/4) -> base budget 125*.02=$2.50 -> 4 contracts w/ full headroom.
+    # total_pnl -91 -> headroom 9 -> trade_risk_frac .10 -> $0.90 budget -> 1
+    # contract: the loss-budget constraint now binds instead of the bankroll one.
+    rows = [dict(_losing_trade_row(), net_pnl=-91.0)]
     (tmp_path / TRADES_FILE).write_text(json.dumps(rows[0]))
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     bot = _mkbot(tmp_path, sigs, monkeypatch)
     for _ in sigs:
         bot.tick(now_ts=1000.0)
     qty = bot.state["open_plays"]["M1"]["qty"]
-    assert 0 < qty <= 9                            # vs 18 with full headroom
+    assert 0 < qty <= 1                             # vs 4 with full headroom
 
 
 def test_flip_exit_off_holds_through_opposite_flip(tmp_path, monkeypatch):
@@ -565,9 +567,9 @@ def test_scale_out_banks_half_then_runner_rides_to_stretch(tmp_path, monkeypatch
          "overnight_curfew": False, "weekend_curfew": False}))
     sigs = [
         _sig(),
-        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                 # enter x18 @ .52
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                 # enter x4 @ .52 ($125 pool * 2% = $2.50)
         _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.66, ts=1010.0),   # sell 64c >= 62 -> scale half
-        _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.74, ts=1015.0),   # sell 72c >= 70 -> stretch
+        _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.74, ts=1015.0),   # sell 72c >= 64 -> stretch
     ]
     bot = _mkbot(tmp_path, sigs, monkeypatch)
     for _ in sigs:
@@ -575,11 +577,12 @@ def test_scale_out_banks_half_then_runner_rides_to_stretch(tmp_path, monkeypatch
     trades = _rows(tmp_path, TRADES_FILE)
     assert [t["exit_reason"] for t in trades] == ["target_half", "stretch"]
     half, runner = trades
-    assert half["qty"] == 9 and runner["qty"] == 9
+    assert half["qty"] == 2 and runner["qty"] == 2
     assert half["exit_price"] == 0.64 and runner["exit_price"] == 0.72
     assert bot.state["open_plays"] == {}
-    # both legs realized into day pnl; ev gate saw ONE combined sample
-    assert bot.state["day_pnl"] == pytest.approx(half["net_pnl"] + runner["net_pnl"])
+    # both legs realized into the pool's day pnl; ev gate saw ONE combined sample
+    assert bot.state["pools"]["weekday_night"]["day_pnl"] == pytest.approx(
+        half["net_pnl"] + runner["net_pnl"])
     bucket = [v for v in bot.ev_stats.values()]
     assert len(bucket) == 1 and bucket[0]["n"] == 1
     assert bucket[0]["net"] == pytest.approx(half["net_pnl"] + runner["net_pnl"])
@@ -588,7 +591,7 @@ def test_scale_out_banks_half_then_runner_rides_to_stretch(tmp_path, monkeypatch
 def test_scale_out_qty_one_exits_full_at_target(tmp_path, monkeypatch):
     import json as _json
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"scale_out": True, "min_edge_c": None, "paper_bankroll": 30.0,
+        {"scale_out": True, "min_edge_c": None, "paper_bankroll": 120.0,
          "overnight_curfew": False, "weekend_curfew": False}))
     sigs = [
         _sig(),

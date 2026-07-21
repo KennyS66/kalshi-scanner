@@ -138,6 +138,13 @@ def _migrate_pools(trades: list, paper_bankroll: float, today: str) -> dict:
     return pools
 
 
+def _play_pool(play: dict) -> str:
+    """Pool a play belongs to — stored at entry time (see _enter); falls
+    back to re-deriving it from entry_sig for plays that predate this field
+    (an open position carried over a live restart under the old schema)."""
+    return play.get("pool") or session_tag((play.get("entry_sig") or {}).get("ts"))
+
+
 def fetch_signal():
     try:
         with urllib.request.urlopen(
@@ -213,11 +220,16 @@ class Bot:
 
     # ── trade lifecycle ───────────────────────────────────────────────
     def _enter(self, side, sig, ranges=None):
+        pool = session_tag(sig.get("ts"))
+        ps = self.state.get("pools", {}).get(pool)
+        if ps is None:
+            self._event("skip", f"unknown session pool for ts={sig.get('ts')}",
+                        sig["ticker"], sig)
+            return
         price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
-        budget = trade_budget(self.state["bankroll"],
-                              self.state.get("total_pnl", 0.0), self.cfg)
+        budget = trade_budget(ps["bankroll"], ps.get("total_pnl", 0.0), self.cfg)
         arm = self.cfg.get("profit_arm_usd") or 0.0
-        if arm > 0 and self.state.get("day_high", 0.0) >= arm:
+        if arm > 0 and ps.get("day_high", 0.0) >= arm:
             # profit lock armed: green day banked — risk small from here
             budget *= self.cfg.get("profit_size_frac", 0.5)
         qty = size_for_budget(budget, price)
@@ -230,7 +242,7 @@ class Bot:
         me[sig["ticker"]] = me.get(sig["ticker"], 0) + 1
         self.state["open_plays"][sig["ticker"]] = {
             "side": side, "qty": qty, "entry": fill, "ranges": ranges,
-            "entry_sig": _snap(sig), "last_sig": dict(sig)}
+            "entry_sig": _snap(sig), "last_sig": dict(sig), "pool": pool}
         tgt = (f" target {ranges['sell_low']:.1f}c"
                f" (stretch {ranges['sell_high']:.1f}c)") if ranges else ""
         self._event("enter", f"{side} x{qty} @ {fill['price']}{tgt}",
@@ -249,9 +261,10 @@ class Bot:
         entry_fee_half = round(entry["fee_total"] * half / entry["qty"], 4)
         pnl = round((fill["price"] - entry["price"]) * half
                     - entry_fee_half - fill["fee_total"], 4)
-        self.state["day_pnl"] = round(self.state["day_pnl"] + pnl, 4)
-        self.state["total_pnl"] = round(
-            self.state.get("total_pnl", 0.0) + pnl, 4)
+        pool = _play_pool(play)
+        ps = self.state["pools"].setdefault(pool, _fresh_pool())
+        ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
+        ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
         append_jsonl(self.dir / TRADES_FILE, {
             "ticker": ticker, "mode": self.broker.mode, "side": play["side"],
             "qty": half, "entry_price": entry["price"],
@@ -279,9 +292,10 @@ class Bot:
             fill_sig = play["last_sig"]
         fill = self.broker.sell(play["side"], play["qty"], fill_sig)
         pnl = round_trip_pnl(play["entry"], fill)
-        self.state["day_pnl"] = round(self.state["day_pnl"] + pnl, 4)
-        self.state["total_pnl"] = round(
-            self.state.get("total_pnl", 0.0) + pnl, 4)
+        pool = _play_pool(play)
+        ps = self.state["pools"].setdefault(pool, _fresh_pool())
+        ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
+        ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
         del self.state["open_plays"][ticker]
         self.detector.forget(ticker)
         append_jsonl(self.dir / TRADES_FILE, {
@@ -305,20 +319,26 @@ class Bot:
 
     # ── maintenance ───────────────────────────────────────────────────
     def _refresh_bankroll(self, now_ts):
+        pools = self.state.setdefault("pools", {})
+        for p in POOL_NAMES:
+            pools.setdefault(p, _fresh_pool())
         # Paper mode with a configured paper bankroll: fixed stake, no live
         # balance fetch. Live mode (future) always uses the real balance.
         pb = self.cfg.get("paper_bankroll") or 0
         if self.broker.mode == "paper" and pb > 0:
-            self.state["bankroll"] = float(pb)
+            for p in POOL_NAMES:
+                pools[p]["bankroll"] = float(pb) / 4
             self.state["bankroll_ts"] = now_ts
             return
         if now_ts - self.state["bankroll_ts"] < BANKROLL_REFRESH_SECS:
             return
         bal = fetch_bankroll()
         if bal is not None:
-            self.state["bankroll"] = bal
-        elif not self.state["bankroll"]:
-            self.state["bankroll"] = FALLBACK_BANKROLL
+            for p in POOL_NAMES:
+                pools[p]["bankroll"] = bal / 4
+        elif not any(pools[p]["bankroll"] for p in POOL_NAMES):
+            for p in POOL_NAMES:
+                pools[p]["bankroll"] = FALLBACK_BANKROLL / 4
         self.state["bankroll_ts"] = now_ts
 
     def _handle_control(self):
