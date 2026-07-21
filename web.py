@@ -1075,18 +1075,34 @@ _NEXT_MARKET_CACHE_TTL = 300.0
 
 
 def _refresh_next_market_cache() -> None:
-    """Fetch the earliest upcoming KXBTC15M market from Kalshi and cache open/close times."""
+    """Fetch the earliest upcoming KXBTC15M market from Kalshi and cache open/close times.
+
+    Kalshi's unfiltered /markets listing sorts newest-created first, so an
+    unfiltered query returns only far-future not-yet-open markets — never the
+    currently active one. Query status=open first (the live market, if any);
+    fall back to the unfiltered listing only if nothing is open right now.
+    """
     import urllib.request as _ur
     from datetime import datetime, timezone
-    try:
-        req = _ur.Request(
-            "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=KXBTC15M&limit=10",
-            headers={"User-Agent": "kalshi-scanner/1.0"},
-        )
+
+    def _fetch(url: str) -> list[dict]:
+        req = _ur.Request(url, headers={"User-Agent": "kalshi-scanner/1.0"})
         with _ur.urlopen(req, timeout=6) as r:
             data = json.loads(r.read())
         mkts = [m for m in data.get("markets", []) if m.get("close_time")]
         mkts.sort(key=lambda m: m["close_time"])
+        return mkts
+
+    try:
+        mkts = _fetch(
+            "https://api.elections.kalshi.com/trade-api/v2/markets"
+            "?series_ticker=KXBTC15M&status=open&limit=5"
+        )
+        if not mkts:
+            mkts = _fetch(
+                "https://api.elections.kalshi.com/trade-api/v2/markets"
+                "?series_ticker=KXBTC15M&limit=10"
+            )
         for m in mkts:
             close_ts = datetime.fromisoformat(m["close_time"].replace("Z", "+00:00")).timestamp()
             open_ts = close_ts - 900  # 15 min before close
