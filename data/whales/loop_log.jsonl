@@ -335,3 +335,6 @@
 {"ts": 1784586255.5274293, "type": "HB", "spot": 65173.01, "msg": "level watcher alive"}
 {"ts": 1784587464.5527902, "type": "HB", "spot": 65080.95, "msg": "level watcher alive"}
 {"ts": 1784588674.6606083, "type": "HB", "spot": 65130.25, "msg": "level watcher alive"}
+{"ts": 1784589882.8628995, "type": "HB", "spot": 65188.41, "msg": "level watcher alive"}
+{"ts": 1784590086.3292878, "type": "STATUS", "spot": null, "msg": "hourly check: bot still halted (profit_lock), range 65000-65500, watchers healthy; day rolls at 00Z"}
+{"ts": 1784591091.3695235, "type": "HB", "spot": 65182.48, "msg": "level watcher alive"}
