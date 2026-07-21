@@ -42,6 +42,15 @@ against that as much as clutter does. Concretely:
 - The equity chart and session P&L bars sit side-by-side in one row on Overview
   (matching the mockup shown during brainstorming), not stacked with a full-width gap
   between them.
+- Below that row, a compact **loop log** panel reuses the existing `/api/loop_log`
+  endpoint (already serves `{entries: [...]}`, no backend work needed) to fill the
+  remaining Overview space with something genuinely useful — Claude's live
+  marketloop commentary (regime calls, confirmed level breaks) — instead of leaving
+  it blank. Filtered to `type != "HB"` (heartbeat pings are noise here, `/trade`
+  already carries the full unfiltered feed for anyone who wants it) and capped to the
+  last ~8 entries. Rows are single-line and tight — reuse `/trade`'s `.log-entry`
+  formatting (ts/type/spot/msg) but at reduced row height, no per-entry padding
+  beyond a 1px hairline separator.
 - Deep Dive's three sections use the existing `.panel`/`.panel.wide` grid, tightened:
   panels that are mostly a small table (exit reasons, settlement grades) shouldn't
   reserve as much vertical space as the candle chart or trades table.

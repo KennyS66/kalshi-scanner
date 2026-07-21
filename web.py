@@ -1367,20 +1367,22 @@ def bot_status_payload(bot_dir=None) -> dict:
     from bot_core import load_config
     cfg = load_config(d / "config.json")
     ok, reason = live_unlock_ok(trades, cfg, dict(os.environ))
-    from bot_core import bucket_stats
+    from bot_core import bucket_stats, compute_findings
     try:
         tuner = json.loads((d / "tuner_report.json").read_text())
         tuner.pop("results", None)   # full sweep table is large; GUI shows summary
     except Exception:
         tuner = None
     grades = _read_jsonl_tail(d / "bot_trade_grades.jsonl", 1000)
+    ev_buckets = bucket_stats(trades)
     return {"state": state, "stats": _trade_stats(trades),
             "trades": trades[-50:],
             "events": _read_jsonl_tail(d / "bot_events.jsonl", 50),
             "unlock": {"ok": ok, "reason": reason}, "config": cfg,
-            "ev_buckets": bucket_stats(trades), "tuner": tuner,
+            "ev_buckets": ev_buckets, "tuner": tuner,
             "grades": grades[-200:], "grade_summary": _grade_summary(grades),
-            "gate": _gate_split(trades)}
+            "gate": _gate_split(trades),
+            "findings": compute_findings(trades, state, cfg, ev_buckets)}
 
 
 def candles_from_log(path, mins: int, hours: int, now: float | None = None) -> list:

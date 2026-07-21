@@ -417,6 +417,103 @@ def bucket_stats(trades: list) -> dict:
     return stats
 
 
+# ── Flagged findings: the dashboard doing some of the noticing ────────────
+# Each rule is a small, independent function of (trades, state, cfg,
+# ev_buckets). One bad rule can't take down the others — compute_findings
+# wraps each in its own try/except, same convention as trade_grader.py's
+# per-record handling.
+
+STUCK_EXIT_REASONS = ("time", "rolled")
+STUCK_RATE_WINDOW = 20      # trades
+STUCK_RATE_FLOOR = 0.40     # see spec: verified current-regime baseline is
+                            # ~15.6%, not the ~6% full-history figure — 40%
+                            # leaves real headroom in a 20-trade sample.
+
+
+def _finding_bucket_bleeding(trades, state, cfg, ev_buckets):
+    floor = cfg.get("ev_gate_min_samples", 12)
+    out = []
+    for bucket, d in (ev_buckets or {}).items():
+        if d.get("n", 0) >= floor and d.get("net_avg", 0) < 0:
+            out.append({"severity": "warn", "title": f"Bucket bleeding: {bucket}",
+                        "detail": f"{d['n']} trades, net avg {d['net_avg']:+.2f} — "
+                                  f"already auto-skipped by the EV gate"})
+    return out
+
+
+def _finding_day_giveback(trades, state, cfg, ev_buckets):
+    high, pnl = state.get("day_high") or 0.0, state.get("day_pnl") or 0.0
+    if high > 0 and (high - pnl) > high * 0.5:
+        return [{"severity": "warn", "title": "Day giving back gains",
+                 "detail": f"peaked at {high:+.2f}, now {pnl:+.2f} "
+                           f"({(high - pnl) / high * 100:.0f}% given back)"}]
+    return []
+
+
+def _finding_bot_health(trades, state, cfg, ev_buckets):
+    out = []
+    if state.get("paused"):
+        out.append({"severity": "warn", "title": "Bot paused", "detail": ""})
+    if state.get("halted"):
+        out.append({"severity": "warn", "title": "Bot halted", "detail": ""})
+    age = time.time() - (state.get("heartbeat") or 0)
+    if age > 30:
+        out.append({"severity": "warn", "title": "Feed stale",
+                    "detail": f"no heartbeat for {age:.0f}s"})
+    return out
+
+
+def _finding_thin_session(trades, state, cfg, ev_buckets):
+    floor = cfg.get("ev_gate_min_samples", 12)
+    totals = {}
+    for bucket, d in (ev_buckets or {}).items():
+        sess = bucket.rsplit("|", 1)[-1]
+        totals[sess] = totals.get(sess, 0) + d.get("n", 0)
+    out = []
+    for sess in ("weekday_day", "weekday_night", "weekend_day", "weekend_night"):
+        n = totals.get(sess, 0)
+        if n < floor:
+            out.append({"severity": "info", "title": f"Still learning {sess}",
+                        "detail": f"{n}/{floor} trades toward the gate's sample floor"})
+    return out
+
+
+def _finding_stuck_rate(trades, state, cfg, ev_buckets):
+    closed = [t for t in trades
+             if t.get("status") == "closed" and t.get("net_pnl") is not None]
+    closed.sort(key=lambda t: t.get("exit_ts") or 0)
+    recent = closed[-STUCK_RATE_WINDOW:]
+    if len(recent) < STUCK_RATE_WINDOW:
+        return []
+    stuck = sum(1 for t in recent if t.get("exit_reason") in STUCK_EXIT_REASONS)
+    rate = stuck / len(recent)
+    if rate > STUCK_RATE_FLOOR:
+        return [{"severity": "warn", "title": "Stuck-position rate elevated",
+                 "detail": f"{stuck}/{len(recent)} of the last trades exited via "
+                           f"time/rolled ({rate * 100:.0f}%) — positions not "
+                           f"resolving cleanly, forced closes near market expiry"}]
+    return []
+
+
+_FINDING_RULES = (_finding_bot_health, _finding_day_giveback,
+                  _finding_bucket_bleeding, _finding_stuck_rate,
+                  _finding_thin_session)
+
+
+def compute_findings(trades: list, state: dict, cfg: dict, ev_buckets: dict) -> list:
+    """Returns [{"severity": "warn"|"info", "title": ..., "detail": ...}, ...],
+    most severe first (warn before info; stable within each). Empty list is a
+    real, displayed state — "nothing flagged" — not the absence of a section."""
+    out = []
+    for rule in _FINDING_RULES:
+        try:
+            out.extend(rule(trades, state, cfg, ev_buckets))
+        except Exception:
+            continue
+    out.sort(key=lambda f: 0 if f["severity"] == "warn" else 1)
+    return out
+
+
 def ev_gate_blocker(side: str, sig: dict, stats: dict, cfg: dict):
     """Reason to skip this entry per learned bucket EV, or None."""
     if not cfg.get("ev_gate", True):

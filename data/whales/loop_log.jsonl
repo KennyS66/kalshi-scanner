@@ -361,3 +361,11 @@
 {"ts": 1784608868.7612264, "type": "STATUS", "spot": null, "msg": "hourly check: trend_up 65500-66000, curfew-off config confirmed stable, watchers healthy"}
 {"ts": 1784609595.0690298, "type": "HB", "spot": 65477.43, "msg": "level watcher alive"}
 {"ts": 1784609700.407624, "type": "EVENT", "spot": 65455.53, "msg": "FADE: 65.5k break failed again, spot 65456. Regime -> range 65000-65500. Also shipped: session-tagged EV-gate GUI on /bot with click-to-filter, fixed daytime_trades hiding night bucket data."}
+{"ts": 1784610795.5852022, "type": "HB", "spot": 65477.78, "msg": "level watcher alive"}
+{"ts": 1784610899.550483, "type": "HB", "spot": 65483.3, "msg": "level watcher alive"}
+{"ts": 1784611801.4941716, "type": "EVENT", "spot": null, "msg": "Shipped /bot dashboard remake: Overview + Deep Dive tabs, auto-flagged findings section, embedded live loop-log. Full spec-driven build (brainstormed, wrote+committed spec, implemented, verified live in browser, caught 2 real bugs via actual testing not just review). Committed e7f87b3."}
+{"ts": 1784611996.1548212, "type": "HB", "spot": 65540.85, "msg": "level watcher alive"}
+{"ts": 1784612100.07349, "type": "HB", "spot": 65541.58, "msg": "level watcher alive"}
+{"ts": 1784612463.9755976, "type": "EVENT", "spot": 65534.29, "msg": "BREAK UP CONFIRMED: 65.5k re-broken (12min sustain), spot 65534. Trend resuming."}
+{"ts": 1784613196.7193089, "type": "HB", "spot": 65754.35, "msg": "level watcher alive"}
+{"ts": 1784613300.6598747, "type": "HB", "spot": 65704.96, "msg": "level watcher alive"}
