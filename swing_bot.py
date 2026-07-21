@@ -321,9 +321,11 @@ class Bot:
                             round(pnl + (play.get("scaled") or {}).get("pnl", 0.0), 4))
         self._event("exit", f"{reason} pnl {pnl:+.2f}", ticker, sig)
 
-    def _flatten(self, reason):
+    def _flatten(self, reason, pool=None):
         for ticker in list(self.state["open_plays"]):
             play = self.state["open_plays"][ticker]
+            if pool is not None and _play_pool(play) != pool:
+                continue
             self._exit(ticker, play, play["last_sig"], reason)
 
     # ── maintenance ───────────────────────────────────────────────────
@@ -388,45 +390,49 @@ class Bot:
             self._event("resume", "loop heartbeat back — deadman released")
 
     def _check_day_stop(self):
-        stop = self.cfg["day_stop_pct"] * self.state["bankroll"]
-        if not self.state["halted"] and self.state["day_pnl"] <= -stop:
-            self.state["halted"] = True
-            self._flatten("halt")
-            self._event("halt", f"day_pnl {self.state['day_pnl']:+.2f} <= -{stop:.2f}")
+        for p in POOL_NAMES:
+            ps = self.state["pools"][p]
+            stop = self.cfg["day_stop_pct"] * ps["bankroll"]
+            if not ps["halted"] and ps["day_pnl"] <= -stop:
+                ps["halted"] = True
+                self._flatten("halt", pool=p)
+                self._event("halt", f"[{p}] day_pnl {ps['day_pnl']:+.2f} <= -{stop:.2f}")
 
     def _check_profit_lock(self):
-        """Trail the day's profit peak: once armed, halt before a give-back
-        erases it — bank at least keep_frac of the best point."""
+        """Trail each pool's own profit peak: once armed, halt that pool
+        before a give-back erases it."""
         arm = self.cfg.get("profit_arm_usd") or 0.0
         if arm <= 0:
             return
-        hi = max(self.state.get("day_high", 0.0), self.state["day_pnl"])
-        self.state["day_high"] = hi
-        if self.state["halted"] or hi < arm:
-            return
-        floor = hi * self.cfg.get("profit_keep_frac", 0.5)
-        if self.state["day_pnl"] <= floor:
-            self.state["halted"] = True
-            self._flatten("halt")
-            self._event("halt", f"profit_lock: day peaked {hi:+.2f}, banking "
-                        f"{self.state['day_pnl']:+.2f} (floor {floor:.2f})")
+        for p in POOL_NAMES:
+            ps = self.state["pools"][p]
+            hi = max(ps.get("day_high", 0.0), ps["day_pnl"])
+            ps["day_high"] = hi
+            if ps["halted"] or hi < arm:
+                continue
+            floor = hi * self.cfg.get("profit_keep_frac", 0.5)
+            if ps["day_pnl"] <= floor:
+                ps["halted"] = True
+                self._flatten("halt", pool=p)
+                self._event("halt", f"[{p}] profit_lock: day peaked {hi:+.2f}, "
+                            f"banking {ps['day_pnl']:+.2f} (floor {floor:.2f})")
 
     def _check_max_loss(self):
-        """Hard cap on TOTAL loss. Unlike the day stop it never resets on a
-        day roll — trading stays blocked until the user raises max_loss_usd
-        (or the journal is reset). Condition-based, so a config raise
-        releases it without touching state."""
-        capped = loss_headroom(self.state.get("total_pnl", 0.0), self.cfg) <= 0
-        if capped and not self.state.get("loss_capped"):
-            self.state["loss_capped"] = True
-            self._flatten("max_loss")
-            self._event("halt", f"MAX LOSS CAP: total_pnl "
-                        f"{self.state.get('total_pnl', 0.0):+.2f} <= "
-                        f"-{self.cfg.get('max_loss_usd', 0):.0f} — trading "
-                        f"blocked until max_loss_usd is raised")
-        elif not capped and self.state.get("loss_capped"):
-            self.state.pop("loss_capped", None)
-            self._event("resume", "max-loss cap released (config raised)")
+        """Hard cap on each pool's own TOTAL loss. Flat max_loss_usd,
+        identical per pool (not divided by 4) — see design spec."""
+        for p in POOL_NAMES:
+            ps = self.state["pools"][p]
+            capped = loss_headroom(ps.get("total_pnl", 0.0), self.cfg) <= 0
+            if capped and not ps.get("loss_capped"):
+                ps["loss_capped"] = True
+                self._flatten("max_loss", pool=p)
+                self._event("halt", f"[{p}] MAX LOSS CAP: total_pnl "
+                            f"{ps.get('total_pnl', 0.0):+.2f} <= "
+                            f"-{self.cfg.get('max_loss_usd', 0):.0f} — trading "
+                            f"blocked until max_loss_usd is raised")
+            elif not capped and ps.get("loss_capped"):
+                ps.pop("loss_capped", None)
+                self._event("resume", f"[{p}] max-loss cap released (config raised)")
 
     # ── main tick ─────────────────────────────────────────────────────
     def tick(self, now_ts=None):

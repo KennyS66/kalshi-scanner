@@ -160,13 +160,64 @@ def test_rolled_market_exits_at_last_seen_price(tmp_path, monkeypatch):
 def test_day_stop_halts_entries(tmp_path, monkeypatch):
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     bot = _mkbot(tmp_path, sigs, monkeypatch, bankroll=500.0)
-    bot.state["day_pnl"] = -51.0                       # beyond 10% of 500
+    bot.state["pools"]["weekday_night"]["day_pnl"] = -51.0   # beyond 10% of $125 pool
     for _ in sigs:
         bot.tick(now_ts=1000.0)
-    assert bot.state["halted"] is True
+    assert bot.state["pools"]["weekday_night"]["halted"] is True
     assert bot.state["open_plays"] == {}
     events = _rows(tmp_path, EVENTS_FILE)
     assert any(e["action"] == "halt" for e in events)
+
+
+def test_pool_halt_blocks_only_that_pools_entries(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"overnight_curfew": False, "weekend_curfew": False}))
+    sigs = [
+        _sig(ts=1000.0),                                              # seed weekday_night (M1)
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),               # flip -> M1 blocked
+        _sig(ticker="M2", ts=47800.0),                                 # seed weekday_day (M2, 13:03Z)
+        _sig(ticker="M2", whale_trend=3.0, momentum=30.0, ts=47805.0), # flip -> M2 should enter
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    bot.state["pools"]["weekday_night"]["halted"] = True
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" not in bot.state["open_plays"]
+    assert "M2" in bot.state["open_plays"]
+    assert bot.state["pools"]["weekday_day"]["halted"] is False
+    events = _rows(tmp_path, EVENTS_FILE)
+    skips = [e for e in events if e["action"] == "skip" and e["ticker"] == "M1"]
+    assert any("halted" in e["reason"] for e in skips)
+
+
+def test_day_stop_halt_flattens_only_that_pools_plays(tmp_path, monkeypatch):
+    # The live feed only ever tracks one active 15m market at a time — any
+    # open play whose ticker doesn't match the tick's fetched sig gets
+    # exited as "rolled" (see test_rolled_market_exits_at_last_seen_price).
+    # So two *concurrently open* plays across two different pools can't be
+    # produced by feeding sequential single-ticker sigs through tick(); seed
+    # them directly instead (same play shape _enter builds, including the
+    # "pool" field Task 2 routes exits through) and drive the feed with
+    # sigs=[None] so _manage never runs — only the risk checks tick() always
+    # runs before the fetch, isolating exactly what this test is about.
+    bot = _mkbot(tmp_path, [None], monkeypatch)
+    m1_sig = _sig(ticker="M1", ts=1005.0)
+    m2_sig = _sig(ticker="M2", ts=47805.0)
+    bot.state["open_plays"]["M1"] = {
+        "side": "YES", "qty": 2, "entry": bot.broker.buy("YES", 2, m1_sig),
+        "ranges": None, "entry_sig": m1_sig, "last_sig": m1_sig,
+        "pool": "weekday_night"}
+    bot.state["open_plays"]["M2"] = {
+        "side": "YES", "qty": 2, "entry": bot.broker.buy("YES", 2, m2_sig),
+        "ranges": None, "entry_sig": m2_sig, "last_sig": m2_sig,
+        "pool": "weekday_day"}
+    bot.state["pools"]["weekday_night"]["day_pnl"] = -51.0   # trip only this pool's day stop
+    bot.tick(now_ts=1000.0)
+    assert "M1" not in bot.state["open_plays"]                # flattened
+    assert "M2" in bot.state["open_plays"]                     # untouched
+    assert bot.state["pools"]["weekday_night"]["halted"] is True
+    assert bot.state["pools"]["weekday_day"]["halted"] is False
 
 
 def test_pause_control_blocks_entry_and_flatten_closes(tmp_path, monkeypatch):
@@ -466,10 +517,10 @@ def test_max_loss_cap_flattens_blocks_and_survives_day_roll(tmp_path, monkeypatc
     (tmp_path / TRADES_FILE).write_text("\n".join(json.dumps(r) for r in rows))
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     bot = _mkbot(tmp_path, sigs, monkeypatch)
-    assert bot.state["total_pnl"] == -101.0
+    assert bot.state["pools"]["weekday_night"]["total_pnl"] == -101.0
     for _ in sigs:
         bot.tick(now_ts=1000.0)
-    assert bot.state["loss_capped"] is True
+    assert bot.state["pools"]["weekday_night"]["loss_capped"] is True
     assert bot.state["open_plays"] == {}
     events = _rows(tmp_path, EVENTS_FILE)
     assert any("MAX LOSS CAP" in e["reason"] for e in events)
@@ -477,7 +528,7 @@ def test_max_loss_cap_flattens_blocks_and_survives_day_roll(tmp_path, monkeypatc
     assert any("max_loss_cap" in e["reason"] for e in skips)
     # Day roll resets the day stop but NOT the cap
     bot.tick(now_ts=1000.0 + 86400 * 30)
-    assert bot.state["loss_capped"] is True
+    assert bot.state["pools"]["weekday_night"]["loss_capped"] is True
 
 
 def test_max_loss_cap_releases_when_config_raised(tmp_path, monkeypatch):
@@ -486,10 +537,10 @@ def test_max_loss_cap_releases_when_config_raised(tmp_path, monkeypatch):
     (tmp_path / TRADES_FILE).write_text("\n".join(json.dumps(r) for r in rows))
     bot = _mkbot(tmp_path, [_sig(), _sig()], monkeypatch)
     bot.tick(now_ts=1000.0)
-    assert bot.state["loss_capped"] is True
+    assert bot.state["pools"]["weekday_night"]["loss_capped"] is True
     (tmp_path / "config.json").write_text(_json.dumps({"max_loss_usd": 200.0}))
     bot.tick(now_ts=1005.0)                        # hot-reload raises the cap
-    assert "loss_capped" not in bot.state
+    assert "loss_capped" not in bot.state["pools"]["weekday_night"]
 
 
 def test_sizing_shrinks_with_consumed_loss_budget(tmp_path, monkeypatch):
@@ -614,17 +665,17 @@ def test_profit_lock_halts_on_giveback_and_halves_size(tmp_path, monkeypatch):
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     bot = _mkbot(tmp_path, sigs, monkeypatch)
     # armed: day peaked at +20, still healthy -> entries allowed at HALF size
-    bot.state["day_pnl"] = 20.0
+    bot.state["pools"]["weekday_night"]["day_pnl"] = 20.0
     bot.tick(now_ts=1000.0)                    # seeds detector, sets day_high
-    assert bot.state["day_high"] == 20.0
+    assert bot.state["pools"]["weekday_night"]["day_high"] == 20.0
     bot.tick(now_ts=1000.0)                    # flip -> enter at half budget
     play = list(bot.state["open_plays"].values())[0]
-    # full budget $10 (2% default x500) -> half $5 -> qty 9 @ .52+.02 fee
-    assert play["qty"] == 9
+    # $125 pool * 2% = $2.50 full budget -> half $1.25 -> qty 2 @ .52+.02 fee
+    assert play["qty"] == 2
     # giveback: drop below 50% of the 20 peak -> halt, profit banked
-    bot.state["day_pnl"] = 9.5
+    bot.state["pools"]["weekday_night"]["day_pnl"] = 9.5
     bot.tick(now_ts=1000.0)
-    assert bot.state["halted"] is True
+    assert bot.state["pools"]["weekday_night"]["halted"] is True
     events = _rows(tmp_path, EVENTS_FILE)
     assert any("profit_lock" in e["reason"] for e in events if e["action"] == "halt")
 
