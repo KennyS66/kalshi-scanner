@@ -1736,66 +1736,8 @@ header {
 .hc-time  { color:var(--mute); font-size:10px; }
 
 /* ── 3-col row: limit targets / account / BRS ── */
-.trade-3col { display:grid; grid-template-columns:1fr 1fr 1.1fr; border-bottom:1px solid var(--border); align-items:start; }
-.trade-3col > div { border-right:1px solid var(--border); min-width:0; }
-.trade-3col > div:last-child { border-right:none; }
 
 /* ── limit order panel ── */
-.limit-wrap { padding:12px 16px; max-height:480px; overflow-y:auto; }
-.limit-card { border:1px solid var(--border); border-radius:12px; background:var(--bg2); overflow:hidden; box-shadow:var(--card-shadow); }
-.limit-hdr  { padding:8px 14px; background:var(--bg3); border-bottom:1px solid var(--border);
-              font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--mute);
-              font-family:var(--sans); font-weight:600;
-              display:flex; justify-content:space-between; }
-.limit-grid { display:grid; grid-template-columns:1fr 1fr; }
-.limit-col  { padding:12px 16px; }
-.limit-col.signal-yes { background:linear-gradient(180deg, var(--green-bg), transparent 80%); }
-.limit-col.signal-no  { background:linear-gradient(180deg, var(--red-bg), transparent 80%); }
-.limit-col + .limit-col { border-left:1px solid var(--border); }
-.limit-col-title { font-size:12px; font-weight:900; letter-spacing:1px; margin-bottom:10px; }
-.limit-col-title.yes { color:var(--green); }
-.limit-col-title.no  { color:var(--red); }
-.limit-row { display:flex; justify-content:space-between; align-items:center;
-             padding:5px 6px; margin:0 -6px; border-bottom:1px solid var(--hair); font-size:12px; border-radius:6px; }
-.limit-row:last-child { border-bottom:none; }
-.limit-tier  { color:var(--mute); font-size:11px; font-family:var(--sans); }
-.limit-price { font-weight:800; font-variant-numeric:tabular-nums; font-size:13px; }
-.limit-save  { font-size:10px; color:var(--mute); }
-.limit-row.market  .limit-price { color:var(--fg); }
-.limit-row.aggr    .limit-price { color:var(--blue); }
-.limit-row.patient .limit-price { color:var(--yellow); }
-.limit-row.best    { background:var(--green-bg); border-bottom-color:transparent; }
-.limit-row.best    .limit-price { color:var(--green); }
-.limit-row.best    .limit-tier  { color:var(--green); font-weight:700; }
-.limit-note { font-size:10px; color:var(--mute); padding-top:8px; line-height:1.55; font-family:var(--sans); }
-
-/* ── account panel ── */
-.acct-wrap { padding:12px 16px; max-height:480px; overflow-y:auto; }
-.acct-head { display:flex; align-items:baseline; gap:14px; margin-bottom:8px; }
-.acct-balance { font-size:28px; font-weight:900; color:var(--fg); font-variant-numeric:tabular-nums; }
-.acct-pnl { font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; }
-.acct-age     { font-size:10px; color:var(--mute); }
-.acct-error   { color:var(--red); font-size:12px; }
-.acct-empty   { color:var(--mute); font-size:12px; padding:4px 0; }
-.pos-card     { display:grid; grid-template-columns:1fr auto auto auto; gap:8px; align-items:center;
-                padding:6px 0; border-bottom:1px solid var(--hair); font-size:12px; }
-.pos-card:last-child { border-bottom:none; }
-.pos-card.profit { border-left:3px solid var(--green); padding-left:8px; }
-.pos-card.loss   { border-left:3px solid var(--red);   padding-left:8px; }
-.pos-ticker { color:var(--blue); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pos-side   { font-weight:800; font-size:12px; }
-.pos-cost   { color:var(--mute); font-size:11px; }
-.pos-pnl    { font-weight:800; font-variant-numeric:tabular-nums; }
-.fill-chip  { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:11px;
-              border-bottom:1px solid var(--hair); }
-.fill-chip:last-child { border-bottom:none; }
-.fill-yes { color:var(--green); font-weight:700; }
-.fill-no  { color:var(--red);   font-weight:700; }
-.fill-dim { color:var(--mute); }
-.acct-section-lbl { font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--mute);
-                    font-family:var(--sans); font-weight:600;
-                    margin-bottom:6px; margin-top:10px; }
-
 /* ── panel shared ── */
 .panel-hdr { padding:9px 16px; background:var(--bg3); border-bottom:1px solid var(--border);
              font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--yellow);
@@ -1966,51 +1908,12 @@ header {
 </div>
 
 <!-- ── BRS / account / limit targets, side by side ── -->
-<div class="trade-3col">
-  <div>
-    <div class="panel-hdr">
-      <span>Buy / Sell Range History</span>
-      <span id="brs-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
-    </div>
-    <div class="panel-body" id="brs-body"><div class="empty">no settled markets yet</div></div>
+<div>
+  <div class="panel-hdr">
+    <span>Buy / Sell Range History</span>
+    <span id="brs-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
   </div>
-
-  <div class="acct-wrap">
-    <div class="acct-head">
-      <span class="acct-balance" id="acct-balance">$—</span>
-      <span class="acct-pnl" id="acct-pnl"></span>
-      <span class="acct-age" id="acct-age">—</span>
-    </div>
-    <div class="acct-section-lbl">Open positions</div>
-    <div id="pos-grid"><div class="acct-empty">loading…</div></div>
-    <div class="acct-section-lbl" style="display:flex;align-items:center;gap:10px;margin-top:10px">
-      Recent fills
-      <span id="fills-key-badge" style="font-size:10px;display:none"></span>
-      <button id="fills-toggle-btn" onclick="toggleFills()" style="font-size:10px;padding:2px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--mute);cursor:pointer;font-family:inherit">ON</button>
-    </div>
-    <div id="fill-grid"><div class="acct-empty">loading…</div></div>
-  </div>
-
-  <div class="limit-wrap">
-    <div class="limit-card">
-      <div class="limit-hdr">
-        <span>LIMIT ORDER TARGETS</span>
-        <span id="limit-spread-note" style="color:var(--mute)"></span>
-      </div>
-      <div class="limit-grid">
-        <div class="limit-col" id="limit-yes-col">
-          <div class="limit-col-title yes">BUY YES</div>
-          <div id="limit-yes-rows"><div class="dim" style="font-size:11px">—</div></div>
-          <div class="limit-note" id="limit-yes-note"></div>
-        </div>
-        <div class="limit-col" id="limit-no-col">
-          <div class="limit-col-title no">BUY NO</div>
-          <div id="limit-no-rows"><div class="dim" style="font-size:11px">—</div></div>
-          <div class="limit-note" id="limit-no-note"></div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <div class="panel-body" id="brs-body"><div class="empty">no settled markets yet</div></div>
 </div>
 
 <!-- ── bot open plays ── -->
@@ -2176,32 +2079,6 @@ function renderGuidance(s){
 }
 
 // ── limit order panel ────────────────────────────────────────────────────────
-function renderLimits(s){
-  if(!s||s.status!=='ok')return;
-  const yesAsk=s.yes_ask||0, noAsk=s.no_ask||0, spread=s.spread||0;
-  if(!yesAsk||!noAsk)return;
-  const sig=s.direction;
-  const minsLeft=s.mins_left||0;
-  function rows(ask,dir){
-    const isSig=dir===sig;
-    const urgency=minsLeft<5?'Under 5m — aggressive or market only.':
-                  minsLeft<9?'Aggressive recommended (fills most of the time).':
-                             'Patient order saves 3¢ — plenty of time.';
-    return{html:`
-      <div class="limit-row market"><span class="limit-tier">Market${isSig?' ← signal':''}</span><span class="limit-price">${fmtC(ask)}</span><span class="limit-save"></span></div>
-      <div class="limit-row aggr"><span class="limit-tier">Aggressive</span><span class="limit-price">${fmtC(ask-.01)}</span><span class="limit-save">−1¢</span></div>
-      <div class="limit-row patient"><span class="limit-tier">Patient</span><span class="limit-price">${fmtC(ask-.03)}</span><span class="limit-save">−3¢</span></div>
-      <div class="limit-row best"><span class="limit-tier">Best price</span><span class="limit-price">${fmtC(ask-.06)}</span><span class="limit-save">−6¢</span></div>`,
-    note:isSig?urgency:''};
-  }
-  const yr=rows(yesAsk,'YES'), nr=rows(noAsk,'NO');
-  $('limit-yes-rows').innerHTML=yr.html; $('limit-yes-note').textContent=yr.note;
-  $('limit-no-rows').innerHTML=nr.html;  $('limit-no-note').textContent=nr.note;
-  $('limit-yes-col').className='limit-col'+(sig==='YES'?' signal-yes':'');
-  $('limit-no-col').className='limit-col'+(sig==='NO'?' signal-no':'');
-  $('limit-spread-note').textContent=`spread ${(spread*100).toFixed(1)}¢ · ${minsLeft.toFixed(1)}m left`;
-}
-
 // ── main signal banner ───────────────────────────────────────────────────────
 const _EMPTY_SIDE={sell_low_offset_c:0,sell_high_offset_c:0,low_hit_rate:null,high_hit_rate:null,buy_touch_rate:null,n:0};
 function renderSignalBanner(s, isT1=false){
@@ -2289,7 +2166,7 @@ function renderSignalBanner(s, isT1=false){
   const badge=$('sig-badge');
   if(isT1){badge.textContent='T+1 UPDATE';badge.className='sig-reset-badge t1';badge.style.display='';setTimeout(()=>{badge.style.display='none';},8000);}
 
-  renderFlush(s); renderGuidance(s); renderLimits(s);
+  renderFlush(s); renderGuidance(s);
 }
 
 // ── BRS history ──────────────────────────────────────────────────────────────
@@ -2403,78 +2280,6 @@ function renderHistory(rows){
 }
 
 // ── fills toggle ─────────────────────────────────────────────────────────────
-async function toggleFills(){
-  const btn=$('fills-toggle-btn');
-  btn.disabled=true;
-  try{
-    const r=await fetch('/api/fills_toggle',{method:'POST'}).then(r=>r.json());
-    btn.textContent=r.fills_enabled?'ON':'OFF';
-    btn.style.color=r.fills_enabled?'var(--green)':'var(--mute)';
-    btn.style.borderColor=r.fills_enabled?'var(--green)':'var(--border)';
-  }catch(e){console.error('toggle fills',e);}
-  finally{btn.disabled=false;}
-}
-
-// ── account ──────────────────────────────────────────────────────────────────
-function renderAccount(a){
-  if(!a)return;
-  if(a.balance!=null) $('acct-balance').textContent='$'+parseFloat(a.balance).toFixed(2);
-  if(a.ts){ const age=Math.round(Date.now()/1000-a.ts); $('acct-age').textContent=age<5?'live':age+'s ago'; }
-  const totalPnl=(a.total_realized_pnl||0)+(a.total_unrealized_pnl||0);
-  const pnlEl=$('acct-pnl');
-  if(a.positions&&a.positions.length){
-    pnlEl.textContent=(totalPnl>=0?'+':'-')+'$'+Math.abs(totalPnl).toFixed(2)+' pnl';
-    pnlEl.style.color=totalPnl>=0?'var(--green)':'var(--red)';
-  } else {
-    pnlEl.textContent='';
-  }
-
-  // sync fills toggle button state
-  const btn=$('fills-toggle-btn');
-  const enabled=a.fills_enabled!==false;
-  btn.textContent=enabled?'ON':'OFF';
-  btn.style.color=enabled?'var(--green)':'var(--mute)';
-  btn.style.borderColor=enabled?'var(--green)':'var(--border)';
-
-  // fills key badge
-  const badge=$('fills-key-badge');
-  if(a.fills_key_configured){
-    badge.textContent='fills key ✓'; badge.style.color='var(--green)'; badge.style.display='';
-  } else {
-    badge.textContent='no fills key'; badge.style.color='var(--mute)'; badge.style.display='';
-  }
-
-  if(a.error){$('pos-grid').innerHTML=`<div class="acct-error">${a.error}</div>`;$('fill-grid').innerHTML='';return;}
-  if(!a.positions||!a.positions.length){
-    $('pos-grid').innerHTML='<div class="acct-empty">no open positions</div>';
-  } else {
-    $('pos-grid').innerHTML=a.positions.map(p=>{
-      const isYes=p.side==='yes', qty=Math.abs(p.qty), side=isYes?'YES':'NO', sCls=isYes?'yes':'no';
-      const pnl=(p.realized_pnl||0)+(p.unrealized_pnl!=null?p.unrealized_pnl:0);
-      const pCls=pnl>=0?'pos':'neg', cCls=pnl>=0?'profit':'loss';
-      const short=p.ticker.split('-').slice(-2).join('-');
-      const lp=p.last_price?`@ ${(p.last_price*100).toFixed(1)}¢`:'';
-      return `<div class="pos-card ${cCls}">
-        <span class="pos-ticker" title="${p.ticker}">${short}</span>
-        <span class="pos-side ${sCls}">${qty} ${side}</span>
-        <span class="pos-cost dim">${p.exposure?`$${p.exposure.toFixed(2)}`:''} ${lp}</span>
-        <span class="pos-pnl ${pCls}">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(2)}</span></div>`;
-    }).join('');
-  }
-  if(!a.fills||!a.fills.length){
-    $('fill-grid').innerHTML=a.fills_note?`<div class="acct-empty">${a.fills_note}</div>`:'<div class="acct-empty">no recent fills</div>';
-  } else {
-    $('fill-grid').innerHTML=a.fills.map(f=>{
-      const isBuy=(f.action||'buy')==='buy', isYes=f.side==='yes';
-      const sCls=isYes?'fill-yes':'fill-no', pc=f.price?(f.price*100).toFixed(1)+'¢':'';
-      const ts=f.ts?new Date(f.ts).toISOString().slice(11,16):'';
-      const short=f.ticker.split('-').slice(-2).join('-');
-      return `<div class="fill-chip"><span class="${sCls}">${isBuy?'BUY':'SELL'} ${f.side.toUpperCase()}</span>
-        <span>${f.qty}</span><span class="fill-dim">${pc}</span><span class="fill-dim">${short} ${ts}</span></div>`;
-    }).join('');
-  }
-}
-
 // ── bot open plays ───────────────────────────────────────────────────────────
 function renderBotPlays(d){
   const s=d.state||{};
@@ -2593,19 +2398,18 @@ async function pollSignal(){
   finally{_sigBusy=false;}
 }
 
-// ── slow refresh (whales, history, BRS, account, log) ────────────────────────
+// ── slow refresh (whales, history, BRS, bot plays, log) ──────────────────────
 let _slowBusy=false;
 async function pollSlow(){
   if((document.hidden&&_firstLoadDone)||_slowBusy)return;
   _slowBusy=true;
   try{
-    const [spotR, histR, brsR, brsOff, brsCur, acctR, logR, botR]=await Promise.all([
+    const [spotR, histR, brsR, brsOff, brsCur, logR, botR]=await Promise.all([
       fj('/api/crypto/spot',{}),
       fj('/api/crypto/history',{rows:[]}),
       fj('/api/crypto/banner_history?limit=60',{rows:[],stats:{}}),
       fj('/api/crypto/banner_offsets',null),
       fj('/api/crypto/banner_current',null),
-      fj('/api/account',null),
       fj('/api/loop_log',{entries:[]}),
       fj('/api/bot/status',null),
     ]);
@@ -2622,7 +2426,6 @@ async function pollSlow(){
     renderThesisBar();
     renderHistory(histR.rows);
     renderBRS(brsR.rows, brsOff, brsCur, brsR.stats);
-    if(acctR){renderAccount(acctR);}
     if(logR.entries)renderLog(logR.entries);
     if(botR)renderBotPlays(botR);
     _firstLoadDone=true;
