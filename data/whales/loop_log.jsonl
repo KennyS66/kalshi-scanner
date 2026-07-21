@@ -409,3 +409,10 @@
 {"ts": 1784637325.333501, "type": "HB", "spot": 66448.99, "msg": "level watcher alive"}
 {"ts": 1784638317.9302785, "type": "HB", "spot": 66471.69, "msg": "level watcher alive"}
 {"ts": 1784638527.3731039, "type": "HB", "spot": 66470.93, "msg": "level watcher alive"}
+{"ts": 1784639520.064926, "type": "HB", "spot": 66517.04, "msg": "level watcher alive"}
+{"ts": 1784639730.1689634, "type": "HB", "spot": 66621.56, "msg": "level watcher alive"}
+{"ts": 1784640721.0040414, "type": "HB", "spot": 66376.47, "msg": "level watcher alive"}
+{"ts": 1784640931.2240982, "type": "HB", "spot": 66478.02, "msg": "level watcher alive"}
+{"ts": 1784641923.2145722, "type": "HB", "spot": 66590.49, "msg": "level watcher alive"}
+{"ts": 1784642133.6045542, "type": "HB", "spot": 66710.71, "msg": "level watcher alive"}
+{"ts": 1784642514.8816895, "type": "EVENT", "spot": 66689.35, "msg": "BREAK UP CONFIRMED: 66.5k re-broken after a brief fade, spot 66689. Regime -> trend_up 66500-67000. Multi-hour trend continues into the weekday US session."}
