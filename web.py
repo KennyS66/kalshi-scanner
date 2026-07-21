@@ -1803,6 +1803,18 @@ header {
              display:flex; justify-content:space-between; position:sticky; top:0; z-index:1; font-weight:700; }
 .panel-body { padding:0; overflow-y:auto; max-height:480px; }
 
+/* ── bot open plays ── */
+.bp-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+.bp-tbl th,.bp-tbl td { text-align:left; padding:6px 12px; border-bottom:1px solid var(--hair);
+        white-space:nowrap; font-variant-numeric:tabular-nums; }
+.bp-tbl th { color:var(--mute); font-weight:600; font-family:var(--sans); font-size:10px;
+     text-transform:uppercase; letter-spacing:.6px; }
+.bp-tbl tr:last-child td { border-bottom:none; }
+.bp-side { font-weight:800; }
+.bp-side.yes { color:var(--green); } .bp-side.no { color:var(--red); }
+.bp-pool { font-size:10px; color:var(--mute); }
+.bp-tbl .empty { padding:8px 0; color:var(--mute); font-size:12px; }
+
 
 /* ── BRS history ── */
 .brs-stat-row { display:flex; gap:32px; padding:14px 18px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
@@ -1998,6 +2010,20 @@ header {
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ── bot open plays ── -->
+<div>
+  <div class="panel-hdr">
+    <span>Bot Open Plays</span>
+    <span id="bp-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
+  </div>
+  <div class="panel-body">
+    <table class="bp-tbl" id="bp-table">
+      <thead><tr><th>Ticker</th><th>Side</th><th>Pool</th><th>Qty</th><th>Entry</th><th>Notional</th></tr></thead>
+      <tbody><tr><td colspan="6"><div class="empty">no open plays</div></td></tr></tbody>
+    </table>
   </div>
 </div>
 
@@ -2449,6 +2475,22 @@ function renderAccount(a){
   }
 }
 
+// ── bot open plays ───────────────────────────────────────────────────────────
+function renderBotPlays(d){
+  const s=d.state||{};
+  const open=Object.entries(s.open_plays||{});
+  $('bp-meta').textContent=open.length?`${open.length} open`:'—';
+  $('bp-table').tBodies[0].innerHTML=open.length?open.map(([t,p])=>{
+    const pool=p.pool||'—';
+    return `<tr><td>${esc(t)}</td>
+      <td><span class="bp-side ${p.side.toLowerCase()}">${p.side}</span></td>
+      <td class="bp-pool">${esc(pool)}</td>
+      <td>${p.qty}</td>
+      <td>${(p.entry.price*100).toFixed(1)}¢</td>
+      <td>$${(p.entry.price*p.qty).toFixed(2)}</td></tr>`;
+  }).join(''):'<tr><td colspan="6"><div class="empty">no open plays</div></td></tr>';
+}
+
 // ── loop log ─────────────────────────────────────────────────────────────────
 let _logKeys=new Set();
 function renderLog(entries){
@@ -2557,7 +2599,7 @@ async function pollSlow(){
   if((document.hidden&&_firstLoadDone)||_slowBusy)return;
   _slowBusy=true;
   try{
-    const [spotR, histR, brsR, brsOff, brsCur, acctR, logR]=await Promise.all([
+    const [spotR, histR, brsR, brsOff, brsCur, acctR, logR, botR]=await Promise.all([
       fj('/api/crypto/spot',{}),
       fj('/api/crypto/history',{rows:[]}),
       fj('/api/crypto/banner_history?limit=60',{rows:[],stats:{}}),
@@ -2565,6 +2607,7 @@ async function pollSlow(){
       fj('/api/crypto/banner_current',null),
       fj('/api/account',null),
       fj('/api/loop_log',{entries:[]}),
+      fj('/api/bot/status',null),
     ]);
     // Prefer fresh spot; fall back to the signal payload's spot (the reliable
     // source) and mark the header when the collector has gone stale.
@@ -2581,6 +2624,7 @@ async function pollSlow(){
     renderBRS(brsR.rows, brsOff, brsCur, brsR.stats);
     if(acctR){renderAccount(acctR);}
     if(logR.entries)renderLog(logR.entries);
+    if(botR)renderBotPlays(botR);
     _firstLoadDone=true;
   }catch(e){console.error('pollSlow',e);}
   finally{_slowBusy=false;}
