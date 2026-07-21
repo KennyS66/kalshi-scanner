@@ -342,3 +342,8 @@
 {"ts": 1784592861.5517545, "type": "STATUS", "spot": 65193, "msg": "day roll confirmed: bot resumed (halted->false), fresh day. Range 65000-65500 continuing."}
 {"ts": 1784593518.252689, "type": "HB", "spot": 65385.28, "msg": "level watcher alive"}
 {"ts": 1784594730.443946, "type": "HB", "spot": 65450.0, "msg": "level watcher alive"}
+{"ts": 1784595942.612919, "type": "HB", "spot": 65472.02, "msg": "level watcher alive"}
+{"ts": 1784596508.955445, "type": "STATUS", "spot": null, "msg": "hourly check: range 65000-65500, watchers healthy"}
+{"ts": 1784597153.8430274, "type": "HB", "spot": 65432.97, "msg": "level watcher alive"}
+{"ts": 1784598368.0814118, "type": "HB", "spot": 65275.49, "msg": "level watcher alive"}
+{"ts": 1784598451.7056336, "type": "EVENT", "spot": null, "msg": "Fixed between_markets bug: unfiltered Kalshi /markets query returned newest-created (far-future) markets instead of the live one, causing bogus 24h gap reports. Added status=open filter, restarted scanner, verified across a market roll. Committed 735b562."}
