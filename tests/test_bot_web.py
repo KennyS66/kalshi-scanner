@@ -116,7 +116,13 @@ def test_status_payload_by_day_and_gate_split(tmp_path):
     _seed(tmp_path)   # 4 trades, exit_ts 1..4 (1970-01-01, a Thursday)
     p = bot_status_payload(tmp_path)
     assert p["stats"]["by_day"] == {"1970-01-01": 0.2}
-    assert p["gate"] == {"weekday": 4, "weekend": 0}
+    assert p["gate"]["weekday"] == 4
+    assert p["gate"]["weekend"] == 0
+    # entry_ts=0 (trade i=0) is falsy -> session_tag returns "unknown" and is
+    # dropped from the per-session breakdown, same edge case pool_by_date_stats
+    # already has; i=1,2,3 all land in weekday_night (epoch hour 0 < CURFEW_END_HOUR).
+    assert p["gate"]["sessions"] == {"weekday_day": 0, "weekday_night": 3,
+                                      "weekend_day": 0, "weekend_night": 0}
 
 
 def test_status_payload_by_session(tmp_path):

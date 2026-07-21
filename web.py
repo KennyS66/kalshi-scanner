@@ -1434,12 +1434,23 @@ async def api_crypto_candles(mins: int = 15, hours: int = 8) -> JSONResponse:
 
 
 def _gate_split(trades: list) -> dict:
-    """Settled counts by tape regime for the dual live-unlock gate."""
+    """Settled counts by tape regime for the dual live-unlock gate (100
+    weekday + 100 weekend, the actual unlock rule — unchanged), plus a
+    4-way session breakdown for display alongside it."""
+    from bot_core import session_tag
     closed = [t for t in trades if t.get("status") == "closed"
               and t.get("net_pnl") is not None]
     wd = sum(1 for t in closed
              if time.gmtime(t.get("exit_ts") or 0).tm_wday < 5)
-    return {"weekday": wd, "weekend": len(closed) - wd}
+    sessions = {"weekday_day": 0, "weekday_night": 0,
+                "weekend_day": 0, "weekend_night": 0}
+    for t in closed:
+        sig = dict(t.get("entry_sig") or {})
+        sig.setdefault("ts", t.get("entry_ts"))
+        tag = session_tag(sig.get("ts"))
+        if tag in sessions:  # "unknown" (no ts at all) is dropped, not counted
+            sessions[tag] += 1
+    return {"weekday": wd, "weekend": len(closed) - wd, "sessions": sessions}
 
 
 def bot_control_write(bot_dir, cmd: str) -> int:

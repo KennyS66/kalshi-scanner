@@ -261,6 +261,9 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 
   <div class="ev-summary" id="poolTiles"></div>
 
+  <div class="section-label">Live-unlock gate progress <span class="dim" style="text-transform:none">(by session — each pair sums to the shared 100 weekday / 100 weekend floor)</span></div>
+  <div class="ev-summary" id="unlockProgTiles"></div>
+
   <div class="section-label">EV gate progress <span class="dim" style="text-transform:none">(buckets past the sample floor, by session)</span></div>
   <div class="ev-summary" id="evProgTiles"></div>
 
@@ -930,6 +933,24 @@ async function pollBot() {
   $('gateWe').textContent = `weekend ${g8.weekend}/100`;
   $('gateWdBar').style.width = Math.min(100, g8.weekday) + '%';
   $('gateWeBar').style.width = Math.min(100, g8.weekend) + '%';
+
+  // Same 100-per-side floor, broken out by session — each pair (day+night)
+  // sums to the weekday or weekend count above; not an independent 100
+  // each, just the same combined total split out for visibility.
+  const unlockEl = $('unlockProgTiles');
+  if (unlockEl) {
+    const gs = g8.sessions || {};
+    unlockEl.innerHTML = SESSIONS.map(s => {
+      const n = gs[s] || 0;
+      const pct = Math.min(100, n);
+      return `<div class="tile">
+          <div class="k"><span class="badge sess ${sessCls(s)}">${sessLabel(s)}</span></div>
+          <div class="v">${n}</div>
+          <div class="s">settled trades</div>
+          <div class="gatebar"><i style="width:${pct}%"></i></div>
+        </div>`;
+    }).join('');
+  }
 
   // daily P&L columns
   (() => {
