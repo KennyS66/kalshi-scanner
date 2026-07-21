@@ -43,18 +43,29 @@ def replay(log_path, out_dir, bankroll=500.0, cfg_overrides=None,
     # Curfews are a live-trading overlay; replay's job is measuring the raw
     # strategy in every session (it is the evidence engine for reopening a
     # curfewed zone). Explicit overrides may still turn them back on.
-    cfg = {"overnight_curfew": False, "weekend_curfew": False}
+    #
+    # paper_bankroll goes through cfg, not a one-time state poke: Bot ticks
+    # call _refresh_bankroll() every time, which re-derives each pool's
+    # bankroll from cfg["paper_bankroll"]/4 whenever it's set (paper mode,
+    # >0) — a direct `bot.state["pools"][p]["bankroll"] = ...` assignment
+    # after construction gets silently overwritten on the very next tick.
+    # Confirmed by tracing an actual replay run: net_total was identical for
+    # bankroll=500 and bankroll=2000 until this was routed through cfg.
+    cfg = {"overnight_curfew": False, "weekend_curfew": False,
+          "paper_bankroll": float(bankroll)}
     cfg.update(cfg_overrides or {})
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(cfg))
     it = iter(rows)
     bot = Bot(out, fetch_fn=lambda: next(it, None),
               offsets_file=offsets_file or (out / "banner_offsets.json"))
-    # Replay must be offline and deterministic: historical row timestamps make
-    # now_ts - bankroll_ts >= BANKROLL_REFRESH_SECS constantly, which would
-    # otherwise make Bot._refresh_bankroll call the live signed Kalshi balance
-    # GET on (near) every tick. Pin bankroll so that guard never fires.
-    bot.state["bankroll"] = float(bankroll)
+    # Replay must be offline and deterministic: historical row timestamps
+    # make now_ts - bankroll_ts >= BANKROLL_REFRESH_SECS constantly, which
+    # would otherwise make _refresh_bankroll call the live signed Kalshi
+    # balance GET on (near) every tick if paper_bankroll were ever absent
+    # from cfg. Harmless now that paper_bankroll>0 always short-circuits
+    # before that check, but pinned as cheap insurance against a future
+    # cfg_overrides that removes it.
     bot.state["bankroll_ts"] = 10**12
     for r in rows:
         bot.tick(now_ts=r.get("ts", 0))
