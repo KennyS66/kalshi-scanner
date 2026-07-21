@@ -347,3 +347,8 @@
 {"ts": 1784597153.8430274, "type": "HB", "spot": 65432.97, "msg": "level watcher alive"}
 {"ts": 1784598368.0814118, "type": "HB", "spot": 65275.49, "msg": "level watcher alive"}
 {"ts": 1784598451.7056336, "type": "EVENT", "spot": null, "msg": "Fixed between_markets bug: unfiltered Kalshi /markets query returned newest-created (far-future) markets instead of the live one, causing bogus 24h gap reports. Added status=open filter, restarted scanner, verified across a market roll. Committed 735b562."}
+{"ts": 1784599568.6255505, "type": "HB", "spot": 65337.51, "msg": "level watcher alive"}
+{"ts": 1784600769.3427992, "type": "HB", "spot": 65240.35, "msg": "level watcher alive"}
+{"ts": 1784601970.685103, "type": "HB", "spot": 65305.78, "msg": "level watcher alive"}
+{"ts": 1784602490.49352, "type": "EVENT", "spot": null, "msg": "Investigated giveback-loss pattern: confirmed it is entirely time/rolled exits (stop is off by design since Jul18, validated). Built regime-conditional exit_mins infra (bot_core.py RegimeTracker + should_time_exit) but the raw-price efficiency-ratio classifier failed validation against known live breakouts, so left it INERT (config unchanged, replay-confirmed bit-identical). Committed 8400047. Restarted swing_bot.py to sync code, verified zero behavior change."}
+{"ts": 1784603086.5785177, "type": "EVENT", "spot": null, "msg": "Shipped session-tagged EV-gate buckets (weekday/weekend x day/night) + session_report.py. Fixed a real gap: entry_sig snapshot never preserved ts, so session tagging would have silently resolved to unknown. Restarted swing_bot.py, verified clean reboot + bucket split took effect as predicted. Committed e3a9b2a."}
