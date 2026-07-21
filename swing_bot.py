@@ -77,7 +77,7 @@ def append_jsonl(path, row: dict) -> None:
         f.write(json.dumps(row) + "\n")
 
 
-from bot_core import (FlipDetector, load_config, entry_blockers,
+from bot_core import (FlipDetector, RegimeTracker, load_config, entry_blockers,
                       should_time_exit, should_target_exit, should_stop_exit,
                       should_stretch_exit,
                       size_for_budget, trade_budget, loss_headroom,
@@ -130,6 +130,7 @@ class Bot:
         self.state["last_control_nonce"] = max(
             self.state.get("last_control_nonce", 0), disk_nonce)
         self.detector = FlipDetector(self.cfg["flip_threshold"])
+        self.regime = RegimeTracker()
         self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
         self.feed_fails = 0
         # EV-gate stats + lifetime P&L: seeded from the closed-trade journal
@@ -379,6 +380,8 @@ class Bot:
 
     def _manage(self, sig):
         ticker = sig.get("ticker")
+        self.regime.update(sig.get("ts"), sig.get("spot"))
+        regime = self.regime.classify()
         # exits / rolled markets first
         for t in list(self.state["open_plays"]):
             play = self.state["open_plays"][t]
@@ -397,7 +400,7 @@ class Bot:
                     self._exit(t, play, sig, "stretch" if scaled else "target")
                 elif should_stop_exit(play, sig, self.cfg):
                     self._exit(t, play, sig, "stop")
-                elif should_time_exit(sig, self.cfg):
+                elif should_time_exit(sig, self.cfg, regime=regime):
                     self._exit(t, play, sig, "time")
             else:
                 self._exit(t, play, play["last_sig"], "rolled")

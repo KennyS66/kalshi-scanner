@@ -9,6 +9,7 @@ advance the confirmed sign, so it can't silently consume a later flip.
 import json
 import math
 import time
+from collections import deque
 from pathlib import Path
 
 from backtest_gate import fee  # noqa: F401 — also used by entry_blockers
@@ -255,8 +256,65 @@ def entry_blockers(sig: dict, cfg: dict, open_plays: dict,
     return blockers
 
 
-def should_time_exit(sig: dict, cfg: dict) -> bool:
-    return (sig.get("mins_left") or 0.0) <= cfg["exit_mins"]
+class RegimeTracker:
+    """Classifies the live tape as 'trend' or 'range' from a rolling window
+    of (ts, spot) samples — Kaufman's efficiency ratio: net directional
+    travel over the window divided by the window's total PATH LENGTH (the
+    sum of |move| between consecutive samples, not just hi-lo range — range
+    alone is sensitive to where the window happens to start/end mid-cycle,
+    so a truncated chop window can spuriously read as high-efficiency).
+    High efficiency (most of the path length was net progress) reads as
+    trend; low efficiency (lots of back-and-forth covering little net
+    ground) reads as range/chop. Pure and replay-safe: driven only by the
+    same (ts, spot) stream both the live tick loop and bot_replay.py already
+    iterate over, so live and replay classify identically given the same
+    price history.
+    """
+
+    def __init__(self, window_secs: float = 2700.0, min_samples: int = 10,
+                 trend_threshold: float = 0.35):
+        self.window_secs = window_secs
+        self.min_samples = min_samples
+        self.trend_threshold = trend_threshold
+        self.samples: deque = deque()
+
+    def update(self, ts, spot) -> None:
+        if ts is None or spot is None:
+            return
+        self.samples.append((ts, spot))
+        cutoff = ts - self.window_secs
+        while self.samples and self.samples[0][0] < cutoff:
+            self.samples.popleft()
+
+    def classify(self) -> str:
+        """Returns 'trend' or 'range'. Defaults to 'range' (the tighter,
+        more conservative exit fuse) whenever there isn't enough history
+        to classify confidently."""
+        if len(self.samples) < self.min_samples:
+            return "range"
+        prices = [p for _, p in self.samples]
+        path_length = sum(abs(prices[i] - prices[i - 1])
+                          for i in range(1, len(prices)))
+        if path_length <= 0:
+            return "range"
+        net_move = abs(prices[-1] - prices[0])
+        efficiency = net_move / path_length
+        return "trend" if efficiency >= self.trend_threshold else "range"
+
+
+def should_time_exit(sig: dict, cfg: dict, regime: str = None) -> bool:
+    """Force-close once mins_left drops to the fuse for the current regime.
+
+    regime=None (or an unrecognized value) falls back to the flat
+    cfg['exit_mins'] — unchanged behavior for any caller that doesn't pass
+    a regime, and for a bot with no exit_mins_trend/exit_mins_range set.
+    """
+    exit_mins = cfg.get("exit_mins")
+    if regime == "trend" and cfg.get("exit_mins_trend") is not None:
+        exit_mins = cfg["exit_mins_trend"]
+    elif regime == "range" and cfg.get("exit_mins_range") is not None:
+        exit_mins = cfg["exit_mins_range"]
+    return (sig.get("mins_left") or 0.0) <= exit_mins
 
 
 def should_stop_exit(play: dict, sig: dict, cfg: dict) -> bool:
