@@ -259,13 +259,9 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 <div id="overviewTab">
   <div class="findings" id="findingsBox"></div>
 
+  <div class="ev-summary" id="poolTiles"></div>
+
   <div class="tiles">
-    <div class="tile hero"><div class="k">day p&amp;l</div><div class="v" id="dayPnl">—</div>
-      <div class="s" id="dayStop"></div></div>
-    <div class="tile"><div class="k">bankroll</div><div class="v" id="bankroll">—</div>
-      <div class="s" id="bankrollSub"></div></div>
-    <div class="tile"><div class="k">loss budget</div><div class="v" id="lossBudget">—</div>
-      <div class="s" id="lossBudgetSub"></div></div>
     <div class="tile"><div class="k">win rate</div><div class="v" id="winRate">—</div>
       <div class="s" id="winRateSub"></div></div>
     <div class="tile"><div class="k">net avg / trade</div><div class="v" id="netAvg">—</div>
@@ -312,6 +308,12 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
       <div class="tbl-wrap"><table id="sessTable"><thead><tr>
         <th>session</th><th>n</th><th>win%</th><th>net avg</th><th>zone</th>
       </tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="panel wide">
+      <h3>Pool P&amp;L by day <span class="dim" style="text-transform:none">(net per pool, UTC date rows)</span></h3>
+      <div class="tbl-wrap"><table id="poolDateTable"><thead><tr></tr></thead><tbody></tbody></table></div>
+      <div class="empty" id="poolDateEmpty" hidden>no closed trades yet</div>
     </div>
 
     <div class="panel">
@@ -500,6 +502,11 @@ function drawMeter(r, askC) {
   $('meter').innerHTML = h;
 }
 
+const SESSIONS = ['weekday_day', 'weekday_night', 'weekend_day', 'weekend_night'];
+const sessCls = s => ({weekday_day:'wd_day', weekday_night:'wd_night',
+                       weekend_day:'we_day', weekend_night:'we_night'}[s] || '');
+const sessLabel = s => ({weekday_day:'WD·day', weekday_night:'WD·night',
+                         weekend_day:'WE·day', weekend_night:'WE·night'}[s] || (s || '?'));
 let offsets = {yes:{}, no:{}};
 let lastSig = null;
 let evFilter = null;      // null = all sessions, else 'weekday_day' etc.
@@ -709,13 +716,41 @@ function renderEquity(trades, gmap) {
 }
 window.addEventListener('resize', () => _eq && renderEquity(_eq.trades, _eq.gmap));
 
+function renderPoolByDate(d) {
+  const byDate = d.pool_by_date || {};
+  const dates = Object.keys(byDate).sort().reverse().slice(0, 30);
+  $('poolDateTable').tHead.rows[0].innerHTML =
+    '<th>date</th>' + SESSIONS.map(p => `<th>${sessLabel(p)}</th>`).join('');
+  $('poolDateTable').tBodies[0].innerHTML = dates.map(day => {
+    const row = byDate[day] || {};
+    return `<tr><td>${day}</td>` + SESSIONS.map(p => {
+      const v = row[p];
+      return v == null ? '<td class="dim">—</td>'
+        : `<td class="${v >= 0 ? 'pos' : 'neg'}">${money(v)}</td>`;
+    }).join('') + '</tr>';
+  }).join('');
+  $('poolDateEmpty').hidden = dates.length > 0;
+}
+
+function renderPoolTiles(s) {
+  const pools = s.pools || {};
+  $('poolTiles').innerHTML = SESSIONS.map(p => {
+    const ps = pools[p] || {};
+    const dp = ps.day_pnl || 0;
+    const bankroll = ps.bankroll || 0;
+    const status = ps.halted ? '<span class="neg" style="font-weight:800">HALTED</span>'
+                 : ps.loss_capped ? '<span class="neg" style="font-weight:800">LOSS CAP</span>'
+                 : '<span class="dim">running</span>';
+    return `<div class="tile">
+        <div class="k"><span class="badge sess ${sessCls(p)}">${sessLabel(p)}</span></div>
+        <div class="v ${dp >= 0 ? 'pos' : 'neg'}">${money(dp)}</div>
+        <div class="s">bankroll $${bankroll.toFixed(2)} · ${status}</div>
+      </div>`;
+  }).join('');
+}
+
 function renderEvGate(d, cfg) {
   const floor = cfg.ev_gate_min_samples || 12;
-  const SESSIONS = ['weekday_day', 'weekday_night', 'weekend_day', 'weekend_night'];
-  const sessCls = s => ({weekday_day:'wd_day', weekday_night:'wd_night',
-                         weekend_day:'we_day', weekend_night:'we_night'}[s] || '');
-  const sessLabel = s => ({weekday_day:'WD·day', weekday_night:'WD·night',
-                           weekend_day:'WE·day', weekend_night:'WE·night'}[s] || (s || '?'));
   // bucket key: side|price|mins|momentum|session — split off the trailing
   // session tag rather than assuming a fixed part count, so an older/
   // shorter bucket key (pre-session-tagging history) degrades gracefully.
@@ -772,29 +807,14 @@ async function pollBot() {
   $('modeBadge').textContent = (s.mode || 'paper').toUpperCase();
   $('modeBadge').className = 'badge ' + (s.mode === 'live' ? 'live' : 'paper');
   const fresh = s.heartbeat && (Date.now() / 1000 - s.heartbeat) < 30;
-  const run = !fresh ? ['BOT OFFLINE', 'offline'] : s.halted ? ['HALTED', 'halted']
+  const anyHalted = s.pools && Object.values(s.pools).some(p => p.halted);
+  const run = !fresh ? ['BOT OFFLINE', 'offline'] : anyHalted ? ['HALTED', 'halted']
             : s.paused ? ['PAUSED', 'paused'] : ['RUNNING', 'running'];
   $('runBadge').textContent = run[0];
   $('runBadge').className = 'badge ' + run[1];
   $('logo').classList.toggle('off', !fresh);
 
-  $('bankroll').textContent = s.bankroll ? '$' + s.bankroll.toFixed(2) : '—';
-  $('bankrollSub').textContent = cfg.paper_bankroll
-    ? `fixed paper stake · ${((cfg.risk_pct || 0) * 100).toFixed(0)}% per trade` : '';
-  const cap = cfg.max_loss_usd || 0, tot = s.total_pnl || 0;
-  $('dayPnl').textContent = money(s.day_pnl || 0);
-  $('dayPnl').className = 'v ' + ((s.day_pnl || 0) >= 0 ? 'pos' : 'neg');
-  $('dayStop').innerHTML = (s.bankroll
-    ? `total <span class="${tot >= 0 ? 'pos' : 'neg'}" style="font-weight:800">${money(tot)}</span>`
-      + ` · halt at -$${((cfg.day_stop_pct || .1) * s.bankroll).toFixed(0)}` : '');
-  if (cap > 0) {
-    const head = Math.max(0, cap + Math.min(0, tot));
-    $('lossBudget').textContent = '$' + head.toFixed(0) + ' / $' + cap.toFixed(0);
-    $('lossBudget').className = 'v ' + (head <= 0 ? 'neg' : head < cap * .3 ? '' : 'pos');
-    $('lossBudgetSub').textContent = head <= 0
-      ? 'MAX LOSS HIT — trading blocked'
-      : `total ${money(tot)} · sizes ${((cfg.trade_risk_frac || .1) * 100).toFixed(0)}% of headroom`;
-  } else { $('lossBudget').textContent = 'off'; $('lossBudgetSub').textContent = ''; }
+  renderPoolTiles(s);
 
   const a = (d.stats && d.stats.all_time) || {n: 0};
   const td = (d.stats && d.stats.today) || {n: 0};
@@ -909,6 +929,8 @@ async function pollBot() {
   })();
 
   renderEquity((d.trades || []).filter(t => t.status === 'closed'), gmap);
+
+  renderPoolByDate(d);
 
   // session map: curfew zones (00-13Z) marked; others colored by measured EV
   $('sessTable').tBodies[0].innerHTML =
