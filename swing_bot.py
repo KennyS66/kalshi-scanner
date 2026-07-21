@@ -162,6 +162,12 @@ class Bot:
                  loop_log=None):
         self.dir = Path(bot_dir) if bot_dir else BOT_DIR
         self.fetch = fetch_fn
+        # Recorded before load_state(): its fallback to fresh_state() on a
+        # missing/corrupt file already includes placeholder pools (needed so
+        # fresh_state() is directly usable in tests), which would otherwise
+        # make the migration guard below think a truly first-ever boot was
+        # already migrated and skip backfilling real trade history into it.
+        had_state_file = (self.dir / STATE_FILE).exists()
         self.state = load_state(self.dir)
         self.cfg = load_config(self.dir / CONFIG_FILE)
         self.offsets_file = (Path(offsets_file) if offsets_file
@@ -184,13 +190,16 @@ class Bot:
         self.feed_fails = 0
         # EV-gate stats + pool P&L: seeded from the closed-trade journal at
         # boot, then kept current incrementally in _enter/_scale_out/_exit.
-        # Migration guard: only backfill pools from trade history if this is
-        # an old-schema state file (no "pools" key yet) — once pools exist,
-        # never re-derive them (day_pnl/total_pnl already accumulate
-        # incrementally going forward; re-running this would double-count).
+        # Migration guard: only backfill pools from trade history on a
+        # genuinely first-ever boot — either an old-schema state file (no
+        # "pools" key) or no state file at all yet (had_state_file False;
+        # fresh_state()'s placeholder pools don't count as "already
+        # migrated"). Once real pools exist on disk, never re-derive them
+        # (day_pnl/total_pnl already accumulate incrementally going
+        # forward; re-running this would double-count).
         trades = self._read_trades()
         self.ev_stats = bucket_stats(trades)
-        if "pools" not in self.state:
+        if "pools" not in self.state or not had_state_file:
             self.state["pools"] = _migrate_pools(
                 trades, self.cfg.get("paper_bankroll") or 500.0,
                 self.state.get("day"))
