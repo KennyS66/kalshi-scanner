@@ -21,6 +21,7 @@ data/whales/GATE_PASSED.flag
 data/whales/paper_trades.jsonl
 data/whales/paper_calls.jsonl
 data/whales/trade_log.jsonl
+data/bot/session_report_history.log
 data/entry_alert.txt
 data/exit_alert.txt
 data/prewarn_alert.txt
