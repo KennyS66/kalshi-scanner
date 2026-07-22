@@ -37,7 +37,8 @@ def fresh_state() -> dict:
             "day": _utc_day(0.0),
             "pools": {p: _fresh_pool() for p in POOL_NAMES},
             "bankroll_ts": 0.0,
-            "open_plays": {}, "heartbeat": 0.0, "last_control_nonce": 0}
+            "open_plays": {}, "pending_entries": {},
+            "heartbeat": 0.0, "last_control_nonce": 0}
 
 
 def load_state(bot_dir) -> dict:
@@ -92,7 +93,8 @@ from bot_core import (FlipDetector, RegimeTracker, load_config, entry_blockers,
                       size_for_budget, trade_budget, loss_headroom,
                       compute_side_ranges, load_offsets,
                       bucket_stats, update_bucket_stats, ev_gate_blocker,
-                      weekend_curfew_blocker, session_tag, POOL_NAMES)
+                      weekend_curfew_blocker, session_tag, POOL_NAMES,
+                      entry_tier)
 from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
@@ -169,6 +171,7 @@ class Bot:
         # already migrated and skip backfilling real trade history into it.
         had_state_file = (self.dir / STATE_FILE).exists()
         self.state = load_state(self.dir)
+        self.state.setdefault("pending_entries", {})   # old state files predate this
         self.cfg = load_config(self.dir / CONFIG_FILE)
         self.offsets_file = (Path(offsets_file) if offsets_file
                              else WHALES_DIR / "banner_offsets.json")
@@ -228,19 +231,33 @@ class Bot:
                       "sig": _snap(sig) if sig else None})
 
     # ── trade lifecycle ───────────────────────────────────────────────
-    def _enter(self, side, sig, ranges=None):
+    def _pool_and_budget(self, sig):
+        """(pool, pool_state, dollar_budget) for an entry at this signal's
+        ts, or None if the session pool can't be resolved. Shared by the
+        immediate-market and resting-limit entry paths so budget sizing
+        (including the profit-lock size cut) can't drift between them."""
         pool = session_tag(sig.get("ts"))
         ps = self.state.get("pools", {}).get(pool)
         if ps is None:
             self._event("skip", f"unknown session pool for ts={sig.get('ts')}",
                         sig["ticker"], sig)
-            return
-        price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
+            return None
         budget = trade_budget(ps["bankroll"], ps.get("total_pnl", 0.0), self.cfg)
         arm = self.cfg.get("profit_arm_usd") or 0.0
         if arm > 0 and ps.get("day_high", 0.0) >= arm:
             # profit lock armed: green day banked — risk small from here
             budget *= self.cfg.get("profit_size_frac", 0.5)
+        return pool, ps, budget
+
+    def _enter(self, side, sig, ranges=None):
+        """Immediate market fill — the fallback path for entries too close
+        to expiry to wait on a limit (see entry_tier), and the only path
+        when cfg['limit_entries'] is off."""
+        pb = self._pool_and_budget(sig)
+        if pb is None:
+            return
+        pool, ps, budget = pb
+        price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         qty = size_for_budget(budget, price)
         if qty < 1:
             self._event("skip", f"budget too small for 1 contract at {price}",
@@ -256,6 +273,79 @@ class Bot:
                f" (stretch {ranges['sell_high']:.1f}c)") if ranges else ""
         self._event("enter", f"{side} x{qty} @ {fill['price']}{tgt}",
                     sig["ticker"], sig)
+
+    def _place_entry(self, side, sig, ranges=None):
+        """Route to a resting limit order (aggressive/patient, same tiers
+        /trade's panel shows) when there's enough time to wait for one;
+        otherwise fall back to _enter's immediate market fill. A limit
+        order never fills the instant it's placed by construction (its
+        price is strictly below the current ask) -- see _process_pending
+        for the fill/chase/cancel handling on later ticks."""
+        tier = entry_tier(sig.get("mins_left")) if self.cfg.get("limit_entries", True) else None
+        if tier is None:
+            self._enter(side, sig, ranges)
+            return
+        tier_name, offset = tier
+        pb = self._pool_and_budget(sig)
+        if pb is None:
+            return
+        pool, ps, budget = pb
+        ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
+        limit_price = max(0.01, round(ask - offset, 4))
+        qty = size_for_budget(budget, limit_price)
+        if qty < 1:
+            self._event("skip", f"budget too small for 1 contract at {limit_price}",
+                        sig["ticker"], sig)
+            return
+        self.state["pending_entries"][sig["ticker"]] = {
+            "side": side, "qty": qty, "limit_price": limit_price,
+            "tier": tier_name, "placed_ts": sig.get("ts") or 0.0,
+            "ranges": ranges, "entry_sig": _snap(sig), "pool": pool}
+        self._event("place", f"{side} x{qty} limit @ {limit_price:.3f} ({tier_name})",
+                    sig["ticker"], sig)
+
+    def _fill_pending(self, ticker, pend, sig, maker, chase=False):
+        del self.state["pending_entries"][ticker]
+        price = (sig["yes_ask"] if pend["side"] == "YES" else sig["no_ask"]) \
+                if chase else pend["limit_price"]
+        fill = self.broker.fill(price, pend["qty"], sig.get("ts") or 0.0, maker=maker)
+        me = self.state.setdefault("market_entries", {})
+        me[ticker] = me.get(ticker, 0) + 1
+        self.state["open_plays"][ticker] = {
+            "side": pend["side"], "qty": pend["qty"], "entry": fill,
+            "ranges": pend["ranges"], "entry_sig": pend["entry_sig"],
+            "last_sig": dict(sig), "pool": pend["pool"]}
+        kind = "chased to market" if chase else f"limit filled ({pend['tier']})"
+        self._event("enter", f"{pend['side']} x{pend['qty']} @ {fill['price']} — {kind}",
+                    ticker, sig)
+
+    def _process_pending(self, sig):
+        """Advance every resting entry order by one tick: fill if the
+        market has traded down to the limit, chase to market once the
+        timeout elapses, or cancel (no cost — nothing was ever risked) if
+        its market rolled away before either happened. Roll detection
+        mirrors the exit loop: only a genuine ticker mismatch (or a
+        non-ok row) counts as rolled. A same-ticker row with no usable
+        quote (routine in replay) just waits for the next tick instead of
+        being cancelled — folding the quote check into the roll condition
+        was a bug that nuked resting orders on their own market's quiet
+        ticks."""
+        ticker = sig.get("ticker")
+        timeout = self.cfg.get("limit_fill_timeout_secs", 30)
+        for t in list(self.state["pending_entries"]):
+            pend = self.state["pending_entries"][t]
+            if sig.get("status") != "ok" or t != ticker:
+                del self.state["pending_entries"][t]
+                self._event("cancel", "rolled before limit filled or chased", t, sig)
+                continue
+            if sig.get("yes_ask") is None or sig.get("no_ask") is None:
+                continue  # same market, no usable quote this tick -- wait
+            ask = sig["yes_ask"] if pend["side"] == "YES" else sig["no_ask"]
+            if ask <= pend["limit_price"]:
+                self._fill_pending(t, pend, sig, maker=True)
+            elif (sig.get("ts") or 0.0) - pend["placed_ts"] >= timeout:
+                self._fill_pending(t, pend, sig, maker=False, chase=True)
+            # else: still waiting, leave it pending
 
     def _scale_out(self, ticker, play, sig):
         """Bank half the position at the win line; the rest rides to stretch.
@@ -327,6 +417,15 @@ class Bot:
             if pool is not None and _play_pool(play) != pool:
                 continue
             self._exit(ticker, play, play["last_sig"], reason)
+        # A pending (unfilled) entry never risked capital, so it's a plain
+        # cancel, not an _exit -- but it still must not be allowed to fill
+        # later into a pool that was just halted/flattened.
+        for ticker in list(self.state["pending_entries"]):
+            pend = self.state["pending_entries"][ticker]
+            if pool is not None and _play_pool(pend) != pool:
+                continue
+            del self.state["pending_entries"][ticker]
+            self._event("cancel", f"{reason}: pending entry cancelled", ticker)
 
     # ── maintenance ───────────────────────────────────────────────────
     def _refresh_bankroll(self, now_ts):
@@ -487,6 +586,8 @@ class Bot:
             else:
                 self._exit(t, play, play["last_sig"], "rolled")
 
+        self._process_pending(sig)
+
         if sig.get("status") != "ok":
             return
         flip = self.detector.update(ticker, sig.get("whale_trend") or 0.0,
@@ -497,12 +598,20 @@ class Bot:
             if self.cfg.get("flip_exit", True):
                 self._exit(ticker, play, sig, "flip")
             return   # flip_exit off: hold — target/stop/time resolve it
+        # opposite-flip cancels a still-pending entry the same way — the
+        # thesis it was placed on has already reversed
+        pend = self.state["pending_entries"].get(ticker)
+        if pend and flip and flip != pend["side"]:
+            del self.state["pending_entries"][ticker]
+            self._event("cancel", "opposite flip before limit filled", ticker, sig)
+            return
         if not flip:
             return
         ranges = self._ranges_for(flip, sig)
         pool = session_tag(sig.get("ts"))
         ps = self.state.get("pools", {}).get(pool, {})
-        blockers = entry_blockers(sig, self.cfg, self.state["open_plays"],
+        committed = {**self.state["open_plays"], **self.state["pending_entries"]}
+        blockers = entry_blockers(sig, self.cfg, committed,
                                   ps.get("halted", False), self.state["paused"],
                                   ranges)
         ev = ev_gate_blocker(flip, sig, self.ev_stats, self.cfg)
@@ -520,7 +629,7 @@ class Bot:
         if blockers:
             self._event("skip", "; ".join(blockers), ticker, sig)
             return
-        self._enter(flip, sig, ranges)
+        self._place_entry(flip, sig, ranges)
 
     def run(self):
         print(f"swing_bot up — mode={self.broker.mode} dir={self.dir}", flush=True)

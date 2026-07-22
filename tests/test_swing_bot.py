@@ -97,6 +97,10 @@ def _mkbot(tmp_path, sigs, monkeypatch, bankroll=500.0):
     cfg.setdefault("overnight_curfew", False)
     cfg.setdefault("weekend_curfew", False)
     cfg.setdefault("scale_out", False)
+    # legacy-mechanics default: immediate market fills, same as before
+    # limit-order entries existed -- tests exercising the resting-limit
+    # state machine itself opt in via their own config.json.
+    cfg.setdefault("limit_entries", False)
     cfg_p.write_text(json.dumps(cfg))
     # offsets_file under tmp_path (absent -> zero offsets) so tests never
     # read the machine's live banner_offsets.json
@@ -300,7 +304,7 @@ def test_paper_bankroll_override_sizes_trades_and_skips_balance_fetch(tmp_path, 
     monkeypatch.setattr(bot_broker, "_balance_dollars",
                         lambda: calls.append(1) or 123.0)
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"paper_bankroll": 400.0,
+        {"paper_bankroll": 400.0, "limit_entries": False,
          "overnight_curfew": False, "weekend_curfew": False}))
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     it = iter(sigs)
@@ -712,3 +716,180 @@ def test_profit_lock_not_armed_below_threshold():
     s["pools"]["weekday_night"]["day_high"] = 20.0
     roll_day_if_needed(s, time.time())
     assert s["pools"]["weekday_night"]["day_high"] == 0.0  # watermark resets each day
+
+
+# ── resting limit-order entries (2026-07-21: aggressive/patient tiers) ─────
+
+def _limit_cfg(tmp_path, **over):
+    import json as _json
+    cfg = {"limit_entries": True, "overnight_curfew": False, "weekend_curfew": False}
+    cfg.update(over)
+    (tmp_path / "config.json").write_text(_json.dumps(cfg))
+
+
+def test_flip_with_limit_entries_places_pending_not_immediate_fill(tmp_path, monkeypatch):
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # patient tier
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["open_plays"] == {}
+    pend = bot.state["pending_entries"]["M1"]
+    assert pend["side"] == "YES"
+    assert pend["tier"] == "patient"
+    assert pend["limit_price"] == pytest.approx(0.52 - 0.03)   # yes_ask - patient offset
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "place" for e in events)
+
+
+def test_flip_under_five_minutes_skips_the_limit_and_fills_immediately(tmp_path, monkeypatch):
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0, mins_left=4.5),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=4.5),  # too close for a limit
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending_entries"] == {}
+    assert "M1" in bot.state["open_plays"]
+    assert bot.state["open_plays"]["M1"]["entry"]["price"] == 0.52  # market ask
+
+
+def test_pending_entry_fills_at_limit_price_with_maker_fee(tmp_path, monkeypatch):
+    from backtest_gate import maker_fee
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),           # pending @ 0.49
+        _sig(whale_trend=3.0, momentum=5.0, ts=1010.0, yes_ask=0.49, mins_left=9.9),  # ask reaches limit
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending_entries"] == {}
+    play = bot.state["open_plays"]["M1"]
+    assert play["entry"]["price"] == 0.49
+    assert play["entry"]["maker"] is True
+    assert play["entry"]["fee_total"] == pytest.approx(
+        maker_fee(0.49) * play["qty"], abs=0.001)
+    events = _rows(tmp_path, EVENTS_FILE)
+    fills = [e for e in events if e["action"] == "enter"]
+    assert any("limit filled" in e["reason"] for e in fills)
+
+
+def test_pending_entry_chases_to_market_after_timeout(tmp_path, monkeypatch):
+    from backtest_gate import fee
+    _limit_cfg(tmp_path, limit_fill_timeout_secs=20)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.49, placed_ts=1005
+        # 25s later (> 20s timeout), ask never dropped to the limit
+        _sig(whale_trend=3.0, momentum=5.0, ts=1030.0, yes_ask=0.55, mins_left=9.5),
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending_entries"] == {}
+    play = bot.state["open_plays"]["M1"]
+    assert play["entry"]["price"] == 0.55       # chased at the current ask, not the limit
+    assert play["entry"]["maker"] is False
+    assert play["entry"]["fee_total"] == pytest.approx(fee(0.55) * play["qty"], abs=0.001)
+    events = _rows(tmp_path, EVENTS_FILE)
+    fills = [e for e in events if e["action"] == "enter"]
+    assert any("chased to market" in e["reason"] for e in fills)
+
+
+def test_pending_entry_not_yet_due_stays_pending(tmp_path, monkeypatch):
+    _limit_cfg(tmp_path, limit_fill_timeout_secs=60)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.49
+        # only 10s later, ask hasn't reached the limit, timeout not elapsed
+        _sig(whale_trend=3.0, momentum=5.0, ts=1015.0, yes_ask=0.55, mins_left=9.8),
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" in bot.state["pending_entries"]
+    assert bot.state["open_plays"] == {}
+
+
+def test_pending_entry_cancelled_on_opposite_flip(tmp_path, monkeypatch):
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # flip YES -> pending
+        _sig(ts=1010.0, mins_left=9.9),                                    # flips back to NO
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending_entries"] == {}
+    assert bot.state["open_plays"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "cancel" and "opposite flip" in e["reason"] for e in events)
+
+
+def test_pending_entry_cancelled_when_market_rolls(tmp_path, monkeypatch):
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending on M1
+        _sig(ticker="M2", ts=1010.0),                                      # new market entirely
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending_entries"] == {}
+    assert "M1" not in bot.state["open_plays"]
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "cancel" and "rolled" in e["reason"] for e in events)
+
+
+def test_flatten_cancels_pending_entries_in_that_pool_only(tmp_path, monkeypatch):
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending on M1, weekday_night
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" in bot.state["pending_entries"]
+    bot._flatten("halt", pool="weekend_day")   # different pool -- must not touch it
+    assert "M1" in bot.state["pending_entries"]
+    bot._flatten("halt", pool="weekday_night")
+    assert bot.state["pending_entries"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "cancel" and "halt" in e["reason"] for e in events)
+
+
+def test_pending_entry_survives_same_ticker_askless_tick(tmp_path, monkeypatch):
+    # Replay rows are routinely status="ok" for the live ticker but missing
+    # yes_ask/no_ask. _process_pending must treat that as "can't evaluate
+    # this tick, wait" -- exactly like the exit loop already does for open
+    # plays -- not as a roll. Folding the ask-presence check into the roll
+    # condition was a real bug: it cancelled resting orders on their own
+    # market's quiet ticks, well before a genuine ticker change.
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.49
+        _sig(whale_trend=3.0, momentum=30.0, ts=1010.0, mins_left=9.9,
+             yes_ask=None, no_ask=None),                                   # same ticker, no quote
+        _sig(whale_trend=3.0, momentum=30.0, ts=1015.0, mins_left=9.8,
+             yes_ask=0.49, no_ask=0.51),                                   # quote returns, touches limit
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending_entries"] == {}
+    assert "M1" in bot.state["open_plays"]
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert not any(e["action"] == "cancel" for e in events)
+    fills = [e for e in events if e["action"] == "enter"]
+    assert any("limit filled" in e["reason"] for e in fills)

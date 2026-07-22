@@ -25,8 +25,23 @@ OUTCOMES = DATA / "picks_outcomes.json"
 
 
 def fee(price: float) -> float:
-    """Approximate Kalshi trading fee per contract. VERIFY vs current schedule."""
+    """Approximate Kalshi taker fee per contract. VERIFY vs current schedule."""
     return math.ceil(0.07 * price * (1 - price) * 100) / 100
+
+
+def maker_fee(price: float) -> float:
+    """Approximate Kalshi maker fee per contract: 25% of the taker rate,
+    confirmed 2026-07-21 against three independent secondary sources
+    (Kalshi's own fee-schedule PDF returned HTTP 429 on every fetch
+    attempt, so this is NOT verified against the primary source). Applies
+    only to fills that genuinely rested and waited to be filled, not an
+    order that filled the instant it was placed (that's a taker fill by
+    definition regardless of order type) -- see bot_broker.PaperBroker.fill.
+    Also unconfirmed whether Kalshi's maker discount applies to the BTC
+    15-minute range markets this bot actually trades; treat as a real but
+    imperfectly-verified assumption until confirmed via account data or
+    the primary schedule."""
+    return round(fee(price) * 0.25, 4)
 
 
 def load_rows():

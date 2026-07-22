@@ -424,3 +424,23 @@ def test_finding_bot_health_ignores_missing_pools_key():
     # legacy raw state dict (pre-migration, read straight off disk by web.py)
     out = compute_findings([], {"paused": False, "heartbeat": _time.time()}, {}, {})
     assert not any(f["title"] == "Bot halted" for f in out)
+
+
+from bot_core import entry_tier
+
+
+def test_entry_tier_thresholds():
+    assert entry_tier(4.9) is None                              # too close to expiry
+    assert entry_tier(None) is None
+    assert entry_tier(5.0) == ("aggressive", 0.01)               # boundary is inclusive
+    assert entry_tier(8.9) == ("aggressive", 0.01)
+    assert entry_tier(9.0) == ("patient", 0.03)                  # boundary is inclusive
+    assert entry_tier(13.0) == ("patient", 0.03)
+
+
+from backtest_gate import fee, maker_fee
+
+
+def test_maker_fee_is_quarter_of_taker():
+    for price in (0.05, 0.20, 0.50, 0.80, 0.95):
+        assert maker_fee(price) == pytest.approx(fee(price) * 0.25, abs=0.0001)

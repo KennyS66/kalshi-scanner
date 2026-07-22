@@ -26,7 +26,9 @@ def test_replay_produces_trades_and_summary(tmp_path, monkeypatch):
         _row("KXBTC15M-A", 3, 3.0, 10, yes_ask=0.60, mins_left=1.5),  # time exit
     ]
     log.write_text("\n".join(json.dumps(r) for r in rows))
-    result = replay(log, tmp_path / "out")
+    # limit_entries off: this test exercises replay plumbing (row -> trades
+    # -> summary), not the resting-limit-order fill mechanic.
+    result = replay(log, tmp_path / "out", cfg_overrides={"limit_entries": False})
     assert result["trades"] == 1
     assert result["net_total"] != 0
 
@@ -75,6 +77,9 @@ def test_replay_never_hits_live_balance_endpoint(tmp_path, monkeypatch):
         _row("KXBTC15M-A", base + 14400, 3.0, 10, yes_ask=0.60, mins_left=1.5),
     ]
     log.write_text("\n".join(json.dumps(r) for r in rows))
-    result = replay(log, tmp_path / "out", bankroll=500.0)
+    # limit_entries off: this test is about the bankroll-fetch guard, not
+    # the resting-limit-order fill mechanic.
+    result = replay(log, tmp_path / "out", bankroll=500.0,
+                    cfg_overrides={"limit_entries": False})
     assert calls == []
     assert result["trades"] == 1

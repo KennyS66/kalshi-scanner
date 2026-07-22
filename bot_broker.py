@@ -8,7 +8,7 @@ import os
 from cryptography.hazmat.primitives import serialization
 
 import account
-from backtest_gate import fee
+from backtest_gate import fee, maker_fee
 
 
 class PaperBroker:
@@ -16,9 +16,7 @@ class PaperBroker:
 
     def buy(self, side: str, qty: int, sig: dict) -> dict:
         price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
-        return {"price": price, "qty": qty,
-                "fee_total": round(fee(price) * qty, 4),
-                "ts": sig.get("ts") or 0.0}
+        return self.fill(price, qty, sig.get("ts") or 0.0)
 
     def sell(self, side: str, qty: int, sig: dict) -> dict:
         ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
@@ -26,9 +24,17 @@ class PaperBroker:
         # clamp at 0 so the sell price never lands above the ask.
         spread = max(0.0, sig.get("spread") or 0.0)
         price = max(0.01, round(ask - spread, 4))
+        return self.fill(price, qty, sig.get("ts") or 0.0)
+
+    def fill(self, price: float, qty: int, ts: float, maker: bool = False) -> dict:
+        """A fill at an explicit price -- buy()/sell() are always taker
+        (market-style, immediate); a resting limit order that actually
+        waited to be touched calls this directly with maker=True. See
+        backtest_gate.maker_fee for the maker-rate caveat."""
+        f = maker_fee if maker else fee
         return {"price": price, "qty": qty,
-                "fee_total": round(fee(price) * qty, 4),
-                "ts": sig.get("ts") or 0.0}
+                "fee_total": round(f(price) * qty, 4),
+                "ts": ts, "maker": maker}
 
 
 def round_trip_pnl(entry_fill: dict, exit_fill: dict) -> float:

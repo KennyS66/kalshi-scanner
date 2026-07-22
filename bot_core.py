@@ -53,6 +53,12 @@ DEFAULT_CONFIG = {
     "max_entry_momentum": 0.0, # skip flips with |momentum| above this — late,
                                # chase-y entries (0 = off)
     "max_entries_per_market": 0,  # cap re-entries per 15m market (0 = off)
+    "limit_entries": True,     # place entries as a resting limit at the
+                               # aggressive/patient tier (same as /trade's
+                               # panel) instead of paying the market ask;
+                               # chases to market if it doesn't fill in time
+    "limit_fill_timeout_secs": 30,  # how long a resting entry waits before
+                                     # chasing to a market (taker) fill
 }
 
 
@@ -175,6 +181,27 @@ def size_for_budget(budget: float, price: float) -> int:
     if cost <= 0:
         return 0
     return max(0, math.floor(budget / cost))
+
+
+# Same urgency thresholds the /trade dashboard's limit-order-targets panel
+# already shows the user (renderLimits in web.py) -- kept in one place in
+# spirit even though this is Python and that's JS, so the paper simulation
+# quotes the same tier a human would actually place.
+ENTRY_TIER_MIN_MINS = 5.0     # below this: skip the limit sim, market fill
+ENTRY_TIER_AGGRESSIVE_MINS = 9.0
+ENTRY_TIER_AGGRESSIVE_OFFSET_C = 1.0
+ENTRY_TIER_PATIENT_OFFSET_C = 3.0
+
+
+def entry_tier(mins_left: float):
+    """(tier_name, offset_dollars) for a resting limit entry, or None if
+    there's too little time left to wait for one (falls back to an
+    immediate market fill instead)."""
+    if mins_left is None or mins_left < ENTRY_TIER_MIN_MINS:
+        return None
+    if mins_left < ENTRY_TIER_AGGRESSIVE_MINS:
+        return "aggressive", ENTRY_TIER_AGGRESSIVE_OFFSET_C / 100
+    return "patient", ENTRY_TIER_PATIENT_OFFSET_C / 100
 
 
 def size_contracts(bankroll: float, price: float, risk_pct: float) -> int:
