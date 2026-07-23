@@ -281,7 +281,8 @@ class Bot:
         order never fills the instant it's placed by construction (its
         price is strictly below the current ask) -- see _process_pending
         for the fill/chase/cancel handling on later ticks."""
-        tier = entry_tier(sig.get("mins_left")) if self.cfg.get("limit_entries", True) else None
+        ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
+        tier = entry_tier(sig.get("mins_left"), ask) if self.cfg.get("limit_entries", True) else None
         if tier is None:
             self._enter(side, sig, ranges)
             return
@@ -290,7 +291,6 @@ class Bot:
         if pb is None:
             return
         pool, ps, budget = pb
-        ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         limit_price = max(0.01, round(ask - offset, 4))
         qty = size_for_budget(budget, limit_price)
         if qty < 1:

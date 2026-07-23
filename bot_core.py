@@ -190,14 +190,38 @@ def size_for_budget(budget: float, price: float) -> int:
 ENTRY_TIER_MIN_MINS = 5.0     # below this: skip the limit sim, market fill
 ENTRY_TIER_AGGRESSIVE_MINS = 9.0
 ENTRY_TIER_AGGRESSIVE_OFFSET_C = 1.0
-ENTRY_TIER_PATIENT_OFFSET_C = 3.0
+# 2026-07-23: was 3.0. A full-history replay grid (timeout x offset, see
+# commit) showed the wider patient gap chases *more* often than aggressive's
+# tighter one (68% vs 62%) -- 3c is too far for price to close in
+# limit_fill_timeout_secs, so most patient orders just pay the chase penalty
+# after a longer wait for nothing. Sweeping the offset alone (timeout fixed
+# at 30s, the sweep's own best value) found 1c strictly best across
+# 1/1.5/2/3/4/5c, monotonically worse as the offset widens. Keeping the
+# tier split (name + place-in-code) since it still gates a different mins_left
+# window and its own timeout semantics -- only the price is now the same as
+# aggressive's.
+ENTRY_TIER_PATIENT_OFFSET_C = 1.0
+
+# 2026-07-23: matched-signal replay found cheap-priced entries (ask < 35c --
+# same cheap/mid/rich split entry_bucket already uses) are hurt by the
+# resting-limit/chase mechanic specifically, not just weak entries in
+# general: under always-immediate fill, cheap was the *best* price band
+# (+0.03 avg net_pnl) and rich was the *worst* (-0.06 avg); under limit+chase
+# that flips -- cheap becomes the worst band (-0.31 avg) and rich becomes
+# the best (-0.09 avg). Skipping the limit attempt below this price keeps
+# the fill-realism gain where the data shows it helps without paying its
+# cost where the data shows it doesn't.
+ENTRY_TIER_SKIP_BELOW_PRICE_C = 35.0
 
 
-def entry_tier(mins_left: float):
+def entry_tier(mins_left: float, price: float = None):
     """(tier_name, offset_dollars) for a resting limit entry, or None if
-    there's too little time left to wait for one (falls back to an
-    immediate market fill instead)."""
+    there's too little time left to wait for one, or (when price is given)
+    the entry is too cheap for waiting to pay off -- either way falls back
+    to an immediate market fill instead."""
     if mins_left is None or mins_left < ENTRY_TIER_MIN_MINS:
+        return None
+    if price is not None and price * 100 < ENTRY_TIER_SKIP_BELOW_PRICE_C:
         return None
     if mins_left < ENTRY_TIER_AGGRESSIVE_MINS:
         return "aggressive", ENTRY_TIER_AGGRESSIVE_OFFSET_C / 100

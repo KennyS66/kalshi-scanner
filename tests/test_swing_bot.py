@@ -740,7 +740,7 @@ def test_flip_with_limit_entries_places_pending_not_immediate_fill(tmp_path, mon
     pend = bot.state["pending_entries"]["M1"]
     assert pend["side"] == "YES"
     assert pend["tier"] == "patient"
-    assert pend["limit_price"] == pytest.approx(0.52 - 0.03)   # yes_ask - patient offset
+    assert pend["limit_price"] == pytest.approx(0.52 - 0.01)   # yes_ask - patient offset
     events = _rows(tmp_path, EVENTS_FILE)
     assert any(e["action"] == "place" for e in events)
 
@@ -759,23 +759,41 @@ def test_flip_under_five_minutes_skips_the_limit_and_fills_immediately(tmp_path,
     assert bot.state["open_plays"]["M1"]["entry"]["price"] == 0.52  # market ask
 
 
+def test_flip_at_cheap_price_skips_the_limit_and_fills_immediately(tmp_path, monkeypatch):
+    # replay evidence: cheap entries (<35c) chase more and lose more when
+    # they do -- entry_tier's price gate routes them straight to market
+    # even with plenty of time left, same fallback path as the <5min case.
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0, price=0.30, yes_ask=0.30, no_ask=0.72),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0,
+             price=0.30, yes_ask=0.30, no_ask=0.72),               # plenty of time, cheap price
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending_entries"] == {}
+    assert "M1" in bot.state["open_plays"]
+    assert bot.state["open_plays"]["M1"]["entry"]["price"] == 0.30  # market ask
+
+
 def test_pending_entry_fills_at_limit_price_with_maker_fee(tmp_path, monkeypatch):
     from backtest_gate import maker_fee
     _limit_cfg(tmp_path)
     sigs = [
         _sig(ts=1000.0),
-        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),           # pending @ 0.49
-        _sig(whale_trend=3.0, momentum=5.0, ts=1010.0, yes_ask=0.49, mins_left=9.9),  # ask reaches limit
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),           # pending @ 0.51
+        _sig(whale_trend=3.0, momentum=5.0, ts=1010.0, yes_ask=0.51, mins_left=9.9),  # ask reaches limit
     ]
     bot = _mkbot(tmp_path, sigs, monkeypatch)
     for _ in sigs:
         bot.tick(now_ts=1000.0)
     assert bot.state["pending_entries"] == {}
     play = bot.state["open_plays"]["M1"]
-    assert play["entry"]["price"] == 0.49
+    assert play["entry"]["price"] == 0.51
     assert play["entry"]["maker"] is True
     assert play["entry"]["fee_total"] == pytest.approx(
-        maker_fee(0.49) * play["qty"], abs=0.001)
+        maker_fee(0.51) * play["qty"], abs=0.001)
     events = _rows(tmp_path, EVENTS_FILE)
     fills = [e for e in events if e["action"] == "enter"]
     assert any("limit filled" in e["reason"] for e in fills)
@@ -786,7 +804,7 @@ def test_pending_entry_chases_to_market_after_timeout(tmp_path, monkeypatch):
     _limit_cfg(tmp_path, limit_fill_timeout_secs=20)
     sigs = [
         _sig(ts=1000.0),
-        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.49, placed_ts=1005
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.51, placed_ts=1005
         # 25s later (> 20s timeout), ask never dropped to the limit
         _sig(whale_trend=3.0, momentum=5.0, ts=1030.0, yes_ask=0.55, mins_left=9.5),
     ]
@@ -807,7 +825,7 @@ def test_pending_entry_not_yet_due_stays_pending(tmp_path, monkeypatch):
     _limit_cfg(tmp_path, limit_fill_timeout_secs=60)
     sigs = [
         _sig(ts=1000.0),
-        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.49
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.51
         # only 10s later, ask hasn't reached the limit, timeout not elapsed
         _sig(whale_trend=3.0, momentum=5.0, ts=1015.0, yes_ask=0.55, mins_left=9.8),
     ]
@@ -878,7 +896,7 @@ def test_pending_entry_survives_same_ticker_askless_tick(tmp_path, monkeypatch):
     _limit_cfg(tmp_path)
     sigs = [
         _sig(ts=1000.0),
-        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.49
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending @ 0.51
         _sig(whale_trend=3.0, momentum=30.0, ts=1010.0, mins_left=9.9,
              yes_ask=None, no_ask=None),                                   # same ticker, no quote
         _sig(whale_trend=3.0, momentum=30.0, ts=1015.0, mins_left=9.8,

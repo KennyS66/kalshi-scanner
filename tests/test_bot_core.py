@@ -434,8 +434,16 @@ def test_entry_tier_thresholds():
     assert entry_tier(None) is None
     assert entry_tier(5.0) == ("aggressive", 0.01)               # boundary is inclusive
     assert entry_tier(8.9) == ("aggressive", 0.01)
-    assert entry_tier(9.0) == ("patient", 0.03)                  # boundary is inclusive
-    assert entry_tier(13.0) == ("patient", 0.03)
+    assert entry_tier(9.0) == ("patient", 0.01)                  # boundary is inclusive
+    assert entry_tier(13.0) == ("patient", 0.01)
+
+
+def test_entry_tier_skips_cheap_price():
+    # replay evidence: cheap entries (<35c) get hurt by waiting, not helped
+    assert entry_tier(10.0, price=0.34) is None
+    assert entry_tier(10.0, price=0.35) == ("patient", 0.01)     # boundary is inclusive
+    assert entry_tier(6.0, price=0.10) is None
+    assert entry_tier(10.0) == ("patient", 0.01)                 # price omitted -> no gate
 
 
 from backtest_gate import fee, maker_fee
