@@ -59,6 +59,28 @@ DEFAULT_CONFIG = {
                                # chases to market if it doesn't fill in time
     "limit_fill_timeout_secs": 30,  # how long a resting entry waits before
                                      # chasing to a market (taker) fill
+    "broker_mode": "manual",   # "manual": mode=live entries write a
+                                # live_signal event for a human to place by
+                                # hand (no order API call). "auto": places
+                                # real orders. Independent of `mode` --
+                                # only meaningful when mode=="live".
+    "live_qty": 1,              # flat contract count per auto/manual live
+                                 # entry -- NOT bot_core.trade_budget's
+                                 # %-of-pool formula, which was proven this
+                                 # session to size unreasonably large (up
+                                 # to 33 contracts) on a small real account
+    "live_cap_usd": 20.0,       # informational total-stake cap Kenny is
+                                 # running live with; not itself enforced
+                                 # here (live_hard_stop_usd is the actual
+                                 # enforced limit) -- kept alongside it so
+                                 # the two numbers can't drift apart when
+                                 # Kenny raises one
+    "live_hard_stop_usd": -8.0,        # real account PnL-since-test-start
+                                        # floor; auto entries blocked at or
+                                        # below this (see Bot._check_live_stop)
+    "live_daily_soft_stop_usd": -3.0,  # same, but resets daily (per-pool
+                                        # day_pnl-style), pauses new auto
+                                        # entries for the rest of that day
 }
 
 

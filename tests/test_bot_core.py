@@ -474,3 +474,11 @@ def test_session_gate_stats_requires_floor_and_positive_avg_independently():
     assert stats["weekday_day"] == {"n": 150, "net_avg": -0.05, "ok": False}
     assert stats["weekend_day"] == {"n": 40, "net_avg": 0.3, "ok": False}
     assert stats["weekend_night"] == {"n": 0, "net_avg": 0.0, "ok": False}
+
+
+def test_default_config_has_live_broker_mode_keys():
+    assert DEFAULT_CONFIG["broker_mode"] == "manual"
+    assert DEFAULT_CONFIG["live_qty"] == 1
+    assert DEFAULT_CONFIG["live_cap_usd"] == 20.0
+    assert DEFAULT_CONFIG["live_hard_stop_usd"] == -8.0
+    assert DEFAULT_CONFIG["live_daily_soft_stop_usd"] == -3.0
