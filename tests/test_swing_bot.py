@@ -685,6 +685,42 @@ def test_scale_out_qty_one_exits_full_at_target(tmp_path, monkeypatch):
     assert trades[0]["qty"] == 1
 
 
+def test_scale_out_odd_qty_fee_split_conserves_total(tmp_path, monkeypatch):
+    # qty=3 -> half=3//2=1, runner=2. The two legs' fees must sum back to
+    # the original entry fee exactly (entry["fee_total"] is decremented by
+    # subtraction, not recomputed independently, so this is a conservation
+    # check, not a rounding-leak hunt -- but the existing scale-out test
+    # only covers an even qty=4 split, so this is the first direct check
+    # that an odd split doesn't silently drop or double-count a fraction
+    # of a cent).
+    import json as _json
+    from backtest_gate import fee
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"scale_out": True, "min_edge_c": None, "paper_bankroll": 340.0,
+         "overnight_curfew": False, "weekend_curfew": False}))
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                 # enter x3 @ .52
+        _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.66, ts=1010.0),   # sell 64c -> scale half
+        _sig(whale_trend=3.5, momentum=20.0, yes_ask=0.74, ts=1015.0),   # sell 72c -> stretch
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert [t["exit_reason"] for t in trades] == ["target_half", "stretch"]
+    half, runner = trades
+    assert half["qty"] == 1 and runner["qty"] == 2
+    original_entry_fee = round(fee(0.52) * 3, 4)
+    entry_fee_half = round(original_entry_fee * 1 / 3, 4)
+    entry_fee_runner = round(original_entry_fee - entry_fee_half, 4)
+    assert half["fees"] == pytest.approx(entry_fee_half + fee(half["exit_price"]) * 1, abs=0.0001)
+    assert runner["fees"] == pytest.approx(entry_fee_runner + fee(runner["exit_price"]) * 2, abs=0.0001)
+    # the two legs' entry-side fee components alone must reconstruct the
+    # original entry fee to the cent -- the actual conservation guarantee.
+    assert entry_fee_half + entry_fee_runner == pytest.approx(original_entry_fee, abs=0.0001)
+
+
 def test_profit_lock_halts_on_giveback_and_halves_size(tmp_path, monkeypatch):
     import json as _json
     (tmp_path / "config.json").write_text(_json.dumps(
