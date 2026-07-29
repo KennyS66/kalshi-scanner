@@ -1,5 +1,6 @@
 import json
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -1130,6 +1131,55 @@ def test_live_stop_no_halt_above_the_line(tmp_path, monkeypatch):
 
 
 def test_live_stop_inactive_in_manual_mode(tmp_path, monkeypatch):
+    """live+manual is the literal combination named in the brief and the
+    plan's global constraint: a human reads the dashboard before placing
+    anything, so _check_live_stop must never touch the real balance API.
+
+    Uses a Mock + assert_not_called() rather than a side-effecting
+    exception: _check_live_stop wraps its balance call in a broad
+    `except BaseException: return`, so an exception raised by the
+    monkeypatched function to "prove" it was called would be silently
+    swallowed by that handler even if the guard were broken -- the test
+    would still pass with 'live_baseline_balance' not in bot.state, since
+    that's also the observable outcome when the call happens but fails.
+    assert_not_called() checks the fact of invocation directly and can't
+    be defeated that way."""
+    import json as _json
+    import bot_broker
+    ts_by_pool = {"weekday_day": 1784592000.0 + 14 * 3600,
+                  "weekday_night": 1784592000.0,
+                  "weekend_day": 1784419200.0 + 14 * 3600,
+                  "weekend_night": 1784419200.0}
+    trades = []
+    for pool, ts in ts_by_pool.items():
+        for _ in range(100):
+            trades.append({"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+                           "entry_sig": {"ts": ts}})
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "live_requested": True, "broker_mode": "manual",
+         "overnight_curfew": False, "weekend_curfew": False,
+         "live_hard_stop_usd": -8.0, "live_daily_soft_stop_usd": -3.0}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    mock_balance = Mock(side_effect=AssertionError("should not be called"))
+    monkeypatch.setattr(bot_broker, "_balance_dollars", mock_balance)
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    assert bot.broker.mode == "live" and bot.broker.broker_mode == "manual"
+    bot._check_live_stop()   # manual mode -- must be a no-op, must not call balance
+    mock_balance.assert_not_called()
+    assert "live_baseline_balance" not in bot.state
+
+
+def test_live_stop_inactive_in_paper_mode(tmp_path, monkeypatch):
+    """paper mode has no real balance to check, so _check_live_stop must
+    never call the balance API here either. Same Mock/assert_not_called
+    mechanism as the manual-mode case above, for the same reason: an
+    exception-based tripwire would be silently caught by
+    _check_live_stop's own `except BaseException: return` and prove
+    nothing about whether the guard actually fired."""
     import json as _json
     import bot_broker
     ts = 1784592000.0
@@ -1139,10 +1189,11 @@ def test_live_stop_inactive_in_manual_mode(tmp_path, monkeypatch):
         "\n".join(_json.dumps(t) for t in trades * 4))  # not actually unlocked, doesn't matter here
     (tmp_path / "config.json").write_text(_json.dumps(
         {"mode": "paper", "overnight_curfew": False, "weekend_curfew": False}))
-    monkeypatch.setattr(bot_broker, "_balance_dollars",
-                        lambda: (_ for _ in ()).throw(AssertionError("should not be called")))
+    mock_balance = Mock(side_effect=AssertionError("should not be called"))
+    monkeypatch.setattr(bot_broker, "_balance_dollars", mock_balance)
     bot = Bot(tmp_path, fetch_fn=lambda: None,
               offsets_file=tmp_path / "banner_offsets.json",
               loop_log=tmp_path / "loop_log.jsonl")
     bot._check_live_stop()   # paper mode -- must be a no-op, must not call balance
+    mock_balance.assert_not_called()
     assert "live_baseline_balance" not in bot.state
