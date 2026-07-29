@@ -121,10 +121,103 @@ def test_live_unlock_requires_100_and_positive_avg_in_every_session():
     assert not live_unlock_ok(_all_sessions_trades(), cfg_on, {})[0]  # no BOT_LIVE
 
 
-def test_live_broker_locked_raises():
-    import pytest
+def test_live_broker_manual_buy_emits_signal_not_order(tmp_path, monkeypatch):
+    import bot_broker
+    monkeypatch.setattr(bot_broker, "requests", None)  # would explode if called
+    cfg = {"live_requested": True, "broker_mode": "manual"}
+    env = {"BOT_LIVE": "1"}
+    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    fill = b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1000.0,
+                            "ticker": "T1", "mins_left": 10.0})
+    assert fill["price"] == 0.31
+    assert fill["qty"] == 1
+    assert fill["fee_total"] == 0.0   # nothing was actually filled
+    assert fill.get("signal_only") is True
+    rows = [_json.loads(l) for l in (tmp_path / "live_signals.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["side"] == "YES" and rows[0]["price"] == 0.31
+
+
+def test_live_broker_auto_buy_places_market_order(tmp_path, monkeypatch):
+    import bot_broker
+    import live_broker
+    cfg = {"live_requested": True, "broker_mode": "auto"}
+    env = {"BOT_LIVE": "1"}
+    calls = []
+    monkeypatch.setattr(live_broker, "place_order", lambda *a, **k: calls.append((a, k)) or
+                        {"order_id": "abc", "status": "executed",
+                         "yes_price": 31, "no_price": 69})
+    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    fill = b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1000.0,
+                            "ticker": "T1", "mins_left": 10.0})
+    assert fill["price"] == 0.31
+    assert fill["qty"] == 1
+    assert not (tmp_path / "live_signals.jsonl").exists()  # no signal in auto mode
+    assert calls[0][0] == ("yes", "buy", "T1", 1, 0.31, "market")
+
+
+def test_live_broker_auto_buy_error_emits_signal_with_error_and_reraises(tmp_path, monkeypatch):
+    import bot_broker
+    import live_broker
+    cfg = {"live_requested": True, "broker_mode": "auto"}
+    env = {"BOT_LIVE": "1"}
+    def _boom(*a, **k):
+        raise RuntimeError("400 insufficient balance")
+    monkeypatch.setattr(live_broker, "place_order", _boom)
+    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="insufficient balance"):
+        b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1000.0,
+                         "ticker": "T1", "mins_left": 10.0})
+    rows = [_json.loads(l) for l in (tmp_path / "live_signals.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and "insufficient balance" in rows[0]["error"]
+
+
+def test_live_broker_still_locked_when_unlock_fails():
     with pytest.raises(RuntimeError, match="live trading locked"):
-        LiveBroker(_session_trades("weekday_day", 3, 0.01), {"live_requested": True}, {})
+        bot_broker.LiveBroker(_session_trades("weekday_day", 3, 0.01),
+                              {"live_requested": True}, {})
+
+
+def test_live_broker_fill_with_order_id_never_places_a_second_real_order(tmp_path, monkeypatch):
+    """The bug this guards: swing_bot._place_entry places the REAL resting
+    limit order up front to get an order_id to poll. Once _process_pending
+    confirms it executed, it calls fill(..., maker=True) to finalize the
+    accounting -- fill() must NOT place a second real order for a position
+    that's already open. Passing order_id is exactly how the caller tells
+    fill() "this already happened, just do the bookkeeping." """
+    import bot_broker
+    import live_broker
+    cfg = {"live_requested": True, "broker_mode": "auto"}
+    env = {"BOT_LIVE": "1"}
+    monkeypatch.setattr(live_broker, "place_order", lambda *a, **k:
+                        (_ for _ in ()).throw(
+                            AssertionError("fill() must not place a new order "
+                                           "when order_id is already known")))
+    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    fill = b.fill(0.49, 3, 1000.0, maker=True,
+                 sig={"ticker": "T1", "side": "YES"}, order_id="already-placed-123")
+    assert fill["price"] == 0.49
+    assert fill["qty"] == 3
+    assert fill["order_id"] == "already-placed-123"
+    assert fill["fee_total"] > 0   # maker fee still computed
+
+
+def test_live_broker_fill_without_order_id_places_a_new_order(tmp_path, monkeypatch):
+    """The complement of the guard above: the chase-to-market path cancels
+    the original order first, so fill() is called with order_id=None and
+    MUST place a genuinely new order."""
+    import bot_broker
+    import live_broker
+    cfg = {"live_requested": True, "broker_mode": "auto"}
+    env = {"BOT_LIVE": "1"}
+    calls = []
+    monkeypatch.setattr(live_broker, "place_order", lambda *a, **k:
+                        calls.append(a) or {"order_id": "new-order-456",
+                                            "yes_price": 55, "no_price": 45})
+    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    fill = b.fill(0.55, 2, 1000.0, maker=False,
+                 sig={"ticker": "T1", "side": "YES"}, order_id=None)
+    assert len(calls) == 1
+    assert fill["order_id"] == "new-order-456"
 
 
 def test_fallback_bankroll_is_500():

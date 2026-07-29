@@ -5,6 +5,7 @@ Kalshi fee (backtest_gate.fee) charged per contract on both sides. If paper
 wins under these costs, live has a real shot.
 """
 import os
+import requests
 from cryptography.hazmat.primitives import serialization
 
 import account
@@ -116,17 +117,93 @@ def live_unlock_ok(trades: list, cfg: dict, env: dict):
 
 
 class LiveBroker:
-    """Locked stub — order placement intentionally unimplemented (spec v1)."""
+    """Real order placement, gated by live_unlock_ok. broker_mode controls
+    what buy/sell/fill actually do once unlocked:
+      "manual" (default): emit a live_signal event, no order API call.
+      "auto": place a real order via live_broker.py.
+    See the 2026-07-29 design spec for the full mode matrix."""
     mode = "live"
 
-    def __init__(self, trades: list, cfg: dict, env: dict = None):
+    def __init__(self, trades: list, cfg: dict, env: dict = None, bot_dir=None):
         ok, reason = live_unlock_ok(trades, cfg, env if env is not None else dict(os.environ))
         if not ok:
             raise RuntimeError(f"live trading locked: {reason}")
-        raise RuntimeError("live trading locked: order code not shipped in v1")
+        self.cfg = cfg
+        self.bot_dir = bot_dir
+        self.broker_mode = cfg.get("broker_mode", "manual")
 
-    def buy(self, *a, **k):
-        raise RuntimeError("live trading locked")
+    def _pool_of(self, sig: dict) -> str:
+        from bot_core import session_tag
+        return session_tag(sig.get("ts"))
 
-    def sell(self, *a, **k):
-        raise RuntimeError("live trading locked")
+    def _signal_fill(self, side, qty, price, sig, tier="market") -> dict:
+        emit_live_signal(self.bot_dir, sig.get("ticker"), side, qty, price,
+                         tier, self._pool_of(sig))
+        return {"price": price, "qty": qty, "fee_total": 0.0,
+                "ts": sig.get("ts") or 0.0, "maker": False, "signal_only": True}
+
+    def _auto_fill(self, side, action, qty, price, sig, order_type, tier) -> dict:
+        import live_broker
+        kalshi_side = "yes" if side == "YES" else "no"
+        try:
+            order = live_broker.place_order(kalshi_side, action, sig.get("ticker"),
+                                            qty, price, order_type)
+        except Exception as e:
+            emit_live_signal(self.bot_dir, sig.get("ticker"), side, qty, price,
+                             tier, self._pool_of(sig), error=str(e))
+            raise
+        fee_price_key = "yes_price" if kalshi_side == "yes" else "no_price"
+        fill_price = (order.get(fee_price_key) or round(price * 100)) / 100.0
+        maker = order_type == "limit"
+        from backtest_gate import fee as taker_fee, maker_fee
+        f = maker_fee if maker else taker_fee
+        return {"price": fill_price, "qty": qty,
+                "fee_total": round(f(fill_price) * qty, 4),
+                "ts": sig.get("ts") or 0.0, "maker": maker,
+                "order_id": order.get("order_id")}
+
+    def buy(self, side: str, qty: int, sig: dict) -> dict:
+        price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
+        if self.broker_mode == "manual":
+            return self._signal_fill(side, qty, price, sig)
+        return self._auto_fill(side, "buy", qty, price, sig, "market", "market")
+
+    def sell(self, side: str, qty: int, sig: dict) -> dict:
+        ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
+        spread = max(0.0, sig.get("spread") or 0.0)
+        price = max(0.01, round(ask - spread, 4))
+        if self.broker_mode == "manual":
+            return self._signal_fill(side, qty, price, sig)
+        return self._auto_fill(side, "sell", qty, price, sig, "market", "market")
+
+    def fill(self, price: float, qty: int, ts: float, maker: bool = False,
+             sig: dict = None, order_id: str = None) -> dict:
+        """Explicit-price fill -- the resting-limit-order path
+        (swing_bot._process_pending calls this the same way it calls
+        PaperBroker.fill). sig is required here (unlike PaperBroker) to
+        resolve the ticker/pool for emit_live_signal / place_order.
+
+        order_id matters only in auto mode: swing_bot._place_entry already
+        places the REAL resting limit order up front (to get an order_id to
+        poll) -- by the time _process_pending confirms it executed and
+        calls fill(..., maker=True) to finalize the accounting, the order
+        has ALREADY happened. Without this parameter, fill() would call
+        _auto_fill -> place_order again and place a SECOND real order for
+        the same intended position. When order_id is provided, skip
+        placement entirely and just build the fill dict from the already-
+        known execution price. order_id is None for a genuinely new
+        placement (the chase-to-market path, after the original resting
+        order was cancelled, and plain buy()/sell() calls)."""
+        sig = sig or {}
+        side = sig.get("side", "YES")
+        tier = "patient" if maker else "market"
+        if self.broker_mode == "manual":
+            return self._signal_fill(side, qty, price, sig, tier=tier)
+        if order_id is not None:
+            from backtest_gate import fee as taker_fee, maker_fee
+            f = maker_fee if maker else taker_fee
+            return {"price": price, "qty": qty,
+                    "fee_total": round(f(price) * qty, 4),
+                    "ts": ts, "maker": maker, "order_id": order_id}
+        order_type = "limit" if maker else "market"
+        return self._auto_fill(side, "buy", qty, price, sig, order_type, tier)
