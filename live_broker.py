@@ -28,14 +28,13 @@ def _load_private_key(path):
         return serialization.load_pem_private_key(f.read(), password=None)
 
 
-def _sign(pk, method: str, full_path: str):
+def _sign(key_id: str, pk, method: str, full_path: str):
     ts = str(int(time.time() * 1000))
     sig = pk.sign(f"{ts}{method}{full_path}".encode(),
                   padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
                               salt_length=padding.PSS.MAX_LENGTH),
                   hashes.SHA256())
-    key_id, kp_path = account._load_env()
-    return key_id, {
+    return {
         "KALSHI-ACCESS-KEY": key_id,
         "KALSHI-ACCESS-TIMESTAMP": ts,
         "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
@@ -45,8 +44,7 @@ def _sign(pk, method: str, full_path: str):
 def _headers(method: str, full_path: str):
     key_id, kp_path = account._load_env()
     pk = _load_private_key(kp_path)
-    _, headers = _sign(pk, method, full_path)
-    return headers
+    return _sign(key_id, pk, method, full_path)
 
 
 def place_order(side: str, action: str, ticker: str, qty: int,
