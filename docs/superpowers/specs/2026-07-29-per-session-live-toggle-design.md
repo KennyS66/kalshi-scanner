@@ -51,19 +51,30 @@ unlock: with only weekday_night eligible, the bot must still start
 successfully in live mode and simply decline weekend_day/weekend_night/
 weekday_day entries individually, not refuse to run at all.
 
+**Resolved during planning (confirmed with Kenny): the trade-history
+gate (100 settled + positive net avg) is checked exactly ONCE, at the
+moment a session is toggled live via the dashboard — never re-checked
+afterward.** A session that regresses after being enabled (a losing
+stretch drops its net avg below zero) stays live until manually disabled
+or until it hits its own hard/daily-soft stop (the existing mechanism from
+the manual/auto broker mode feature) — it does not silently re-lock itself
+mid-run. This means neither of the two functions below needs `trades` or
+`session_gate_stats` at all; both only ever look at
+`live_sessions_requested` + `BOT_LIVE`. `session_gate_stats(trades)` is
+computed in exactly one place for this whole feature: the
+`POST /api/bot/live_session` "enable" handler (see Backend, below).
+
 - **`live_capability_ok(cfg, env)`** (new, construction-time, replaces
   today's `live_unlock_ok` call inside `LiveBroker.__init__`): a coarse,
-  cheap check — `BOT_LIVE=1` is set, and at least one session is both
-  gate-passing (`session_gate_stats`) and present in
-  `cfg.get("live_sessions_requested", [])`. If nothing is live-eligible at
-  all, constructing a `LiveBroker` is pointless (identical to today's
-  behavior in spirit — refuse to start in live mode with nothing unlocked
-  — just no longer requiring ALL 4 sessions to be that "something").
-  Returns `(ok, reason)`, same shape as today.
-- **`live_unlock_ok(trades, cfg, env, session)`** (existing name kept,
-  `session` becomes a required parameter, not optional): the per-entry
-  check. Checks ONLY that specific session's own 100-trades/positive-net-avg
-  bar (via `session_gate_stats`), AND that it appears in
+  cheap check — `BOT_LIVE=1` is set, and `cfg.get("live_sessions_requested", [])`
+  is non-empty. If nothing has ever been toggled live, constructing a
+  `LiveBroker` is pointless (identical to today's behavior in spirit —
+  refuse to start in live mode with nothing unlocked — just no longer
+  requiring ALL 4 sessions to be that "something"). Returns `(ok, reason)`,
+  same shape as today. Takes no `trades` parameter.
+- **`live_unlock_ok(cfg, env, session)`** (existing name kept; drops the
+  `trades` parameter it used to take, gains a required `session`
+  parameter): the per-entry check. Checks ONLY that `session` appears in
   `cfg.get("live_sessions_requested", [])`, AND `BOT_LIVE=1`. Other
   sessions' state is irrelevant — this is the actual behavior change from
   "all 4 or nothing" to "each on its own." Called from `LiveBroker.buy`/
@@ -140,24 +151,27 @@ as long as `live_capability_ok(cfg, env)` passes (see Gate change above).
 The per-session resolution happens inside `buy`/`sell`/`fill` themselves,
 each deriving `session = bot_core.session_tag(sig.get("ts"))` (the same
 helper used everywhere else in the codebase for this) from the entry's own
-signal and checking `live_unlock_ok(trades, cfg, env, session)` before
+signal and checking `live_unlock_ok(cfg, env, session)` before
 proceeding — so a weekday_night entry is evaluated against weekday_night's
 own state and a weekend_day entry against weekend_day's on that same
 already-constructed broker instance, never blended.
 
 ## Testing
 
-- `live_unlock_ok(trades, cfg, env, session="X")` unit tests: a session in
-  `live_sessions_requested` with a passing gate unlocks; the same session
-  NOT in the list stays locked even with a passing gate; a session in the
-  list but with a failing gate stays locked; one session's state never
-  leaks into another's check (e.g. weekend_night failing never blocks a
-  weekday_night check).
-- `live_capability_ok(cfg, env)` unit tests: succeeds when at least one
-  session is both gate-passing and requested; fails when
-  `live_sessions_requested` is empty even if a session's own gate passes
-  (never requested); fails when `BOT_LIVE` isn't set even with a
-  requested, gate-passing session.
+- `live_unlock_ok(cfg, env, session="X")` unit tests: a session in
+  `live_sessions_requested` with `BOT_LIVE=1` unlocks; the same session
+  NOT in the list stays locked even with `BOT_LIVE=1`; unlocked session
+  still locked without `BOT_LIVE=1`; one session's presence/absence in the
+  list never affects another session's check (e.g. weekend_night absent
+  never blocks a weekday_night check); a session that was toggled live
+  stays unlocked even if a trade-history recomputation would now show it
+  failing the 100-trades/positive-net-avg bar (the no-auto-disable-on-
+  regression guarantee — this is the test that would catch an
+  accidental re-introduction of a trades-based re-check).
+- `live_capability_ok(cfg, env)` unit tests: succeeds when
+  `live_sessions_requested` is non-empty and `BOT_LIVE=1`; fails when the
+  list is empty even with `BOT_LIVE=1`; fails when `BOT_LIVE` isn't set
+  even with a non-empty list.
 - `LiveBroker` construction-time behavior: constructs successfully in live
   mode as long as `live_capability_ok` passes, REGARDLESS of how many
   individual sessions are actually eligible (one is enough) — this is the
