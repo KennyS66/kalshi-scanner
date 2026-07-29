@@ -536,11 +536,29 @@ class Bot:
             self._exit(ticker, play, play["last_sig"], reason)
         # A pending (unfilled) entry never risked capital, so it's a plain
         # cancel, not an _exit -- but it still must not be allowed to fill
-        # later into a pool that was just halted/flattened.
+        # later into a pool that was just halted/flattened. In live+auto
+        # mode a pending entry carries a real resting order on the exchange
+        # (order_id set by _place_entry) -- dropping it from local state
+        # without cancelling it would leave that order live on Kalshi's
+        # book, able to fill later into a position nothing here is
+        # tracking. Mirror _process_pending's cancel_order handling: a
+        # cancel failure halts that entry's own pool (not the others) and
+        # the loop moves on to clean up the rest.
         for ticker in list(self.state["pending_entries"]):
             pend = self.state["pending_entries"][ticker]
             if pool is not None and _play_pool(pend) != pool:
                 continue
+            if pend.get("order_id"):
+                import live_broker
+                try:
+                    live_broker.cancel_order(pend["order_id"])
+                except Exception as e:
+                    ps = self.state["pools"][pend["pool"]]
+                    ps["halted"] = True
+                    del self.state["pending_entries"][ticker]
+                    self._event("halt", f"[{pend['pool']}] order_error: {e} -- "
+                                f"auto entries blocked until manually resumed", ticker)
+                    continue
             del self.state["pending_entries"][ticker]
             self._event("cancel", f"{reason}: pending entry cancelled", ticker)
 

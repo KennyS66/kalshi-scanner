@@ -1365,3 +1365,84 @@ def test_paper_mode_sell_still_works_unaffected(tmp_path, monkeypatch):
     assert "sell_error_ts" not in play              # guard field never touched
     trades = _rows(tmp_path, TRADES_FILE)
     assert len(trades) == 1 and trades[0]["exit_reason"] == "target"
+
+
+# ── flatten must not orphan real resting orders in auto mode ───────────
+
+def test_flatten_paper_pending_entry_never_calls_live_broker(tmp_path, monkeypatch):
+    """Regression guard: a paper/manual pending entry (no order_id) must
+    behave exactly as before this fix -- plain del + cancel event, with
+    live_broker.cancel_order never even called. Complements
+    test_flatten_cancels_pending_entries_in_that_pool_only, which checks
+    this path's outcome but not the absence of a live_broker call."""
+    import live_broker
+    _limit_cfg(tmp_path)
+    sigs = [
+        _sig(ts=1000.0),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0, mins_left=10.0),  # pending on M1
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" in bot.state["pending_entries"]
+    assert "order_id" not in bot.state["pending_entries"]["M1"]
+    mock_cancel = Mock()
+    monkeypatch.setattr(live_broker, "cancel_order", mock_cancel)
+    bot._flatten("flatten")
+    mock_cancel.assert_not_called()
+    assert bot.state["pending_entries"] == {}
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "cancel" and "flatten" in e["reason"] for e in events)
+
+
+def test_flatten_cancels_live_resting_order_for_pending_entry(tmp_path, monkeypatch):
+    """The bug this guards: in live+auto mode a pending entry carries a
+    real resting limit order on Kalshi (order_id set by _place_entry).
+    _flatten must cancel that order on the exchange before dropping the
+    entry from local state -- otherwise it stays live on the book and can
+    fill later into a position nothing here is tracking."""
+    import live_broker
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 19.50])
+    bot.state["pending_entries"]["M1"] = {
+        "side": "YES", "qty": 1, "limit_price": 0.45, "tier": "patient",
+        "placed_ts": 1000.0, "ranges": None, "entry_sig": {"ts": 1000.0},
+        "pool": "weekday_night", "order_id": "ord-1"}
+    mock_cancel = Mock()
+    monkeypatch.setattr(live_broker, "cancel_order", mock_cancel)
+    bot._flatten("flatten")
+    mock_cancel.assert_called_once_with("ord-1")
+    assert bot.state["pending_entries"] == {}
+    assert bot.state["pools"]["weekday_night"]["halted"] is False   # cancel ok, no halt
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "cancel" and "flatten" in e["reason"] for e in events)
+
+
+def test_flatten_halts_pool_on_cancel_failure_but_still_processes_other_entries(tmp_path, monkeypatch):
+    """A failed cancel must not be silently swallowed -- halt that entry's
+    pool, same as the order_error pattern used elsewhere -- and must not
+    abort cleanup of the rest of the flatten loop. Two pending entries in
+    two different pools, both raising on cancel: both must end up halted
+    and removed, and cancel_order must be attempted for both."""
+    import live_broker
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 19.50])
+    bot.state["pending_entries"]["M1"] = {
+        "side": "YES", "qty": 1, "limit_price": 0.45, "tier": "patient",
+        "placed_ts": 1000.0, "ranges": None, "entry_sig": {"ts": 1000.0},
+        "pool": "weekday_night", "order_id": "ord-1"}
+    bot.state["pending_entries"]["M2"] = {
+        "side": "YES", "qty": 1, "limit_price": 0.45, "tier": "patient",
+        "placed_ts": 1000.0, "ranges": None, "entry_sig": {"ts": 1000.0},
+        "pool": "weekday_day", "order_id": "ord-2"}
+
+    def _boom(order_id):
+        raise RuntimeError("500 gateway timeout")
+    mock_cancel = Mock(side_effect=_boom)
+    monkeypatch.setattr(live_broker, "cancel_order", mock_cancel)
+    bot._flatten("flatten")   # must not raise out of the caller
+    assert mock_cancel.call_count == 2
+    assert bot.state["pending_entries"] == {}
+    assert bot.state["pools"]["weekday_night"]["halted"] is True
+    assert bot.state["pools"]["weekday_day"]["halted"] is True
+    events = _rows(tmp_path, EVENTS_FILE)
+    halt_events = [e for e in events if e["action"] == "halt" and "order_error" in e["reason"]]
+    assert len(halt_events) == 2
