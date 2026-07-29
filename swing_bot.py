@@ -573,6 +573,41 @@ class Bot:
                 ps.pop("loss_capped", None)
                 self._event("resume", f"[{p}] max-loss cap released (config raised)")
 
+    def _check_live_stop(self):
+        """Code-enforced hard/daily-soft dollar stop against the REAL
+        account balance -- only meaningful in live+auto mode, since manual
+        mode always has a human reading the dashboard before placing
+        anything, and paper mode has no real balance to check. Halts every
+        pool (not just one) since this reads one account-wide balance, not
+        a per-pool P&L -- unlike _check_day_stop/_check_max_loss, which are
+        genuinely per-pool because paper's bankroll is split 4 ways."""
+        if not (self.broker.mode == "live" and self.broker.broker_mode == "auto"):
+            return
+        from bot_broker import _balance_dollars
+        try:
+            balance = _balance_dollars()
+        except BaseException:
+            return   # transient API failure -- try again next tick, don't halt on a blip
+        if "live_baseline_balance" not in self.state:
+            self.state["live_baseline_balance"] = balance
+            return
+        pnl = round(balance - self.state["live_baseline_balance"], 4)
+        hard = self.cfg.get("live_hard_stop_usd", -8.0)
+        daily = self.cfg.get("live_daily_soft_stop_usd", -3.0)
+        already_halted = all(p.get("halted") for p in self.state["pools"].values())
+        if pnl <= hard and not already_halted:
+            for p in self.state["pools"].values():
+                p["halted"] = True
+            self._flatten("live_hard_stop")
+            self._event("halt", f"live_hard_stop: pnl {pnl:+.2f} <= {hard:.2f} "
+                        f"vs baseline {self.state['live_baseline_balance']:.2f}")
+        elif pnl <= daily and not already_halted:
+            for p in self.state["pools"].values():
+                p["halted"] = True
+            self._flatten("live_daily_soft_stop")
+            self._event("halt", f"live_daily_soft_stop: pnl {pnl:+.2f} <= {daily:.2f} "
+                        f"vs baseline {self.state['live_baseline_balance']:.2f}")
+
     # ── main tick ─────────────────────────────────────────────────────
     def tick(self, now_ts=None):
         now_ts = now_ts if now_ts is not None else time.time()
@@ -586,6 +621,7 @@ class Bot:
         self._check_day_stop()
         self._check_profit_lock()
         self._check_max_loss()
+        self._check_live_stop()
 
         sig = self.fetch()
         if sig is None:

@@ -1075,3 +1075,74 @@ def test_process_pending_polls_real_order_status_in_auto_mode(tmp_path, monkeypa
     assert "M1" not in bot.state["pending_entries"]
     assert "M1" in bot.state["open_plays"]
     assert bot.state["open_plays"]["M1"]["entry"]["price"] == 0.49
+
+
+def _live_auto_bot(tmp_path, monkeypatch, balance_sequence):
+    import json as _json
+    import bot_broker
+    ts_by_pool = {"weekday_day": 1784592000.0 + 14 * 3600,
+                  "weekday_night": 1784592000.0,
+                  "weekend_day": 1784419200.0 + 14 * 3600,
+                  "weekend_night": 1784419200.0}
+    trades = []
+    for pool, ts in ts_by_pool.items():
+        for _ in range(100):
+            trades.append({"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+                           "entry_sig": {"ts": ts}})
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+         "overnight_curfew": False, "weekend_curfew": False,
+         "live_hard_stop_usd": -8.0, "live_daily_soft_stop_usd": -3.0}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    it = iter(balance_sequence)
+    monkeypatch.setattr(bot_broker, "_balance_dollars", lambda: next(it))
+    return Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+
+
+def test_live_stop_baseline_set_on_first_check_then_not_overwritten(tmp_path, monkeypatch):
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 19.50, 19.00])
+    bot._check_live_stop()
+    assert bot.state["live_baseline_balance"] == 20.02
+    bot._check_live_stop()
+    assert bot.state["live_baseline_balance"] == 20.02   # not re-baselined
+
+
+def test_live_stop_halts_all_pools_at_hard_stop(tmp_path, monkeypatch):
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 12.00])
+    bot._check_live_stop()   # baseline = 20.02
+    bot._check_live_stop()   # 12.00 - 20.02 = -8.02 <= -8.0 hard stop
+    for p in bot.state["pools"].values():
+        assert p["halted"] is True
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "halt" and "live_hard_stop" in e["reason"] for e in events)
+
+
+def test_live_stop_no_halt_above_the_line(tmp_path, monkeypatch):
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 17.50])
+    bot._check_live_stop()
+    bot._check_live_stop()   # 17.50 - 20.02 = -2.52, above both stops
+    for p in bot.state["pools"].values():
+        assert p["halted"] is False
+
+
+def test_live_stop_inactive_in_manual_mode(tmp_path, monkeypatch):
+    import json as _json
+    import bot_broker
+    ts = 1784592000.0
+    trades = [{"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+              "entry_sig": {"ts": ts}} for _ in range(100)]
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades * 4))  # not actually unlocked, doesn't matter here
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "paper", "overnight_curfew": False, "weekend_curfew": False}))
+    monkeypatch.setattr(bot_broker, "_balance_dollars",
+                        lambda: (_ for _ in ()).throw(AssertionError("should not be called")))
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    bot._check_live_stop()   # paper mode -- must be a no-op, must not call balance
+    assert "live_baseline_balance" not in bot.state
