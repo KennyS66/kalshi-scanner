@@ -116,13 +116,19 @@ def test_status_payload_by_day_and_gate_split(tmp_path):
     _seed(tmp_path)   # 4 trades, exit_ts 1..4 (1970-01-01, a Thursday)
     p = bot_status_payload(tmp_path)
     assert p["stats"]["by_day"] == {"1970-01-01": 0.2}
-    assert p["gate"]["weekday"] == 4
-    assert p["gate"]["weekend"] == 0
     # entry_ts=0 (trade i=0) is falsy -> session_tag returns "unknown" and is
     # dropped from the per-session breakdown, same edge case pool_by_date_stats
-    # already has; i=1,2,3 all land in weekday_night (epoch hour 0 < CURFEW_END_HOUR).
-    assert p["gate"]["sessions"] == {"weekday_day": 0, "weekday_night": 3,
-                                      "weekend_day": 0, "weekend_night": 0}
+    # already has; i=1,2,3 all land in weekday_night (epoch hour 0 < CURFEW_END_HOUR)
+    # with net_pnls 0.5, -0.4, 0.5 -> n=3, net_avg=0.2, ok=False (n<100).
+    # Per-session only (bot_core.session_gate_stats) -- no weekday/weekend
+    # combined total anymore, since that's not what the actual live-unlock
+    # gate (bot_broker.live_unlock_ok) requires.
+    assert p["gate"]["sessions"] == {
+        "weekday_day":   {"n": 0, "net_avg": 0.0, "ok": False},
+        "weekday_night": {"n": 3, "net_avg": 0.2, "ok": False},
+        "weekend_day":   {"n": 0, "net_avg": 0.0, "ok": False},
+        "weekend_night": {"n": 0, "net_avg": 0.0, "ok": False},
+    }
 
 
 def test_status_payload_by_session(tmp_path):

@@ -76,24 +76,15 @@ def live_unlock_ok(trades: list, cfg: dict, env: dict):
     was previously exit_ts-keyed and weekday/weekend-only; both changed
     together since the finer split needs the finer (entry-based) tag.
     Returns (ok, reason)."""
-    from bot_core import session_tag, POOL_NAMES
-    closed = [t for t in trades if t.get("status") == "closed"
-              and t.get("net_pnl") is not None]
-    by_session = {p: [] for p in POOL_NAMES}
-    for t in closed:
-        sig = dict(t.get("entry_sig") or {})
-        sig.setdefault("ts", t.get("entry_ts"))
-        tag = session_tag(sig.get("ts"))
-        if tag in by_session:
-            by_session[tag].append(t["net_pnl"])
+    from bot_core import POOL_NAMES, session_gate_stats
+    stats = session_gate_stats(trades)
     short = []
     for p in POOL_NAMES:
-        pnls = by_session[p]
-        n = len(pnls)
-        if n < 100:
-            short.append(f"{p} {n}/100")
-        elif sum(pnls) / n <= 0:
-            short.append(f"{p} net avg {sum(pnls) / n:+.4f} <= 0")
+        st = stats[p]
+        if st["n"] < 100:
+            short.append(f"{p} {st['n']}/100")
+        elif st["net_avg"] <= 0:
+            short.append(f"{p} net avg {st['net_avg']:+.4f} <= 0")
     if short:
         return False, "not proven: " + "; ".join(short)
     if not cfg.get("live_requested"):

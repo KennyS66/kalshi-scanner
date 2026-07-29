@@ -1434,23 +1434,14 @@ async def api_crypto_candles(mins: int = 15, hours: int = 8) -> JSONResponse:
 
 
 def _gate_split(trades: list) -> dict:
-    """Settled counts by tape regime for the dual live-unlock gate (100
-    weekday + 100 weekend, the actual unlock rule — unchanged), plus a
-    4-way session breakdown for display alongside it."""
-    from bot_core import session_tag
-    closed = [t for t in trades if t.get("status") == "closed"
-              and t.get("net_pnl") is not None]
-    wd = sum(1 for t in closed
-             if time.gmtime(t.get("exit_ts") or 0).tm_wday < 5)
-    sessions = {"weekday_day": 0, "weekday_night": 0,
-                "weekend_day": 0, "weekend_night": 0}
-    for t in closed:
-        sig = dict(t.get("entry_sig") or {})
-        sig.setdefault("ts", t.get("entry_ts"))
-        tag = session_tag(sig.get("ts"))
-        if tag in sessions:  # "unknown" (no ts at all) is dropped, not counted
-            sessions[tag] += 1
-    return {"weekday": wd, "weekend": len(closed) - wd, "sessions": sessions}
+    """Per-session live-unlock gate stats for display -- same
+    bot_core.session_gate_stats bot_broker.live_unlock_ok itself gates on,
+    so this can't go stale relative to the actual unlock rule again (it
+    previously duplicated the aggregation as a 100-weekday + 100-weekend
+    COMBINED total, a materially easier bar than the real per-session-
+    independent one adopted 2026-07-21 -- see dual-100-trade-gate memory)."""
+    from bot_core import session_gate_stats
+    return {"sessions": session_gate_stats(trades)}
 
 
 def bot_control_write(bot_dir, cmd: str) -> int:
@@ -1535,6 +1526,59 @@ async def fills_toggle() -> JSONResponse:
     with _account_lock:
         _account_cache["fills_enabled"] = _fills_enabled
     return JSONResponse({"fills_enabled": _fills_enabled})
+
+
+# 2026-07-28: Kenny approved a $20 manual sample-live-test on weekday_night
+# only (see dual-100-trade-gate / trading-account-setup memory) -- balance
+# confirmed $20.02 at approval time, no open positions. PnL is measured as
+# balance-since-start rather than summing fills, since the account fills
+# poller only keeps the most recent 20 (portfolio/fills?limit=20) and older
+# ones roll off well before the test's 30-40 fill target; balance is the one
+# number that can't drift out from under a rolling window.
+LIVE_TEST_START_TS = 1785301930.0
+LIVE_TEST_START_BALANCE = 20.02
+LIVE_TEST_HARD_STOP = -8.0
+LIVE_TEST_DAILY_SOFT_STOP = -3.0
+
+
+@app.get("/api/live_test")
+async def api_live_test() -> JSONResponse:
+    import datetime as _dt
+    with _account_lock:
+        cache = dict(_account_cache)
+    bal_raw = cache.get("balance")
+    try:
+        balance = float(bal_raw) if bal_raw is not None else None
+    except (TypeError, ValueError):
+        balance = None
+    pnl = round(balance - LIVE_TEST_START_BALANCE, 4) if balance is not None else None
+
+    fills = cache.get("fills") or []
+    since_start = []
+    for f in fills:
+        ts = f.get("ts")
+        try:
+            f_ts = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if f_ts >= LIVE_TEST_START_TS:
+            since_start.append(f)
+    since_start.sort(key=lambda f: f.get("ts") or "")
+
+    status = "no_data" if balance is None else \
+        "hard_stop_hit" if pnl <= LIVE_TEST_HARD_STOP else "active"
+
+    return JSONResponse({
+        "start_ts": LIVE_TEST_START_TS,
+        "start_balance": LIVE_TEST_START_BALANCE,
+        "hard_stop": LIVE_TEST_HARD_STOP,
+        "daily_soft_stop": LIVE_TEST_DAILY_SOFT_STOP,
+        "balance": balance,
+        "pnl": pnl,
+        "fills_since_start": since_start,
+        "status": status,
+        "error": cache.get("error"),
+    })
 
 
 _TRADE_HTML = r"""<!doctype html>

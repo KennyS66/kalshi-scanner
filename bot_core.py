@@ -423,6 +423,35 @@ def session_tag(ts) -> str:
 
 POOL_NAMES = ("weekday_day", "weekday_night", "weekend_day", "weekend_night")
 
+LIVE_UNLOCK_FLOOR = 100
+
+
+def session_gate_stats(trades: list, floor: int = LIVE_UNLOCK_FLOOR) -> dict:
+    """{session: {n, net_avg, ok}} for the 4-way live-unlock gate -- single
+    source of truth shared by bot_broker.live_unlock_ok (the actual gate)
+    and the /bot dashboard's display (previously computed separately as a
+    100-weekday + 100-weekend COMBINED total, which went stale and started
+    showing a materially easier bar than the real per-session one adopted
+    2026-07-21; see dual-100-trade-gate memory). `ok` requires n >= floor
+    AND net_avg > 0, same threshold live_unlock_ok enforces."""
+    closed = [t for t in trades if t.get("status") == "closed"
+              and t.get("net_pnl") is not None]
+    by_session = {p: [] for p in POOL_NAMES}
+    for t in closed:
+        sig = dict(t.get("entry_sig") or {})
+        sig.setdefault("ts", t.get("entry_ts"))
+        tag = session_tag(sig.get("ts"))
+        if tag in by_session:
+            by_session[tag].append(t["net_pnl"])
+    out = {}
+    for p in POOL_NAMES:
+        pnls = by_session[p]
+        n = len(pnls)
+        net_avg = sum(pnls) / n if n else 0.0
+        out[p] = {"n": n, "net_avg": round(net_avg, 4),
+                   "ok": n >= floor and net_avg > 0}
+    return out
+
 
 def entry_bucket(side: str, sig: dict) -> str:
     m = sig.get("mins_left") or 0.0

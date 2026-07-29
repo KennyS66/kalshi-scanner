@@ -452,3 +452,25 @@ from backtest_gate import fee, maker_fee
 def test_maker_fee_is_quarter_of_taker():
     for price in (0.05, 0.20, 0.50, 0.80, 0.95):
         assert maker_fee(price) == pytest.approx(fee(price) * 0.25, abs=0.0001)
+
+
+from bot_core import session_gate_stats
+
+
+def test_session_gate_stats_requires_floor_and_positive_avg_independently():
+    # weekday_night: 120 trades net_avg +0.10 -> ok (clears both bars)
+    wn = [{"status": "closed", "net_pnl": 0.1, "entry_ts": 1.0, "entry_sig": {}}
+          for _ in range(120)]
+    # weekday_day: 150 trades net_avg -0.05 -> NOT ok (fails on profitability,
+    # not sample size -- the exact case a combined-total display would hide)
+    wd = [{"status": "closed", "net_pnl": -0.05, "entry_ts": 13 * 3600, "entry_sig": {}}
+          for _ in range(150)]
+    # weekend_day: only 40 trades, net_avg positive -> NOT ok (short on n).
+    # epoch + 2 days lands on Saturday (epoch 0 = Thursday).
+    we = [{"status": "closed", "net_pnl": 0.3, "entry_ts": 2 * 86400 + 13 * 3600,
+           "entry_sig": {}} for _ in range(40)]
+    stats = session_gate_stats(wn + wd + we)
+    assert stats["weekday_night"] == {"n": 120, "net_avg": 0.1, "ok": True}
+    assert stats["weekday_day"] == {"n": 150, "net_avg": -0.05, "ok": False}
+    assert stats["weekend_day"] == {"n": 40, "net_avg": 0.3, "ok": False}
+    assert stats["weekend_night"] == {"n": 0, "net_avg": 0.0, "ok": False}

@@ -257,11 +257,27 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 </div>
 
 <div id="overviewTab">
+  <div class="panel" id="liveTestPanel" style="margin:14px 20px">
+    <h3>Live $20 test <span class="dim" style="text-transform:none">(weekday_night only, manual fills — hard stop -$8, daily soft stop -$3)</span></h3>
+    <div class="tiles" style="margin:8px 0 0">
+      <div class="tile"><div class="k">balance</div><div class="v" id="ltBalance">—</div>
+        <div class="s" id="ltStart">start $20.02</div></div>
+      <div class="tile"><div class="k">pnl since start</div><div class="v" id="ltPnl">—</div>
+        <div class="s" id="ltStatus"></div></div>
+      <div class="tile"><div class="k">fills</div><div class="v" id="ltFillCount">—</div>
+        <div class="s">of ~30-40 target</div></div>
+    </div>
+    <table id="ltFillsTable" style="margin-top:10px">
+      <thead><tr><th>ticker</th><th>side</th><th>qty</th><th>price</th><th>time (UTC)</th></tr></thead>
+      <tbody></tbody></table>
+    <div class="empty" id="ltFillsEmpty" hidden>no live fills yet — waiting on the first manual placement</div>
+  </div>
+
   <div class="findings" id="findingsBox"></div>
 
   <div class="ev-summary" id="poolTiles"></div>
 
-  <div class="section-label">Live-unlock gate progress <span class="dim" style="text-transform:none">(by session — each pair sums to the shared 100 weekday / 100 weekend floor)</span></div>
+  <div class="section-label">Live-unlock gate progress <span class="dim" style="text-transform:none">(each session must independently clear 100 settled AND positive net avg — no averaging across sessions)</span></div>
   <div class="ev-summary" id="unlockProgTiles"></div>
 
   <div class="section-label">EV gate progress <span class="dim" style="text-transform:none">(buckets past the sample floor, by session)</span></div>
@@ -277,8 +293,7 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
     <div class="tile"><div class="k">range win line</div><div class="v" id="histWin">—</div>
       <div class="s" id="histWinSub"></div></div>
     <div class="tile"><div class="k">gate progress</div><div class="v" id="gateProg">—</div>
-      <div class="s" id="gateWd">wd —</div><div class="gatebar"><i id="gateWdBar" style="width:0%"></i></div>
-      <div class="s" id="gateWe">we —</div><div class="gatebar"><i id="gateWeBar" style="width:0%;background:var(--purple)"></i></div></div>
+      <div class="s" id="gateSub">sessions passing (n≥100 &amp; net avg &gt; 0)</div></div>
   </div>
 
   <div class="grid" style="grid-template-columns:1fr 1fr">
@@ -926,27 +941,24 @@ async function pollBot() {
     + `${money(gs.stops_saved_usd)}</b>`
     + (gs.gaps ? ` · <span class="dim">${gs.gaps} with feed gaps</span>` : '')) : '';
 
-  // dual gate: 100 weekday + 100 weekend settled before live test
-  const g8 = d.gate || {weekday: 0, weekend: 0};
-  $('gateProg').textContent = `${a.n}/200`;
-  $('gateWd').textContent = `weekday ${g8.weekday}/100`;
-  $('gateWe').textContent = `weekend ${g8.weekend}/100`;
-  $('gateWdBar').style.width = Math.min(100, g8.weekday) + '%';
-  $('gateWeBar').style.width = Math.min(100, g8.weekend) + '%';
+  // per-session live-unlock gate: each of the 4 sessions independently
+  // needs n>=100 AND net_avg>0 -- no combining/averaging across sessions.
+  const g8 = d.gate || {sessions: {}};
+  const gateSessions = g8.sessions || {};
+  const passing = SESSIONS.filter(s => gateSessions[s] && gateSessions[s].ok).length;
+  $('gateProg').textContent = `${passing}/${SESSIONS.length}`;
+  $('gateProg').className = 'v ' + (passing === SESSIONS.length ? 'pos' : passing > 0 ? '' : 'neg');
 
-  // Same 100-per-side floor, broken out by session — each pair (day+night)
-  // sums to the weekday or weekend count above; not an independent 100
-  // each, just the same combined total split out for visibility.
   const unlockEl = $('unlockProgTiles');
   if (unlockEl) {
-    const gs = g8.sessions || {};
     unlockEl.innerHTML = SESSIONS.map(s => {
-      const n = gs[s] || 0;
-      const pct = Math.min(100, n);
+      const st = gateSessions[s] || {n: 0, net_avg: 0, ok: false};
+      const pct = Math.min(100, st.n);
       return `<div class="tile">
-          <div class="k"><span class="badge sess ${sessCls(s)}">${sessLabel(s)}</span></div>
-          <div class="v">${n}</div>
-          <div class="s">settled trades</div>
+          <div class="k"><span class="badge sess ${sessCls(s)}">${sessLabel(s)}</span>
+            ${st.ok ? '<span class="pos" style="font-weight:900"> ✓</span>' : ''}</div>
+          <div class="v">${st.n}<span class="dim" style="font-size:11px">/100</span></div>
+          <div class="s ${st.n ? (st.net_avg > 0 ? 'pos' : 'neg') : ''}">net avg ${money(st.net_avg)}</div>
           <div class="gatebar"><i style="width:${pct}%"></i></div>
         </div>`;
     }).join('');
@@ -1020,10 +1032,42 @@ async function pollThesis() {
   dayKey = t && t.level ? parseFloat(t.level) : null;
 }
 
-pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal(); pollLoopLog();
+async function pollLiveTest() {
+  const d = await fj('/api/live_test', null);
+  const balEl = $('ltBalance'), pnlEl = $('ltPnl'), statusEl = $('ltStatus');
+  if (!d || d.error || d.balance == null) {
+    balEl.textContent = '—'; balEl.className = 'v';
+    pnlEl.textContent = '—'; pnlEl.className = 'v';
+    statusEl.textContent = d && d.error ? esc(d.error) : 'no data';
+    $('ltFillCount').textContent = '—';
+    return;
+  }
+  balEl.textContent = '$' + d.balance.toFixed(2);
+  pnlEl.textContent = money(d.pnl);
+  pnlEl.className = 'v ' + (d.pnl >= 0 ? 'pos' : 'neg');
+  if (d.status === 'hard_stop_hit') {
+    statusEl.innerHTML = '<span class="neg" style="font-weight:900">HARD STOP HIT — pause, review before resuming</span>';
+  } else if (d.pnl <= d.daily_soft_stop) {
+    statusEl.innerHTML = '<span class="neg">past -$3 soft-stop line — consider pausing new entries</span>';
+  } else {
+    statusEl.textContent = 'active';
+  }
+  const fills = d.fills_since_start || [];
+  $('ltFillCount').textContent = fills.length;
+  $('ltFillsEmpty').hidden = fills.length > 0;
+  $('ltFillsTable').tBodies[0].innerHTML = fills.slice().reverse().map(f => `<tr>
+    <td>${esc(f.ticker)}</td>
+    <td><span class="side-chip ${esc((f.side||'').toLowerCase())}">${esc((f.side||'').toUpperCase())}</span></td>
+    <td>${f.qty}</td>
+    <td>${(f.price * 100).toFixed(1)}¢</td>
+    <td>${esc(String(f.ts).replace('T',' ').slice(0,19))}</td></tr>`).join('');
+}
+
+pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal(); pollLoopLog(); pollLiveTest();
 setInterval(pollBot, 3000);
 setInterval(pollSignal, 3000);
 setInterval(pollCalibration, 30000);
 setInterval(pollCandles, 30000);
 setInterval(pollThesis, 300000);
+setInterval(pollLiveTest, 10000);
 </script></body></html>"""
