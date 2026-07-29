@@ -5,7 +5,7 @@ Kalshi fee (backtest_gate.fee) charged per contract on both sides. If paper
 wins under these costs, live has a real shot.
 """
 import os
-import requests
+import requests  # noqa: F401 — kept so manual-mode tests can assert no network path
 from cryptography.hazmat.primitives import serialization
 
 import account
