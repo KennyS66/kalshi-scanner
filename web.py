@@ -1581,6 +1581,19 @@ async def api_live_test() -> JSONResponse:
     })
 
 
+@app.get("/api/live_signals")
+async def api_live_signals() -> JSONResponse:
+    path = _BOT_DIR / "live_signals.jsonl"
+    if not path.exists():
+        return JSONResponse({"signals": []})
+    try:
+        lines = path.read_text().splitlines()[-50:]
+        signals = [json.loads(l) for l in lines if l.strip()]
+    except Exception:
+        signals = []
+    return JSONResponse({"signals": signals})
+
+
 _TRADE_HTML = r"""<!doctype html>
 <html lang="en">
 <head>

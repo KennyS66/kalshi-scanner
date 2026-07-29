@@ -271,6 +271,11 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
       <thead><tr><th>ticker</th><th>side</th><th>qty</th><th>price</th><th>time (UTC)</th></tr></thead>
       <tbody></tbody></table>
     <div class="empty" id="ltFillsEmpty" hidden>no live fills yet — waiting on the first manual placement</div>
+
+    <h3 style="margin-top:14px">Manual/auto live signals</h3>
+    <table id="liveSignalsTable" style="margin-top:10px">
+      <thead><tr><th>ticker</th><th>side</th><th>qty</th><th>price</th><th>tier</th><th>error</th></tr></thead>
+      <tbody></tbody></table>
   </div>
 
   <div class="findings" id="findingsBox"></div>
@@ -1063,11 +1068,26 @@ async function pollLiveTest() {
     <td>${esc(String(f.ts).replace('T',' ').slice(0,19))}</td></tr>`).join('');
 }
 
-pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal(); pollLoopLog(); pollLiveTest();
+async function pollLiveSignals() {
+  const d = await fj('/api/live_signals', null);
+  const rows = (d && d.signals) || [];
+  const el = $('liveSignalsTable');
+  if (!el) return;
+  el.tBodies[0].innerHTML = rows.slice().reverse().map(r => `<tr>
+    <td>${esc(r.ticker)}</td>
+    <td><span class="side-chip ${esc((r.side||'').toLowerCase())}">${esc(r.side)}</span></td>
+    <td>${r.qty}</td>
+    <td>${(r.price * 100).toFixed(1)}¢</td>
+    <td>${esc(r.tier)}</td>
+    <td>${r.error ? `<span class="neg">${esc(r.error)}</span>` : ''}</td></tr>`).join('');
+}
+
+pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal(); pollLoopLog(); pollLiveTest(); pollLiveSignals();
 setInterval(pollBot, 3000);
 setInterval(pollSignal, 3000);
 setInterval(pollCalibration, 30000);
 setInterval(pollCandles, 30000);
 setInterval(pollThesis, 300000);
 setInterval(pollLiveTest, 10000);
+setInterval(pollLiveSignals, 10000);
 </script></body></html>"""
