@@ -48,11 +48,16 @@ class PaperBroker:
         price = max(0.01, round(ask - spread, 4))
         return self.fill(price, qty, sig.get("ts") or 0.0)
 
-    def fill(self, price: float, qty: int, ts: float, maker: bool = False) -> dict:
+    def fill(self, price: float, qty: int, ts: float, maker: bool = False,
+             sig: dict = None, order_id: str = None) -> dict:
         """A fill at an explicit price -- buy()/sell() are always taker
         (market-style, immediate); a resting limit order that actually
         waited to be touched calls this directly with maker=True. See
-        backtest_gate.maker_fee for the maker-rate caveat."""
+        backtest_gate.maker_fee for the maker-rate caveat. `sig`/`order_id`
+        are unused here (PaperBroker doesn't need them) -- accepted only
+        so callers can pass one shared signature to either PaperBroker or
+        LiveBroker (see LiveBroker.fill's docstring for what order_id
+        actually controls there)."""
         f = maker_fee if maker else fee
         return {"price": price, "qty": qty,
                 "fee_total": round(f(price) * qty, 4),

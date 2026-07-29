@@ -947,3 +947,131 @@ def test_pending_entry_survives_same_ticker_askless_tick(tmp_path, monkeypatch):
     assert not any(e["action"] == "cancel" for e in events)
     fills = [e for e in events if e["action"] == "enter"]
     assert any("limit filled" in e["reason"] for e in fills)
+
+
+def test_bot_constructs_live_broker_when_mode_is_live_and_unlocked(tmp_path, monkeypatch):
+    import json as _json
+    import bot_broker
+    # seed a fully-unlocked trade history (reuse test_bot_broker's helper shape
+    # inline here since swing_bot tests don't import test_bot_broker)
+    from bot_core import POOL_NAMES, session_tag
+    ts_by_pool = {"weekday_day": 1784592000.0 + 14 * 3600,
+                  "weekday_night": 1784592000.0,
+                  "weekend_day": 1784419200.0 + 14 * 3600,
+                  "weekend_night": 1784419200.0}
+    trades = []
+    for pool, ts in ts_by_pool.items():
+        for _ in range(100):
+            trades.append({"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+                           "entry_sig": {"ts": ts}})
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "live_requested": True, "broker_mode": "manual",
+         "overnight_curfew": False, "weekend_curfew": False}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    assert bot.broker.mode == "live"
+    assert bot.broker.broker_mode == "manual"
+
+
+def test_bot_falls_back_to_paper_broker_when_mode_paper(tmp_path, monkeypatch):
+    bot = _mkbot(tmp_path, [_sig()], monkeypatch)
+    assert bot.broker.mode == "paper"
+
+
+def test_bot_raises_loudly_when_mode_live_but_gate_not_unlocked(tmp_path, monkeypatch):
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "overnight_curfew": False, "weekend_curfew": False}))
+    with pytest.raises(RuntimeError, match="live trading locked"):
+        Bot(tmp_path, fetch_fn=lambda: None,
+            offsets_file=tmp_path / "banner_offsets.json",
+            loop_log=tmp_path / "loop_log.jsonl")
+
+
+def test_live_mode_entries_use_flat_live_qty_not_pool_budget_formula(tmp_path, monkeypatch):
+    import json as _json
+    ts_by_pool = {"weekday_day": 1784592000.0 + 14 * 3600,
+                  "weekday_night": 1784592000.0,
+                  "weekend_day": 1784419200.0 + 14 * 3600,
+                  "weekend_night": 1784419200.0}
+    trades = []
+    for pool, ts in ts_by_pool.items():
+        for _ in range(100):
+            trades.append({"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+                           "entry_sig": {"ts": ts}})
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "live_requested": True, "broker_mode": "manual",
+         "overnight_curfew": False, "weekend_curfew": False,
+         "limit_entries": False,   # exercise _enter's sizing directly
+         "live_qty": 1, "paper_bankroll": 500.0}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    sig = _sig(whale_trend=3.0, momentum=30.0, ts=ts_by_pool["weekday_night"],
+              mins_left=10.0, yes_ask=0.50)
+    # paper_bankroll=500 -> pool bankroll 125 -> the OLD %-of-pool formula
+    # would size this at several contracts (as it does in every existing
+    # paper test using the same bankroll); live mode must use live_qty=1
+    # regardless of that budget.
+    bot._enter("YES", sig)
+    assert bot.state["open_plays"]["M1"]["qty"] == 1
+
+
+def test_paper_mode_entries_still_use_pool_budget_formula(tmp_path, monkeypatch):
+    # regression guard: this task's sizing change must be live-mode-only --
+    # paper's existing %-of-pool sizing (already covered extensively by
+    # other tests in this file) must not change.
+    sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["open_plays"]["M1"]["qty"] > 1   # unchanged paper sizing
+
+
+def test_process_pending_polls_real_order_status_in_auto_mode(tmp_path, monkeypatch):
+    import json as _json
+    import live_broker
+    from bot_core import POOL_NAMES
+    ts_by_pool = {"weekday_day": 1784592000.0 + 14 * 3600,
+                  "weekday_night": 1784592000.0,
+                  "weekend_day": 1784419200.0 + 14 * 3600,
+                  "weekend_night": 1784419200.0}
+    trades = []
+    for pool, ts in ts_by_pool.items():
+        for _ in range(100):
+            trades.append({"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+                           "entry_sig": {"ts": ts}})
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+         "overnight_curfew": False, "weekend_curfew": False,
+         "limit_entries": True}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    monkeypatch.setattr(live_broker, "place_order", lambda *a, **k:
+                        {"order_id": "ord-1", "status": "resting",
+                         "yes_price": 49, "no_price": 51})
+    monkeypatch.setattr(live_broker, "get_order", lambda order_id:
+                        {"order_id": order_id, "status": "executed",
+                         "yes_price": 49, "no_price": 51})
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    sig = _sig(whale_trend=3.0, momentum=30.0, ts=ts_by_pool["weekday_night"],
+              mins_left=10.0, yes_ask=0.50)
+    bot._place_entry("YES", sig)
+    assert "M1" in bot.state["pending_entries"]
+    assert bot.state["pending_entries"]["M1"]["order_id"] == "ord-1"
+    next_sig = _sig(whale_trend=3.0, momentum=30.0,
+                    ts=ts_by_pool["weekday_night"] + 5, mins_left=9.9, yes_ask=0.50)
+    bot._process_pending(next_sig)
+    assert "M1" not in bot.state["pending_entries"]
+    assert "M1" in bot.state["open_plays"]
+    assert bot.state["open_plays"]["M1"]["entry"]["price"] == 0.49

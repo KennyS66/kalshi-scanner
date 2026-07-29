@@ -95,7 +95,7 @@ from bot_core import (FlipDetector, RegimeTracker, load_config, entry_blockers,
                       bucket_stats, update_bucket_stats, ev_gate_blocker,
                       weekend_curfew_blocker, session_tag, POOL_NAMES,
                       entry_tier)
-from bot_broker import (PaperBroker, round_trip_pnl, fetch_bankroll,
+from bot_broker import (PaperBroker, LiveBroker, round_trip_pnl, fetch_bankroll,
                         FALLBACK_BANKROLL)
 
 SIG_SNAPSHOT_KEYS = ("price", "yes_ask", "no_ask", "mins_left",
@@ -189,7 +189,11 @@ class Bot:
             self.state.get("last_control_nonce", 0), disk_nonce)
         self.detector = FlipDetector(self.cfg["flip_threshold"])
         self.regime = RegimeTracker()
-        self.broker = PaperBroker()   # LiveBroker only via unlock bar (not v1)
+        trades_for_gate = self._read_trades() if self.cfg.get("mode") == "live" else None
+        if self.cfg.get("mode") == "live":
+            self.broker = LiveBroker(trades_for_gate, self.cfg, bot_dir=self.dir)
+        else:
+            self.broker = PaperBroker()
         self.feed_fails = 0
         # EV-gate stats + pool P&L: seeded from the closed-trade journal at
         # boot, then kept current incrementally in _enter/_scale_out/_exit.
@@ -249,6 +253,17 @@ class Bot:
             budget *= self.cfg.get("profit_size_frac", 0.5)
         return pool, ps, budget
 
+    def _entry_qty(self, budget: float, price: float) -> int:
+        """Live mode (manual or auto) always sizes flat at cfg['live_qty']
+        once `budget` has already confirmed the entry is affordable at all
+        -- paper's %-of-pool trade_budget formula was proven this session
+        to size unreasonably large (up to 33 contracts) when transplanted
+        onto a small real account, so live entries never use it for the
+        actual quantity."""
+        if self.broker.mode == "live":
+            return self.cfg.get("live_qty", 1)
+        return size_for_budget(budget, price)
+
     def _enter(self, side, sig, ranges=None):
         """Immediate market fill — the fallback path for entries too close
         to expiry to wait on a limit (see entry_tier), and the only path
@@ -258,7 +273,7 @@ class Bot:
             return
         pool, ps, budget = pb
         price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
-        qty = size_for_budget(budget, price)
+        qty = self._entry_qty(budget, price)
         if qty < 1:
             self._event("skip", f"budget too small for 1 contract at {price}",
                         sig["ticker"], sig)
@@ -292,15 +307,21 @@ class Bot:
             return
         pool, ps, budget = pb
         limit_price = max(0.01, round(ask - offset, 4))
-        qty = size_for_budget(budget, limit_price)
+        qty = self._entry_qty(budget, limit_price)
         if qty < 1:
             self._event("skip", f"budget too small for 1 contract at {limit_price}",
                         sig["ticker"], sig)
             return
-        self.state["pending_entries"][sig["ticker"]] = {
-            "side": side, "qty": qty, "limit_price": limit_price,
-            "tier": tier_name, "placed_ts": sig.get("ts") or 0.0,
-            "ranges": ranges, "entry_sig": _snap(sig), "pool": pool}
+        pend = {"side": side, "qty": qty, "limit_price": limit_price,
+                "tier": tier_name, "placed_ts": sig.get("ts") or 0.0,
+                "ranges": ranges, "entry_sig": _snap(sig), "pool": pool}
+        if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+            import live_broker
+            order = live_broker.place_order(
+                "yes" if side == "YES" else "no", "buy", sig["ticker"], qty,
+                limit_price, "limit")
+            pend["order_id"] = order["order_id"]
+        self.state["pending_entries"][sig["ticker"]] = pend
         self._event("place", f"{side} x{qty} limit @ {limit_price:.3f} ({tier_name})",
                     sig["ticker"], sig)
 
@@ -308,7 +329,9 @@ class Bot:
         del self.state["pending_entries"][ticker]
         price = (sig["yes_ask"] if pend["side"] == "YES" else sig["no_ask"]) \
                 if chase else pend["limit_price"]
-        fill = self.broker.fill(price, pend["qty"], sig.get("ts") or 0.0, maker=maker)
+        order_id = None if chase else pend.get("order_id")
+        fill = self.broker.fill(price, pend["qty"], sig.get("ts") or 0.0, maker=maker,
+                                sig={**sig, "side": pend["side"]}, order_id=order_id)
         me = self.state.setdefault("market_entries", {})
         me[ticker] = me.get(ticker, 0) + 1
         self.state["open_plays"][ticker] = {
@@ -322,21 +345,38 @@ class Bot:
     def _process_pending(self, sig):
         """Advance every resting entry order by one tick: fill if the
         market has traded down to the limit, chase to market once the
-        timeout elapses, or cancel (no cost — nothing was ever risked) if
+        timeout elapses, or cancel (no cost -- nothing was ever risked) if
         its market rolled away before either happened. Roll detection
         mirrors the exit loop: only a genuine ticker mismatch (or a
         non-ok row) counts as rolled. A same-ticker row with no usable
         quote (routine in replay) just waits for the next tick instead of
-        being cancelled — folding the quote check into the roll condition
+        being cancelled -- folding the quote check into the roll condition
         was a bug that nuked resting orders on their own market's quiet
-        ticks."""
+        ticks. In live+auto mode (order_id present), fill/no-fill is
+        decided by polling the REAL order's status, not by comparing the
+        limit price to the tick's quote -- the quote can lag or jitter
+        around the exact touch price in ways paper's simulation doesn't
+        need to worry about, but a real resting order's own status is
+        authoritative."""
         ticker = sig.get("ticker")
         timeout = self.cfg.get("limit_fill_timeout_secs", 30)
         for t in list(self.state["pending_entries"]):
             pend = self.state["pending_entries"][t]
             if sig.get("status") != "ok" or t != ticker:
+                if pend.get("order_id"):
+                    import live_broker
+                    live_broker.cancel_order(pend["order_id"])
                 del self.state["pending_entries"][t]
                 self._event("cancel", "rolled before limit filled or chased", t, sig)
+                continue
+            if pend.get("order_id"):
+                import live_broker
+                status = live_broker.get_order(pend["order_id"])
+                if status.get("status") == "executed":
+                    self._fill_pending(t, pend, sig, maker=True)
+                elif (sig.get("ts") or 0.0) - pend["placed_ts"] >= timeout:
+                    live_broker.cancel_order(pend["order_id"])
+                    self._fill_pending(t, pend, sig, maker=False, chase=True)
                 continue
             if sig.get("yes_ask") is None or sig.get("no_ask") is None:
                 continue  # same market, no usable quote this tick -- wait
