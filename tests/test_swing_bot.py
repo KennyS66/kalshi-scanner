@@ -1197,3 +1197,82 @@ def test_live_stop_inactive_in_paper_mode(tmp_path, monkeypatch):
     bot._check_live_stop()   # paper mode -- must be a no-op, must not call balance
     mock_balance.assert_not_called()
     assert "live_baseline_balance" not in bot.state
+
+
+def test_auto_order_error_halts_only_that_pool_not_the_whole_bot(tmp_path, monkeypatch):
+    import json as _json
+    import live_broker
+    ts_by_pool = {"weekday_day": 1784592000.0 + 14 * 3600,
+                  "weekday_night": 1784592000.0,
+                  "weekend_day": 1784419200.0 + 14 * 3600,
+                  "weekend_night": 1784419200.0}
+    trades = []
+    for pool, ts in ts_by_pool.items():
+        for _ in range(100):
+            trades.append({"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+                           "entry_sig": {"ts": ts}})
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+         "overnight_curfew": False, "weekend_curfew": False,
+         "limit_entries": True}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    def _boom(*a, **k):
+        raise RuntimeError("400 insufficient balance")
+    monkeypatch.setattr(live_broker, "place_order", _boom)
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    sig = _sig(whale_trend=3.0, momentum=30.0, ts=ts_by_pool["weekday_night"],
+              mins_left=10.0, yes_ask=0.50)
+    bot._place_entry("YES", sig)   # must not raise out of the caller
+    assert bot.state["pools"]["weekday_night"]["halted"] is True
+    assert bot.state["pools"]["weekday_day"]["halted"] is False   # other pools unaffected
+    assert "M1" not in bot.state["pending_entries"]
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "halt" and "order_error" in e["reason"] for e in events)
+
+
+def test_auto_order_error_in_enter_fallback_halts_pool_not_bot(tmp_path, monkeypatch):
+    """_enter is the immediate-market-fill fallback _place_entry uses when
+    there's too little time left to wait on a resting limit (entry_tier
+    returns None below ENTRY_TIER_MIN_MINS). It's named in the task-7 brief
+    alongside _process_pending/_fill_pending because it makes its own
+    self.broker.buy call in the live+auto path (via LiveBroker._auto_fill
+    -> live_broker.place_order) that can raise just like the limit path
+    does -- same halt-not-crash contract applies here."""
+    import json as _json
+    import live_broker
+    ts_by_pool = {"weekday_day": 1784592000.0 + 14 * 3600,
+                  "weekday_night": 1784592000.0,
+                  "weekend_day": 1784419200.0 + 14 * 3600,
+                  "weekend_night": 1784419200.0}
+    trades = []
+    for pool, ts in ts_by_pool.items():
+        for _ in range(100):
+            trades.append({"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+                           "entry_sig": {"ts": ts}})
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(_json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(_json.dumps(
+        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+         "overnight_curfew": False, "weekend_curfew": False,
+         "limit_entries": True}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    def _boom(*a, **k):
+        raise RuntimeError("400 insufficient balance")
+    monkeypatch.setattr(live_broker, "place_order", _boom)
+    bot = Bot(tmp_path, fetch_fn=lambda: None,
+              offsets_file=tmp_path / "banner_offsets.json",
+              loop_log=tmp_path / "loop_log.jsonl")
+    # mins_left below ENTRY_TIER_MIN_MINS (5.0) -> entry_tier returns None
+    # -> _place_entry falls back to _enter's immediate market buy
+    sig = _sig(whale_trend=3.0, momentum=30.0, ts=ts_by_pool["weekday_night"],
+              mins_left=2.0, yes_ask=0.50)
+    bot._place_entry("YES", sig)   # must not raise out of the caller
+    assert bot.state["pools"]["weekday_night"]["halted"] is True
+    assert bot.state["pools"]["weekday_day"]["halted"] is False
+    assert "M1" not in bot.state["open_plays"]
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "halt" and "order_error" in e["reason"] for e in events)

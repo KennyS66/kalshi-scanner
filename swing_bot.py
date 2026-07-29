@@ -278,7 +278,15 @@ class Bot:
             self._event("skip", f"budget too small for 1 contract at {price}",
                         sig["ticker"], sig)
             return
-        fill = self.broker.buy(side, qty, sig)
+        try:
+            fill = self.broker.buy(side, qty, sig)
+        except Exception as e:
+            if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+                ps["halted"] = True
+                self._event("halt", f"[{pool}] order_error: {e} -- auto entries "
+                            f"blocked until manually resumed", sig["ticker"], sig)
+                return
+            raise
         me = self.state.setdefault("market_entries", {})
         me[sig["ticker"]] = me.get(sig["ticker"], 0) + 1
         self.state["open_plays"][sig["ticker"]] = {
@@ -317,9 +325,15 @@ class Bot:
                 "ranges": ranges, "entry_sig": _snap(sig), "pool": pool}
         if self.broker.mode == "live" and self.broker.broker_mode == "auto":
             import live_broker
-            order = live_broker.place_order(
-                "yes" if side == "YES" else "no", "buy", sig["ticker"], qty,
-                limit_price, "limit")
+            try:
+                order = live_broker.place_order(
+                    "yes" if side == "YES" else "no", "buy", sig["ticker"], qty,
+                    limit_price, "limit")
+            except Exception as e:
+                ps["halted"] = True
+                self._event("halt", f"[{pool}] order_error: {e} -- auto entries "
+                            f"blocked until manually resumed", sig["ticker"], sig)
+                return
             pend["order_id"] = order["order_id"]
         self.state["pending_entries"][sig["ticker"]] = pend
         self._event("place", f"{side} x{qty} limit @ {limit_price:.3f} ({tier_name})",
@@ -330,8 +344,17 @@ class Bot:
         price = (sig["yes_ask"] if pend["side"] == "YES" else sig["no_ask"]) \
                 if chase else pend["limit_price"]
         order_id = None if chase else pend.get("order_id")
-        fill = self.broker.fill(price, pend["qty"], sig.get("ts") or 0.0, maker=maker,
-                                sig={**sig, "side": pend["side"]}, order_id=order_id)
+        try:
+            fill = self.broker.fill(price, pend["qty"], sig.get("ts") or 0.0, maker=maker,
+                                    sig={**sig, "side": pend["side"]}, order_id=order_id)
+        except Exception as e:
+            if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+                ps = self.state["pools"][pend["pool"]]
+                ps["halted"] = True
+                self._event("halt", f"[{pend['pool']}] order_error: {e} -- auto entries "
+                            f"blocked until manually resumed", ticker, sig)
+                return
+            raise
         me = self.state.setdefault("market_entries", {})
         me[ticker] = me.get(ticker, 0) + 1
         self.state["open_plays"][ticker] = {
@@ -365,17 +388,41 @@ class Bot:
             if sig.get("status") != "ok" or t != ticker:
                 if pend.get("order_id"):
                     import live_broker
-                    live_broker.cancel_order(pend["order_id"])
+                    try:
+                        live_broker.cancel_order(pend["order_id"])
+                    except Exception as e:
+                        ps = self.state["pools"][pend["pool"]]
+                        ps["halted"] = True
+                        del self.state["pending_entries"][t]
+                        self._event("halt", f"[{pend['pool']}] order_error: {e} -- "
+                                    f"auto entries blocked until manually resumed", t, sig)
+                        continue
                 del self.state["pending_entries"][t]
                 self._event("cancel", "rolled before limit filled or chased", t, sig)
                 continue
             if pend.get("order_id"):
                 import live_broker
-                status = live_broker.get_order(pend["order_id"])
+                try:
+                    status = live_broker.get_order(pend["order_id"])
+                except Exception as e:
+                    ps = self.state["pools"][pend["pool"]]
+                    ps["halted"] = True
+                    del self.state["pending_entries"][t]
+                    self._event("halt", f"[{pend['pool']}] order_error: {e} -- "
+                                f"auto entries blocked until manually resumed", t, sig)
+                    continue
                 if status.get("status") == "executed":
                     self._fill_pending(t, pend, sig, maker=True)
                 elif (sig.get("ts") or 0.0) - pend["placed_ts"] >= timeout:
-                    live_broker.cancel_order(pend["order_id"])
+                    try:
+                        live_broker.cancel_order(pend["order_id"])
+                    except Exception as e:
+                        ps = self.state["pools"][pend["pool"]]
+                        ps["halted"] = True
+                        del self.state["pending_entries"][t]
+                        self._event("halt", f"[{pend['pool']}] order_error: {e} -- "
+                                    f"auto entries blocked until manually resumed", t, sig)
+                        continue
                     self._fill_pending(t, pend, sig, maker=False, chase=True)
                 continue
             if sig.get("yes_ask") is None or sig.get("no_ask") is None:
