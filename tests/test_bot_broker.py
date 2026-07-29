@@ -129,3 +129,43 @@ def test_live_broker_locked_raises():
 
 def test_fallback_bankroll_is_500():
     assert FALLBACK_BANKROLL == 500.0
+
+
+import json as _json
+
+
+def test_emit_live_signal_appends_one_row(tmp_path):
+    from bot_broker import emit_live_signal
+    emit_live_signal(tmp_path, "KXBTC15M-26JUL290300-00", "YES", 1, 0.31,
+                     "patient", "weekday_night")
+    rows = [_json.loads(l) for l in
+            (tmp_path / "live_signals.jsonl").read_text().splitlines()]
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["ticker"] == "KXBTC15M-26JUL290300-00"
+    assert r["side"] == "YES"
+    assert r["qty"] == 1
+    assert r["price"] == 0.31
+    assert r["tier"] == "patient"
+    assert r["pool"] == "weekday_night"
+    assert r["error"] is None
+    assert isinstance(r["ts"], float)
+
+
+def test_emit_live_signal_records_error(tmp_path):
+    from bot_broker import emit_live_signal
+    emit_live_signal(tmp_path, "KXBTC15M-26JUL290300-00", "YES", 1, 0.31,
+                     "market", "weekday_night", error="order rejected: insufficient funds")
+    rows = [_json.loads(l) for l in
+            (tmp_path / "live_signals.jsonl").read_text().splitlines()]
+    assert rows[0]["error"] == "order rejected: insufficient funds"
+
+
+def test_emit_live_signal_appends_multiple_rows(tmp_path):
+    from bot_broker import emit_live_signal
+    emit_live_signal(tmp_path, "T1", "YES", 1, 0.50, "aggressive", "weekday_night")
+    emit_live_signal(tmp_path, "T2", "NO", 2, 0.40, "patient", "weekday_night")
+    rows = [_json.loads(l) for l in
+            (tmp_path / "live_signals.jsonl").read_text().splitlines()]
+    assert len(rows) == 2
+    assert rows[0]["ticker"] == "T1" and rows[1]["ticker"] == "T2"

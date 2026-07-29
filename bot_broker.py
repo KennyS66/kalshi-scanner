@@ -10,6 +10,27 @@ from cryptography.hazmat.primitives import serialization
 import account
 from backtest_gate import fee, maker_fee
 
+import json
+import time
+from pathlib import Path
+
+LIVE_SIGNALS_FILE = "live_signals.jsonl"
+
+
+def emit_live_signal(bot_dir, ticker: str, side: str, qty: int, price: float,
+                     tier: str, pool: str, error: str = None) -> None:
+    """Append one row to <bot_dir>/live_signals.jsonl -- the manual-mode
+    broker path: instead of placing a real order, this is the signal a
+    human reads and places by hand. Formalizes the ad hoc scratchpad
+    watcher script used for the first night of the $20 live test into a
+    real, tested code path (see the 2026-07-29 design spec)."""
+    bot_dir = Path(bot_dir)
+    bot_dir.mkdir(parents=True, exist_ok=True)
+    row = {"ts": time.time(), "ticker": ticker, "side": side, "qty": qty,
+           "price": price, "tier": tier, "pool": pool, "error": error}
+    with (bot_dir / LIVE_SIGNALS_FILE).open("a") as f:
+        f.write(json.dumps(row) + "\n")
+
 
 class PaperBroker:
     mode = "paper"
