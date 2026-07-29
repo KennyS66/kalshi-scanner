@@ -1584,14 +1584,10 @@ async def api_live_test() -> JSONResponse:
 @app.get("/api/live_signals")
 async def api_live_signals() -> JSONResponse:
     path = _BOT_DIR / "live_signals.jsonl"
-    if not path.exists():
-        return JSONResponse({"signals": []})
-    try:
-        lines = path.read_text().splitlines()[-50:]
-        signals = [json.loads(l) for l in lines if l.strip()]
-    except Exception:
-        signals = []
-    return JSONResponse({"signals": signals})
+    # _read_jsonl_tail parses each line independently and skips torn/garbage
+    # lines individually, instead of discarding the whole batch on one bad
+    # line; it also returns [] when the file doesn't exist.
+    return JSONResponse({"signals": _read_jsonl_tail(path, 50)})
 
 
 _TRADE_HTML = r"""<!doctype html>
