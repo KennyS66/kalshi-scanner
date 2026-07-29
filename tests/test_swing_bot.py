@@ -1276,3 +1276,92 @@ def test_auto_order_error_in_enter_fallback_halts_pool_not_bot(tmp_path, monkeyp
     assert "M1" not in bot.state["open_plays"]
     events = _rows(tmp_path, EVENTS_FILE)
     assert any(e["action"] == "halt" and "order_error" in e["reason"] for e in events)
+
+
+# ── task 7b: exit-side (sell) backoff-retry, no halt ────────────────────
+
+def _mk_open_play(pool="weekday_night", qty=4, entry_price=0.50, entry_ts=1000.0):
+    """A minimal open play, built directly rather than through _enter, so
+    these tests can drive _scale_out/_exit in isolation without going
+    through the full tick()/entry-gate machinery."""
+    return {
+        "side": "YES", "qty": qty,
+        "entry": {"price": entry_price, "fee_total": 0.02, "qty": qty, "ts": entry_ts},
+        "ranges": None,
+        "entry_sig": {"ts": entry_ts},
+        "last_sig": _sig(ts=entry_ts),
+        "pool": pool,
+    }
+
+
+def test_scale_out_sell_error_backs_off_without_halting_pool(tmp_path, monkeypatch):
+    import live_broker
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 19.50])
+    play = _mk_open_play()
+    bot.state["open_plays"]["M1"] = play
+
+    def _boom(*a, **k):
+        raise RuntimeError("500 gateway timeout")
+    monkeypatch.setattr(live_broker, "place_order", _boom)
+    sig = _sig(ticker="M1", ts=1050.0, yes_ask=0.60, no_ask=0.40)
+    bot._scale_out("M1", play, sig)
+    assert "M1" in bot.state["open_plays"]          # play stays open, not removed
+    assert play["sell_error_ts"] == 1050.0
+    assert bot.state["pools"]["weekday_night"]["halted"] is False   # NOT halted
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "skip" and "backing off" in e["reason"] for e in events)
+
+
+def test_exit_sell_error_backs_off_without_halting_pool(tmp_path, monkeypatch):
+    import live_broker
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 19.50])
+    play = _mk_open_play()
+    bot.state["open_plays"]["M1"] = play
+
+    def _boom(*a, **k):
+        raise RuntimeError("500 gateway timeout")
+    monkeypatch.setattr(live_broker, "place_order", _boom)
+    sig = _sig(ticker="M1", ts=1050.0, yes_ask=0.60, no_ask=0.40)
+    bot._exit("M1", play, sig, "target")
+    assert "M1" in bot.state["open_plays"]          # NOT removed -- sell failed
+    assert play["sell_error_ts"] == 1050.0
+    assert bot.state["pools"]["weekday_night"]["halted"] is False   # NOT halted
+    events = _rows(tmp_path, EVENTS_FILE)
+    assert any(e["action"] == "skip" and "backing off" in e["reason"] for e in events)
+
+
+def test_sell_backoff_blocks_retry_within_window_then_allows_after(tmp_path, monkeypatch):
+    bot = _live_auto_bot(tmp_path, monkeypatch, [20.02, 19.50])
+    play = _mk_open_play()
+    play["sell_error_ts"] = 1000.0   # seed a recent failed-sell timestamp
+    bot.state["open_plays"]["M1"] = play
+
+    mock_sell = Mock(side_effect=AssertionError("sell must not be called during backoff"))
+    monkeypatch.setattr(bot.broker, "sell", mock_sell)
+    sig_within = _sig(ticker="M1", ts=1010.0, yes_ask=0.60, no_ask=0.40)  # +10s < 30s backoff
+    bot._exit("M1", play, sig_within, "target")
+    mock_sell.assert_not_called()
+    assert "M1" in bot.state["open_plays"]          # early return -- untouched
+
+    mock_sell_after = Mock(return_value={"price": 0.55, "qty": play["qty"],
+                                         "fee_total": 0.02, "ts": 1035.0, "maker": False})
+    monkeypatch.setattr(bot.broker, "sell", mock_sell_after)
+    sig_after = _sig(ticker="M1", ts=1035.0, yes_ask=0.60, no_ask=0.40)   # +35s >= 30s backoff
+    bot._exit("M1", play, sig_after, "target")
+    mock_sell_after.assert_called_once()
+    assert "M1" not in bot.state["open_plays"]      # exit succeeded this time
+
+
+def test_paper_mode_sell_still_works_unaffected(tmp_path, monkeypatch):
+    """Regression guard for task 7b: the live+auto backoff guard added to
+    _scale_out/_exit must be a complete no-op in paper mode -- normal exits
+    still succeed and no sell_error_ts bookkeeping ever appears."""
+    bot = _mkbot(tmp_path, [_sig()], monkeypatch)
+    play = _mk_open_play()
+    bot.state["open_plays"]["M1"] = play
+    sig = _sig(ticker="M1", ts=1050.0, yes_ask=0.60, no_ask=0.40)
+    bot._exit("M1", play, sig, "target")
+    assert "M1" not in bot.state["open_plays"]      # exit succeeded normally
+    assert "sell_error_ts" not in play              # guard field never touched
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1 and trades[0]["exit_reason"] == "target"

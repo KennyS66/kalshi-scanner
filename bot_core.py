@@ -81,6 +81,13 @@ DEFAULT_CONFIG = {
     "live_daily_soft_stop_usd": -3.0,  # same, but resets daily (per-pool
                                         # day_pnl-style), pauses new auto
                                         # entries for the rest of that day
+    "live_sell_retry_backoff_secs": 30.0,  # after a live sell order fails
+        # (auto mode only), wait this long before the same play's exit
+        # condition is allowed to try selling again -- stops every-tick
+        # hammering of a failing API without giving up on closing the
+        # position, and does NOT halt the pool (a halt would try to flatten
+        # every other open play too, risking cascading failures if the sell
+        # API itself is the problem)
 }
 
 

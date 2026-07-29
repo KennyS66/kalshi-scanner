@@ -441,8 +441,23 @@ class Bot:
         fill_sig = sig
         if sig.get("yes_ask") is None or sig.get("no_ask") is None:
             fill_sig = play["last_sig"]
+        if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+            backoff = self.cfg.get("live_sell_retry_backoff_secs", 30.0)
+            last_err = play.get("sell_error_ts")
+            now = sig.get("ts") or 0.0
+            if last_err is not None and (now - last_err) < backoff:
+                return   # still backing off from the last failed sell attempt
         half = play["qty"] // 2
-        fill = self.broker.sell(play["side"], half, fill_sig)
+        if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+            try:
+                fill = self.broker.sell(play["side"], half, fill_sig)
+            except Exception as e:
+                play["sell_error_ts"] = sig.get("ts") or 0.0
+                self._event("skip", f"live sell failed, backing off {backoff:.0f}s: {e}",
+                            ticker, sig)
+                return
+        else:
+            fill = self.broker.sell(play["side"], half, fill_sig)
         entry = play["entry"]
         entry_fee_half = round(entry["fee_total"] * half / entry["qty"], 4)
         pnl = round((fill["price"] - entry["price"]) * half
@@ -476,7 +491,22 @@ class Bot:
         fill_sig = sig
         if sig.get("yes_ask") is None or sig.get("no_ask") is None:
             fill_sig = play["last_sig"]
-        fill = self.broker.sell(play["side"], play["qty"], fill_sig)
+        if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+            backoff = self.cfg.get("live_sell_retry_backoff_secs", 30.0)
+            last_err = play.get("sell_error_ts")
+            now = sig.get("ts") or 0.0
+            if last_err is not None and (now - last_err) < backoff:
+                return   # still backing off from the last failed sell attempt
+        if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+            try:
+                fill = self.broker.sell(play["side"], play["qty"], fill_sig)
+            except Exception as e:
+                play["sell_error_ts"] = sig.get("ts") or 0.0
+                self._event("skip", f"live sell failed, backing off {backoff:.0f}s: {e}",
+                            ticker, sig)
+                return
+        else:
+            fill = self.broker.sell(play["side"], play["qty"], fill_sig)
         pnl = round_trip_pnl(play["entry"], fill)
         pool = _play_pool(play)
         ps = self.state["pools"].setdefault(pool, _fresh_pool())
