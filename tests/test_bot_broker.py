@@ -133,7 +133,8 @@ def test_live_broker_fill_with_order_id_never_places_a_second_real_order(tmp_pat
                                            "when order_id is already known")))
     b = bot_broker.LiveBroker(cfg, env, bot_dir=tmp_path)
     fill = b.fill(0.49, 3, 1000.0, maker=True,
-                 sig={"ticker": "T1", "side": "YES"}, order_id="already-placed-123")
+                 sig={"ticker": "T1", "side": "YES", "ts": 1784592000.0},
+                 order_id="already-placed-123")
     assert fill["price"] == 0.49
     assert fill["qty"] == 3
     assert fill["order_id"] == "already-placed-123"
@@ -154,7 +155,7 @@ def test_live_broker_fill_without_order_id_places_a_new_order(tmp_path, monkeypa
                                             "yes_price": 55, "no_price": 45})
     b = bot_broker.LiveBroker(cfg, env, bot_dir=tmp_path)
     fill = b.fill(0.55, 2, 1000.0, maker=False,
-                 sig={"ticker": "T1", "side": "YES"}, order_id=None)
+                 sig={"ticker": "T1", "side": "YES", "ts": 1784592000.0}, order_id=None)
     assert len(calls) == 1
     assert fill["order_id"] == "new-order-456"
 
@@ -265,3 +266,48 @@ def test_live_broker_construction_fails_when_no_session_ever_requested(tmp_path)
     import pytest
     with pytest.raises(RuntimeError, match="live trading locked"):
         LiveBroker({"live_sessions_requested": []}, {"BOT_LIVE": "1"}, bot_dir=tmp_path)
+
+
+def test_live_broker_buy_checks_the_entrys_own_session(tmp_path):
+    from bot_broker import LiveBroker
+    import pytest
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "manual"}
+    env = {"BOT_LIVE": "1"}
+    b = LiveBroker(cfg, env, bot_dir=tmp_path)
+    # weekday_night entry (ts falls in weekday_night per bot_core.session_tag) succeeds
+    fill = b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1784592000.0,  # Tue 00:00Z
+                            "ticker": "T1", "mins_left": 10.0})
+    assert fill["price"] == 0.31
+    # a weekday_day entry (same day, hour 14 -> day session) on the SAME already-constructed
+    # broker instance is rejected -- proving the check is per-call, not per-broker
+    with pytest.raises(RuntimeError, match="live trading locked"):
+        b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1784592000.0 + 14 * 3600,
+                         "ticker": "T2", "mins_left": 10.0})
+
+
+def test_live_broker_sell_and_fill_also_check_session(tmp_path):
+    from bot_broker import LiveBroker
+    import pytest
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "manual"}
+    env = {"BOT_LIVE": "1"}
+    b = LiveBroker(cfg, env, bot_dir=tmp_path)
+    weekend_ts = 1784419200.0  # Sun 00:00Z -> weekend_night, not requested
+    with pytest.raises(RuntimeError, match="live trading locked"):
+        b.sell("YES", 1, {"yes_ask": 0.50, "no_ask": 0.50, "spread": 0.02,
+                          "ts": weekend_ts, "ticker": "T3"})
+    with pytest.raises(RuntimeError, match="live trading locked"):
+        b.fill(0.50, 1, weekend_ts, maker=True, sig={"ticker": "T3", "side": "YES", "ts": weekend_ts})
+
+
+def test_live_broker_fails_closed_when_session_cannot_be_resolved(tmp_path):
+    """A sig with no ts resolves to session_tag -> "unknown", which can
+    never appear in live_sessions_requested. The gate must reject it
+    rather than fall through to a real order: an entry whose session we
+    cannot identify is exactly the one we must not trade live."""
+    from bot_broker import LiveBroker
+    import pytest
+    b = LiveBroker({"live_sessions_requested": ["weekday_night", "weekday_day",
+                                                "weekend_day", "weekend_night"],
+                    "broker_mode": "auto"}, {"BOT_LIVE": "1"}, bot_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="live trading locked"):
+        b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ticker": "T1"})

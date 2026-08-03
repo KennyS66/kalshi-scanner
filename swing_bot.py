@@ -189,9 +189,8 @@ class Bot:
             self.state.get("last_control_nonce", 0), disk_nonce)
         self.detector = FlipDetector(self.cfg["flip_threshold"])
         self.regime = RegimeTracker()
-        trades_for_gate = self._read_trades() if self.cfg.get("mode") == "live" else None
         if self.cfg.get("mode") == "live":
-            self.broker = LiveBroker(trades_for_gate, self.cfg, bot_dir=self.dir)
+            self.broker = LiveBroker(self.cfg, bot_dir=self.dir)
         else:
             self.broker = PaperBroker()
         self.feed_fails = 0

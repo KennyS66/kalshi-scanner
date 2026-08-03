@@ -968,7 +968,8 @@ def test_bot_constructs_live_broker_when_mode_is_live_and_unlocked(tmp_path, mon
     (tmp_path / "bot_trades.jsonl").write_text(
         "\n".join(_json.dumps(t) for t in trades))
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"mode": "live", "live_requested": True, "broker_mode": "manual",
+        {"mode": "live", "live_sessions_requested": ["weekday_day", "weekday_night",
+                                    "weekend_day", "weekend_night"], "broker_mode": "manual",
          "overnight_curfew": False, "weekend_curfew": False}))
     monkeypatch.setenv("BOT_LIVE", "1")
     bot = Bot(tmp_path, fetch_fn=lambda: None,
@@ -1007,7 +1008,8 @@ def test_live_mode_entries_use_flat_live_qty_not_pool_budget_formula(tmp_path, m
     (tmp_path / "bot_trades.jsonl").write_text(
         "\n".join(_json.dumps(t) for t in trades))
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"mode": "live", "live_requested": True, "broker_mode": "manual",
+        {"mode": "live", "live_sessions_requested": ["weekday_day", "weekday_night",
+                                    "weekend_day", "weekend_night"], "broker_mode": "manual",
          "overnight_curfew": False, "weekend_curfew": False,
          "limit_entries": False,   # exercise _enter's sizing directly
          "live_qty": 1, "paper_bankroll": 500.0}))
@@ -1052,7 +1054,8 @@ def test_process_pending_polls_real_order_status_in_auto_mode(tmp_path, monkeypa
     (tmp_path / "bot_trades.jsonl").write_text(
         "\n".join(_json.dumps(t) for t in trades))
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+        {"mode": "live", "live_sessions_requested": ["weekday_day", "weekday_night",
+                                    "weekend_day", "weekend_night"], "broker_mode": "auto",
          "overnight_curfew": False, "weekend_curfew": False,
          "limit_entries": True}))
     monkeypatch.setenv("BOT_LIVE", "1")
@@ -1093,7 +1096,8 @@ def _live_auto_bot(tmp_path, monkeypatch, balance_sequence):
     (tmp_path / "bot_trades.jsonl").write_text(
         "\n".join(_json.dumps(t) for t in trades))
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+        {"mode": "live", "live_sessions_requested": ["weekday_day", "weekday_night",
+                                    "weekend_day", "weekend_night"], "broker_mode": "auto",
          "overnight_curfew": False, "weekend_curfew": False,
          "live_hard_stop_usd": -8.0, "live_daily_soft_stop_usd": -3.0}))
     monkeypatch.setenv("BOT_LIVE", "1")
@@ -1158,7 +1162,8 @@ def test_live_stop_inactive_in_manual_mode(tmp_path, monkeypatch):
     (tmp_path / "bot_trades.jsonl").write_text(
         "\n".join(_json.dumps(t) for t in trades))
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"mode": "live", "live_requested": True, "broker_mode": "manual",
+        {"mode": "live", "live_sessions_requested": ["weekday_day", "weekday_night",
+                                    "weekend_day", "weekend_night"], "broker_mode": "manual",
          "overnight_curfew": False, "weekend_curfew": False,
          "live_hard_stop_usd": -8.0, "live_daily_soft_stop_usd": -3.0}))
     monkeypatch.setenv("BOT_LIVE", "1")
@@ -1214,7 +1219,8 @@ def test_auto_order_error_halts_only_that_pool_not_the_whole_bot(tmp_path, monke
     (tmp_path / "bot_trades.jsonl").write_text(
         "\n".join(_json.dumps(t) for t in trades))
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+        {"mode": "live", "live_sessions_requested": ["weekday_day", "weekday_night",
+                                    "weekend_day", "weekend_night"], "broker_mode": "auto",
          "overnight_curfew": False, "weekend_curfew": False,
          "limit_entries": True}))
     monkeypatch.setenv("BOT_LIVE", "1")
@@ -1256,7 +1262,8 @@ def test_auto_order_error_in_enter_fallback_halts_pool_not_bot(tmp_path, monkeyp
     (tmp_path / "bot_trades.jsonl").write_text(
         "\n".join(_json.dumps(t) for t in trades))
     (tmp_path / "config.json").write_text(_json.dumps(
-        {"mode": "live", "live_requested": True, "broker_mode": "auto",
+        {"mode": "live", "live_sessions_requested": ["weekday_day", "weekday_night",
+                                    "weekend_day", "weekend_night"], "broker_mode": "auto",
          "overnight_curfew": False, "weekend_curfew": False,
          "limit_entries": True}))
     monkeypatch.setenv("BOT_LIVE", "1")

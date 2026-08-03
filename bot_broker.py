@@ -137,6 +137,17 @@ class LiveBroker:
         self.bot_dir = bot_dir
         self.broker_mode = cfg.get("broker_mode", "manual")
 
+    def _check_session(self, sig: dict) -> str:
+        """Resolve this entry's session and raise if it isn't unlocked.
+        Returns the session name (callers that already need it, like
+        _signal_fill/_auto_fill via _pool_of, can reuse the return value
+        instead of re-deriving it)."""
+        session = self._pool_of(sig)
+        ok, reason = live_unlock_ok(self.cfg, self.env, session)
+        if not ok:
+            raise RuntimeError(f"live trading locked: {reason}")
+        return session
+
     def _pool_of(self, sig: dict) -> str:
         from bot_core import session_tag
         return session_tag(sig.get("ts"))
@@ -168,12 +179,14 @@ class LiveBroker:
                 "order_id": order.get("order_id")}
 
     def buy(self, side: str, qty: int, sig: dict) -> dict:
+        self._check_session(sig)
         price = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         if self.broker_mode == "manual":
             return self._signal_fill(side, qty, price, sig)
         return self._auto_fill(side, "buy", qty, price, sig, "market", "market")
 
     def sell(self, side: str, qty: int, sig: dict) -> dict:
+        self._check_session(sig)
         ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         spread = max(0.0, sig.get("spread") or 0.0)
         price = max(0.01, round(ask - spread, 4))
@@ -200,6 +213,7 @@ class LiveBroker:
         placement (the chase-to-market path, after the original resting
         order was cancelled, and plain buy()/sell() calls)."""
         sig = sig or {}
+        self._check_session(sig)
         side = sig.get("side", "YES")
         tier = "patient" if maker else "market"
         if self.broker_mode == "manual":
