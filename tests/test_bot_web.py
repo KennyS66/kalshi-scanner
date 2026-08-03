@@ -367,3 +367,13 @@ def test_kill_switch_is_injected_into_both_pages():
         assert "/*STOP_CSS*/" not in html      # marker consumed
         assert "<!--STOP_BAR-->" not in html
         assert "//STOP_JS" not in html
+
+
+def test_stop_sh_recovers_from_a_corrupt_control_file(tmp_path):
+    """A truncated control.json used to reset the nonce to 1, which the bot
+    silently ignores (read_control needs nonce > last_control_nonce) while
+    the script reports success. Floor it against the consumed nonce."""
+    (tmp_path / "control.json").write_text('{"nonce": 4')       # truncated
+    (tmp_path / "bot_state.json").write_text(json.dumps({"last_control_nonce": 67}))
+    assert _run_stop(tmp_path).returncode == 0
+    assert json.loads((tmp_path / "control.json").read_text())["nonce"] == 68

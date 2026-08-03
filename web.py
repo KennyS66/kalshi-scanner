@@ -1566,9 +1566,12 @@ async def api_session_pause(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
 
+from bot_page import BOT_HTML   # module-level: a missing kill-switch marker
+                                # must fail at import, not 500 on every /bot
+
+
 @app.get("/bot", response_class=HTMLResponse)
 async def bot_screen() -> str:
-    from bot_page import BOT_HTML
     return BOT_HTML
 
 

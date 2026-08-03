@@ -364,6 +364,23 @@ class Bot:
         self._event("enter", f"{pend['side']} x{pend['qty']} @ {fill['price']} — {kind}",
                     ticker, sig)
 
+    def _cancel_pending(self, t, pend, sig, reason):
+        """Drop a resting entry, cancelling the real order first in auto
+        mode. A cancel that fails halts the pool rather than leaving an
+        orphaned live order the bot has stopped tracking."""
+        if pend.get("order_id"):
+            import live_broker
+            try:
+                live_broker.cancel_order(pend["order_id"])
+            except Exception as e:
+                self.state["pools"][pend["pool"]]["halted"] = True
+                del self.state["pending_entries"][t]
+                self._event("halt", f"[{pend['pool']}] order_error: {e} -- "
+                            f"auto entries blocked until manually resumed", t, sig)
+                return
+        del self.state["pending_entries"][t]
+        self._event("cancel", reason, t, sig)
+
     def _process_pending(self, sig):
         """Advance every resting entry order by one tick: fill if the
         market has traded down to the limit, chase to market once the
@@ -382,22 +399,21 @@ class Bot:
         authoritative."""
         ticker = sig.get("ticker")
         timeout = self.cfg.get("limit_fill_timeout_secs", 30)
+        paused_sessions = self.cfg.get("paused_sessions") or []
         for t in list(self.state["pending_entries"]):
             pend = self.state["pending_entries"][t]
+            # A pause must stop resting orders too, not just new flips. This
+            # loop runs BEFORE entry_blockers, so without this a limit order
+            # placed pre-STOP would still fill -- or chase to MARKET on
+            # timeout -- and open a position the user was told could not
+            # happen (kill-switch confirm: "STOP only blocks NEW entries").
+            # Cancelling is the safe direction: nothing was risked yet.
+            if self.state["paused"] or pend.get("pool") in paused_sessions:
+                self._cancel_pending(t, pend, sig, "paused before limit filled")
+                continue
             if sig.get("status") != "ok" or t != ticker:
-                if pend.get("order_id"):
-                    import live_broker
-                    try:
-                        live_broker.cancel_order(pend["order_id"])
-                    except Exception as e:
-                        ps = self.state["pools"][pend["pool"]]
-                        ps["halted"] = True
-                        del self.state["pending_entries"][t]
-                        self._event("halt", f"[{pend['pool']}] order_error: {e} -- "
-                                    f"auto entries blocked until manually resumed", t, sig)
-                        continue
-                del self.state["pending_entries"][t]
-                self._event("cancel", "rolled before limit filled or chased", t, sig)
+                self._cancel_pending(t, pend, sig,
+                                     "rolled before limit filled or chased")
                 continue
             if pend.get("order_id"):
                 import live_broker

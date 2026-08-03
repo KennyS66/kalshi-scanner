@@ -1569,3 +1569,64 @@ def test_tick_persists_heartbeat_even_when_manage_raises(tmp_path, monkeypatch):
         bot.tick(now_ts=4242.0)
     saved = json.loads((tmp_path / STATE_FILE).read_text())
     assert saved["heartbeat"] == 4242.0
+
+
+# ── STOP must also stop resting limit orders (2026-08-02 review, crit #1) ──
+#
+# _process_pending runs before the paused entry-blocker, so a resting limit
+# order could still fill -- or chase to MARKET on timeout -- after the user
+# hit STOP. The kill-switch confirm promises "new entries stop immediately",
+# so a pause must cancel resting entries, not let them become positions.
+
+
+def _pending_bot(tmp_path, monkeypatch, extra_cfg=None):
+    cfg = {"limit_entries": True, "overnight_curfew": False,
+           "weekend_curfew": False, "scale_out": False}
+    cfg.update(extra_cfg or {})
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    sigs = [_sig(ts=_WD_NIGHT_TS, whale_trend=3.0, momentum=30.0),
+            _sig(ts=_WD_NIGHT_TS + 5, whale_trend=-3.0, momentum=-30.0),
+            _sig(ts=_WD_NIGHT_TS + 10, whale_trend=-3.5, momentum=-30.0)]
+    return _mkbot(tmp_path, sigs, monkeypatch)
+
+
+def test_pause_cancels_a_resting_entry_instead_of_filling_it(tmp_path, monkeypatch):
+    bot = _pending_bot(tmp_path, monkeypatch)
+    for _ in range(2):
+        bot.tick()
+    assert bot.state["pending_entries"], "precondition: a limit order is resting"
+    bot.state["paused"] = True
+    bot.tick()
+    assert bot.state["pending_entries"] == {}, "paused: resting order must be cancelled"
+    assert bot.state["open_plays"] == {}, "paused: it must not become a position"
+    reasons = [e["reason"] for e in _rows(tmp_path, EVENTS_FILE)
+               if e["action"] == "cancel"]
+    assert any("paused" in r for r in reasons), reasons
+
+
+def test_paused_session_also_cancels_its_resting_entry(tmp_path, monkeypatch):
+    """The per-session pause makes the same promise as the global one."""
+    bot = _pending_bot(tmp_path, monkeypatch)
+    for _ in range(2):
+        bot.tick()
+    assert bot.state["pending_entries"]
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"limit_entries": True, "overnight_curfew": False,
+         "weekend_curfew": False, "scale_out": False,
+         "paused_sessions": ["weekday_night"]}))
+    bot.tick()
+    assert bot.state["pending_entries"] == {}
+    assert bot.state["open_plays"] == {}
+
+
+def test_unpaused_resting_entry_still_fills_normally(tmp_path, monkeypatch):
+    """The guard must not break the ordinary path it sits in front of."""
+    bot = _pending_bot(tmp_path, monkeypatch)
+    for _ in range(2):
+        bot.tick()
+    pend = dict(next(iter(bot.state["pending_entries"].values())))
+    bot.fetch = lambda: _sig(ts=_WD_NIGHT_TS + 10, whale_trend=-3.5, momentum=-30.0,
+                             yes_ask=pend["limit_price"], no_ask=pend["limit_price"])
+    bot.tick()
+    assert bot.state["pending_entries"] == {}
+    assert bot.state["open_plays"], "an unpaused resting order must still fill"

@@ -73,7 +73,9 @@ STOP_JS = r"""
    Self-polls /api/bot/status so the component is identical on every page
    it is embedded in, with no coupling to that page's own poll loop. One
    extra localhost request per 5s is a fair price for that.            */
-let _stopPending = null;   // 'pause' | 'resume' while awaiting confirmation
+let _stopPending = null;     // 'pause' | 'resume' while awaiting confirmation
+let _stopPendingAt = 0;      // when it started -- pending MUST time out
+const STOP_PENDING_MS = 15000;
 
 /* Pure: bot status -> how the control should look. Kept separate from the
    DOM so it stays the one piece of this component that is easy to reason
@@ -81,7 +83,12 @@ let _stopPending = null;   // 'pause' | 'resume' while awaiting confirmation
 function stopViewState(s, nowMs) {
   const fresh = s && s.heartbeat && (nowMs / 1000 - s.heartbeat) < 30;
   const open = Object.keys((s && s.open_plays) || {}).length;
-  if (!fresh) return {label: '■ STOP', cls: '', disabled: true,
+  // Offline: STOP stays ENABLED. control.json persists on disk and is read
+  // on the bot's next tick, so a stop queued against a stalled loop still
+  // lands -- and "heartbeat looks stale" is judged against the browser
+  // clock, which can be skewed. Never make STOP unclickable on a bot that
+  // might be alive; only resume is withheld here.
+  if (!fresh) return {label: '■ STOP', cls: '', disabled: false,
                       state: 'BOT OFFLINE', stateCls: 'offline', open, banner: false};
   if (s.paused) {
     let why = s.paused_by === 'deadman' ? 'STOPPED — deadman' : 'STOPPED';
@@ -97,11 +104,21 @@ function renderStop(s) {
   const v = stopViewState(s, Date.now());
   const btn = document.getElementById('stopBtn');
   if (!btn) return;
-  // A click in flight owns the button until a poll confirms the new state.
+  // A click in flight owns the button until a poll confirms the new state
+  // -- but never forever. A resume that the deadman immediately undoes, or
+  // a POST the bot never applies, would otherwise leave the kill-switch
+  // stuck reading "resuming…" and disabled until a page reload.
   if (_stopPending) {
     const settled = (_stopPending === 'pause') === !!(s && s.paused);
-    if (settled) _stopPending = null;
-    else {
+    if (settled) { _stopPending = null; }
+    else if (Date.now() - _stopPendingAt > STOP_PENDING_MS) {
+      const was = _stopPending;
+      _stopPending = null;
+      setTimeout(() => alert(
+        `The bot did not ${was}. It may be stopped by the deadman (start`
+        + ` /marketloop), or the loop may be down. Try ./stop.sh from a`
+        + ` terminal.`), 0);
+    } else {
       btn.textContent = _stopPending === 'pause' ? 'stopping…' : 'resuming…';
       btn.className = 'pending'; btn.disabled = true;
       return;
@@ -144,7 +161,10 @@ function stopConfirmText(s, cfg) {
 function resumeConfirmText(s, cfg) {
   const live = (cfg && cfg.live_sessions_requested) || [];
   const parts = [];
-  if (s && s.mode === 'live' && live.length)
+  // Mode comes from CONFIG, not state: bot_state.json's "mode" is written
+  // once by fresh_state() as "paper" and never updated, so reading it here
+  // would silently disable the real-money warning (2026-08-02 review).
+  if (cfg && cfg.mode === 'live' && live.length)
     parts.push(`${live.join(', ')} ${live.length === 1 ? 'is' : 'are'} LIVE`
                + ' — it will trade real money.');
   // Observed 2026-08-02: a resume with a stale marketloop heartbeat is
@@ -167,14 +187,17 @@ async function stopToggle() {
   } else if (!confirm(stopConfirmText(s, cfg))) return;
 
   _stopPending = resuming ? 'resume' : 'pause';
+  _stopPendingAt = Date.now();
   renderStop(s);
   try {
-    await fetch('/api/bot/control', {
+    const r = await fetch('/api/bot/control', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({cmd: resuming ? 'resume' : 'pause'})});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
   } catch (e) {
     _stopPending = null;
-    alert('Could not reach the bot API. Run ./stop.sh from a terminal instead.');
+    alert(`Could not send ${resuming ? 'resume' : 'STOP'} (${e.message}).`
+          + ' Run ./stop.sh from a terminal instead.');
   }
   pollStop();
 }
