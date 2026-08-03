@@ -307,3 +307,63 @@ def test_api_session_pause_endpoint(tmp_path, monkeypatch):
     r2 = client.post("/api/bot/session_pause",
                      json={"session": "weekend_day", "action": "bogus"})
     assert r2.status_code == 400
+
+
+# ── kill-switch: stop.sh CLI fallback + page injection ────────────────
+#
+# stop.sh exists so there is still a kill-switch when the web UI is down.
+# It must write byte-compatible control.json to what bot_control_write
+# produces, or the bot would ignore it.
+
+import subprocess
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent.parent
+
+
+def _run_stop(bot_dir, *args):
+    return subprocess.run([str(_REPO / "stop.sh"), *args],
+                          env={"PATH": "/usr/bin:/bin", "BOT_DIR": str(bot_dir)},
+                          capture_output=True, text=True, timeout=20)
+
+
+def test_stop_sh_writes_same_shape_as_bot_control_write(tmp_path):
+    py_dir, sh_dir = tmp_path / "py", tmp_path / "sh"
+    py_dir.mkdir(); sh_dir.mkdir()
+    bot_control_write(py_dir, "pause")
+    r = _run_stop(sh_dir)
+    assert r.returncode == 0, r.stderr
+    assert json.loads((sh_dir / "control.json").read_text()) \
+        == json.loads((py_dir / "control.json").read_text())
+
+
+def test_stop_sh_resume_and_nonce_increments(tmp_path):
+    assert _run_stop(tmp_path).returncode == 0
+    assert json.loads((tmp_path / "control.json").read_text())["nonce"] == 1
+    assert _run_stop(tmp_path, "resume").returncode == 0
+    c = json.loads((tmp_path / "control.json").read_text())
+    assert c == {"nonce": 2, "cmd": "resume"}
+
+
+def test_stop_sh_rejects_unknown_command(tmp_path):
+    r = _run_stop(tmp_path, "fire_the_missiles")
+    assert r.returncode != 0
+    assert not (tmp_path / "control.json").exists()
+
+
+def test_stop_sh_leaves_no_temp_file(tmp_path):
+    _run_stop(tmp_path)
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_kill_switch_is_injected_into_both_pages():
+    """A missing kill-switch must fail loudly at import, not silently at
+    2am: both pages must actually carry the component, not just the
+    marker comments."""
+    from bot_page import BOT_HTML
+    from web import _TRADE_HTML
+    for html in (BOT_HTML, _TRADE_HTML):
+        assert "stopBtn" in html and "stopBanner" in html
+        assert "/*STOP_CSS*/" not in html      # marker consumed
+        assert "<!--STOP_BAR-->" not in html
+        assert "//STOP_JS" not in html

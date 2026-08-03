@@ -1960,6 +1960,7 @@ header {
               border:1px solid var(--border); background:var(--bg3); }
 .score-pill.pos { border-color:var(--green-bd); background:var(--green-bg); color:var(--green); }
 .score-pill.neg { border-color:var(--red-bd);   background:var(--red-bg);   color:var(--red); }
+/*STOP_CSS*/
 </style>
 </head>
 <body>
@@ -1970,8 +1971,11 @@ header {
   <span id="spot-eth" class="spot-eth">ETH $—</span>
   <a href="/whales" class="nav-link">→ whales</a>
   <a href="/crypto" class="nav-link">→ scanner</a>
+  <a href="/bot" class="nav-link">→ bot</a>
   <span class="clock" id="clock">--:--:-- UTC</span>
+  <!--STOP_BAR-->
 </header>
+<!--STOP_BANNER-->
 
 <div class="thesis-bar" id="thesis-bar" style="display:none"></div>
 
@@ -2622,6 +2626,7 @@ tick(); setInterval(tick,1000);
 
 pollSignal();  setInterval(pollSignal,  4000);
 pollSlow();    setInterval(pollSlow,   12000);
+//STOP_JS
 </script>
 </body>
 </html>"""
@@ -3684,6 +3689,10 @@ setInterval(refreshLog, 10000);
 </script>
 </body>
 </html>"""
+
+from stop_control import inject as _inject_stop
+_TRADE_HTML = _inject_stop(_TRADE_HTML)
+
 
 _WHALES_HTML = r"""<!doctype html>
 <html lang="en">

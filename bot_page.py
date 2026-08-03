@@ -284,6 +284,7 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
          padding:7px 10px; font-size:11px; line-height:1.7; white-space:nowrap;
          box-shadow:0 6px 20px rgba(0,0,0,.45); font-variant-numeric:tabular-nums; }
 .eqtip .dim { font-family:var(--sans); }
+/*STOP_CSS*/
 </style></head><body>
 
 <header>
@@ -295,7 +296,9 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
   <a class="nav-link" href="/crypto">/crypto</a>
   <a class="nav-link" href="/whales">/whales</a>
   <span class="clock" id="clock"></span>
+  <!--STOP_BAR-->
 </header>
+<!--STOP_BANNER-->
 
 <div class="tabs">
   <button class="tab-btn active" id="tabBtnOverview" onclick="switchTab('overview')">Overview</button>
@@ -1212,4 +1215,8 @@ setInterval(pollCalibration, 30000);
 setInterval(pollCandles, 30000);
 setInterval(pollThesis, 300000);
 setInterval(pollLiveSignals, 10000);
+//STOP_JS
 </script></body></html>"""
+
+from stop_control import inject as _inject_stop
+BOT_HTML = _inject_stop(BOT_HTML)
