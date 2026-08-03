@@ -1615,59 +1615,6 @@ async def fills_toggle() -> JSONResponse:
     return JSONResponse({"fills_enabled": _fills_enabled})
 
 
-# 2026-07-28: Kenny approved a $20 manual sample-live-test on weekday_night
-# only (see dual-100-trade-gate / trading-account-setup memory) -- balance
-# confirmed $20.02 at approval time, no open positions. PnL is measured as
-# balance-since-start rather than summing fills, since the account fills
-# poller only keeps the most recent 20 (portfolio/fills?limit=20) and older
-# ones roll off well before the test's 30-40 fill target; balance is the one
-# number that can't drift out from under a rolling window.
-LIVE_TEST_START_TS = 1785301930.0
-LIVE_TEST_START_BALANCE = 20.02
-LIVE_TEST_HARD_STOP = -8.0
-LIVE_TEST_DAILY_SOFT_STOP = -3.0
-
-
-@app.get("/api/live_test")
-async def api_live_test() -> JSONResponse:
-    import datetime as _dt
-    with _account_lock:
-        cache = dict(_account_cache)
-    bal_raw = cache.get("balance")
-    try:
-        balance = float(bal_raw) if bal_raw is not None else None
-    except (TypeError, ValueError):
-        balance = None
-    pnl = round(balance - LIVE_TEST_START_BALANCE, 4) if balance is not None else None
-
-    fills = cache.get("fills") or []
-    since_start = []
-    for f in fills:
-        ts = f.get("ts")
-        try:
-            f_ts = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
-        except (TypeError, ValueError):
-            continue
-        if f_ts >= LIVE_TEST_START_TS:
-            since_start.append(f)
-    since_start.sort(key=lambda f: f.get("ts") or "")
-
-    status = "no_data" if balance is None else \
-        "hard_stop_hit" if pnl <= LIVE_TEST_HARD_STOP else "active"
-
-    return JSONResponse({
-        "start_ts": LIVE_TEST_START_TS,
-        "start_balance": LIVE_TEST_START_BALANCE,
-        "hard_stop": LIVE_TEST_HARD_STOP,
-        "daily_soft_stop": LIVE_TEST_DAILY_SOFT_STOP,
-        "balance": balance,
-        "pnl": pnl,
-        "fills_since_start": since_start,
-        "status": status,
-        "error": cache.get("error"),
-    })
-
-
 @app.get("/api/live_signals")
 async def api_live_signals() -> JSONResponse:
     path = _BOT_DIR / "live_signals.jsonl"

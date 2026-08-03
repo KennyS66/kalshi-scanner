@@ -194,6 +194,39 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 .grade-edge b { font-variant-numeric:tabular-nums; }
 .notional { color:var(--mute); font-size:11px; }
 /* gate progress bar inside its tile */
+/* Trading-now strip. The left rail takes the active session's own colour, so
+   the page's lead reads as that regime rather than as generic chrome. */
+.nowbar { display:flex; flex-wrap:wrap; align-items:stretch; gap:0;
+          margin:14px 20px; background:var(--bg2); border:1px solid var(--border);
+          border-left:3px solid var(--accent, var(--border));
+          border-radius:var(--radius); box-shadow:var(--card-shadow); overflow:hidden; }
+.nowbar .now-lead { flex:2 1 240px; padding:14px 18px; min-width:0; }
+.now-eyebrow { font-size:9px; font-weight:800; letter-spacing:1.4px; text-transform:uppercase;
+               color:var(--mute); }
+.now-session { font-family:var(--mono); font-size:26px; font-weight:800; letter-spacing:-.5px;
+               margin-top:4px; color:var(--accent, var(--fg)); line-height:1.05; }
+.now-sub { font-size:11px; color:var(--mute); margin-top:5px; font-variant-numeric:tabular-nums; }
+.nowbar .now-stat { flex:1 1 118px; padding:14px 16px; min-width:0;
+                    border-left:1px solid var(--hair); }
+.nowbar .now-stat .k { font-size:9px; font-weight:800; letter-spacing:1px;
+                       text-transform:uppercase; color:var(--mute); }
+.nowbar .now-stat .v { font-size:19px; font-weight:800; margin-top:4px;
+                       font-variant-numeric:tabular-nums; font-family:var(--mono); }
+.nowbar .now-stat .s { font-size:10px; color:var(--mute); margin-top:3px; }
+@media (max-width:720px) {
+  .nowbar .now-lead { flex:1 1 100%; }
+  .nowbar .now-stat { border-left:none; border-top:1px solid var(--hair); }
+}
+
+/* Active-session emphasis: the tile for the regime currently in play gets the
+   rail and full contrast; the other three stay legible but recede. */
+.ev-summary .tile.is-active { border-color:var(--accent, var(--border));
+                              border-left:3px solid var(--accent, var(--border));
+                              background:var(--bg2); }
+.tile.is-idle { opacity:.62; }
+.now-tag { font-size:8px; font-weight:900; letter-spacing:1px; text-transform:uppercase;
+           color:var(--accent, var(--mute)); margin-left:6px; }
+
 .live-btn { margin-top:6px; width:100%; padding:6px 0; border-radius:6px; font-size:11px;
             font-weight:900; text-transform:uppercase; letter-spacing:.5px; cursor:pointer;
             border:1px solid var(--border); background:transparent; color:var(--mute); }
@@ -270,22 +303,27 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 </div>
 
 <div id="overviewTab">
-  <div class="panel" id="liveTestPanel" style="margin:14px 20px">
-    <h3>Live $20 test <span class="dim" style="text-transform:none">(weekday_night only, manual fills — hard stop -$8, daily soft stop -$3)</span></h3>
-    <div class="tiles" style="margin:8px 0 0">
-      <div class="tile"><div class="k">balance</div><div class="v" id="ltBalance">—</div>
-        <div class="s" id="ltStart">start $20.02</div></div>
-      <div class="tile"><div class="k">pnl since start</div><div class="v" id="ltPnl">—</div>
-        <div class="s" id="ltStatus"></div></div>
-      <div class="tile"><div class="k">fills</div><div class="v" id="ltFillCount">—</div>
-        <div class="s">of ~30-40 target</div></div>
+  <!-- Trading-now strip: the page's lead. Only one of the four tape regimes
+       is ever in play, so the page opens by naming it instead of showing all
+       four as equals. -->
+  <div class="nowbar" id="nowBar">
+    <div class="now-lead">
+      <div class="now-eyebrow">trading now</div>
+      <div class="now-session" id="nowSession">—</div>
+      <div class="now-sub" id="nowSub">—</div>
     </div>
-    <table id="ltFillsTable" style="margin-top:10px">
-      <thead><tr><th>ticker</th><th>side</th><th>qty</th><th>price</th><th>time (UTC)</th></tr></thead>
-      <tbody></tbody></table>
-    <div class="empty" id="ltFillsEmpty" hidden>no live fills yet — waiting on the first manual placement</div>
+    <div class="now-stat"><div class="k">today</div><div class="v" id="nowPnl">—</div>
+      <div class="s" id="nowPnlSub">this session's pool</div></div>
+    <div class="now-stat"><div class="k">open plays</div><div class="v" id="nowOpen">—</div>
+      <div class="s" id="nowOpenSub">&nbsp;</div></div>
+    <div class="now-stat"><div class="k">bankroll</div><div class="v" id="nowBankroll">—</div>
+      <div class="s" id="nowBankrollSub">&nbsp;</div></div>
+    <div class="now-stat"><div class="k">live gate</div><div class="v" id="nowGate">—</div>
+      <div class="s" id="nowGateSub">&nbsp;</div></div>
+  </div>
 
-    <h3 style="margin-top:14px">Manual/auto live signals</h3>
+  <div class="panel" id="liveSignalsPanel" style="margin:14px 20px">
+    <h3>Manual/auto live signals</h3>
     <table id="liveSignalsTable" style="margin-top:10px">
       <thead><tr><th>ticker</th><th>side</th><th>qty</th><th>price</th><th>tier</th><th>error</th></tr></thead>
       <tbody></tbody></table>
@@ -578,6 +616,17 @@ const sessCls = s => ({weekday_day:'wd_day', weekday_night:'wd_night',
                        weekend_day:'we_day', weekend_night:'we_night'}[s] || '');
 const sessLabel = s => ({weekday_day:'WD·day', weekday_night:'WD·night',
                          weekend_day:'WE·day', weekend_night:'WE·night'}[s] || (s || '?'));
+// Mirrors bot_core.session_tag exactly: UTC, Sat/Sun are weekend, and the
+// day/night boundary is CURFEW_END_HOUR (13Z). Kept in sync by hand -- if
+// that constant moves in bot_core.py, move it here too.
+const SESS_DAY_HOUR = 13;
+function currentSession(d) {
+  d = d || new Date();
+  const wd = (d.getUTCDay() === 0 || d.getUTCDay() === 6) ? 'weekend' : 'weekday';
+  return `${wd}_${d.getUTCHours() >= SESS_DAY_HOUR ? 'day' : 'night'}`;
+}
+const SESS_ACCENT = {weekday_day:'var(--blue)', weekday_night:'var(--blue)',
+                     weekend_day:'var(--purple)', weekend_night:'var(--purple)'};
 let offsets = {yes:{}, no:{}};
 let lastSig = null;
 let evFilter = null;      // null = all sessions, else 'weekday_day' etc.
@@ -805,19 +854,60 @@ function renderPoolByDate(d) {
 
 function renderPoolTiles(s) {
   const pools = s.pools || {};
+  const now = currentSession();
   $('poolTiles').innerHTML = SESSIONS.map(p => {
     const ps = pools[p] || {};
     const dp = ps.day_pnl || 0;
     const bankroll = ps.bankroll || 0;
+    const isNow = p === now;
     const status = ps.halted ? '<span class="neg" style="font-weight:800">HALTED</span>'
                  : ps.loss_capped ? '<span class="neg" style="font-weight:800">LOSS CAP</span>'
                  : '<span class="dim">running</span>';
-    return `<div class="tile">
-        <div class="k"><span class="badge sess ${sessCls(p)}">${sessLabel(p)}</span></div>
+    return `<div class="tile ${isNow ? 'is-active' : 'is-idle'}"
+              style="--accent:${SESS_ACCENT[p]}">
+        <div class="k"><span class="badge sess ${sessCls(p)}">${sessLabel(p)}</span>
+          ${isNow ? '<span class="now-tag">now</span>' : ''}</div>
         <div class="v ${dp >= 0 ? 'pos' : 'neg'}">${money(dp)}</div>
         <div class="s">bankroll $${bankroll.toFixed(2)} · ${status}</div>
       </div>`;
   }).join('');
+}
+
+// The page's lead: name the one regime actually in play and how it is doing.
+function renderNowBar(d, cfg) {
+  const s = d.state || {}, pools = s.pools || {};
+  const now = currentSession();
+  const ps = pools[now] || {};
+  const live = (cfg.live_sessions_requested || []).includes(now);
+  const pausedSess = (cfg.paused_sessions || []).includes(now);
+  const gate = ((d.gate || {}).sessions || {})[now] || {n: 0, net_avg: 0, ok: false};
+
+  $('nowBar').style.setProperty('--accent', SESS_ACCENT[now]);
+  $('nowSession').textContent = sessLabel(now);
+
+  // One sentence on whether this session can trade, most-blocking reason first.
+  const halted = ps.halted ? 'halted' : ps.loss_capped ? 'loss cap' : null;
+  const why = s.halted ? 'bot halted'
+            : s.paused ? (s.paused_by === 'deadman' ? 'paused — marketloop heartbeat stale' : 'paused')
+            : pausedSess ? 'this session is paused'
+            : halted ? `this session is ${halted}`
+            : 'taking entries';
+  $('nowSub').innerHTML =
+    `${(cfg.mode || 'paper').toUpperCase()} · ${live ? '<span class="pos">LIVE</span>' : 'paper'} · ${why}`;
+
+  const dp = ps.day_pnl || 0;
+  $('nowPnl').textContent = money(dp);
+  $('nowPnl').className = 'v ' + (dp > 0 ? 'pos' : dp < 0 ? 'neg' : 'dim');
+  $('nowOpen').textContent = Object.keys(s.open_plays || {}).length;
+  $('nowOpenSub').textContent = `${Object.keys(s.pending_entries || {}).length} pending`;
+  $('nowBankroll').textContent = `$${(ps.bankroll || 0).toFixed(2)}`;
+  $('nowBankrollSub').textContent = `all pools $${(s.bankroll || 0).toFixed(2)}`;
+  $('nowGate').textContent = gate.ok ? 'passing' : `${gate.n}/100`;
+  $('nowGate').className = 'v ' + (gate.ok ? 'pos' : 'dim');
+  $('nowGateSub').textContent = gate.ok
+    ? `net avg ${money(gate.net_avg)} — eligible`
+    : gate.n >= 100 ? `net avg ${money(gate.net_avg)} — must be positive`
+    : `${100 - gate.n} more settled trades`;
 }
 
 function renderEvGate(d, cfg) {
@@ -938,6 +1028,7 @@ async function pollBot() {
   $('openEmpty').hidden = open.length > 0;
 
   lastBotData = d; lastBotCfg = cfg;
+  renderNowBar(d, cfg);
   renderEvGate(d, cfg);
   renderFindings(d.findings);
 
@@ -1011,9 +1102,12 @@ async function pollBot() {
       const paused = ((lastBotCfg && lastBotCfg.paused_sessions) || []).includes(s);
       const pauseCls = paused ? 'pause-btn paused' : 'pause-btn';
       const pauseLabel = paused ? 'paused' : 'running';
-      return `<div class="tile">
+      const isNow = s === currentSession();
+      return `<div class="tile ${isNow ? 'is-active' : 'is-idle'}"
+                style="--accent:${SESS_ACCENT[s]}">
           <div class="k"><span class="badge sess ${sessCls(s)}">${sessLabel(s)}</span>
-            ${st.ok ? '<span class="pos" style="font-weight:900"> ✓</span>' : ''}</div>
+            ${st.ok ? '<span class="pos" style="font-weight:900"> ✓</span>' : ''}
+            ${isNow ? '<span class="now-tag">now</span>' : ''}</div>
           <div class="v">${st.n}<span class="dim" style="font-size:11px">/100</span></div>
           <div class="s ${st.n ? (st.net_avg > 0 ? 'pos' : 'neg') : ''}">net avg ${money(st.net_avg)}</div>
           <div class="gatebar"><i style="width:${pct}%"></i></div>
@@ -1091,42 +1185,17 @@ async function pollThesis() {
   dayKey = t && t.level ? parseFloat(t.level) : null;
 }
 
-async function pollLiveTest() {
-  const d = await fj('/api/live_test', null);
-  const balEl = $('ltBalance'), pnlEl = $('ltPnl'), statusEl = $('ltStatus');
-  if (!d || d.error || d.balance == null) {
-    balEl.textContent = '—'; balEl.className = 'v';
-    pnlEl.textContent = '—'; pnlEl.className = 'v';
-    statusEl.textContent = d && d.error ? esc(d.error) : 'no data';
-    $('ltFillCount').textContent = '—';
-    return;
-  }
-  balEl.textContent = '$' + d.balance.toFixed(2);
-  pnlEl.textContent = money(d.pnl);
-  pnlEl.className = 'v ' + (d.pnl >= 0 ? 'pos' : 'neg');
-  if (d.status === 'hard_stop_hit') {
-    statusEl.innerHTML = '<span class="neg" style="font-weight:900">HARD STOP HIT — pause, review before resuming</span>';
-  } else if (d.pnl <= d.daily_soft_stop) {
-    statusEl.innerHTML = '<span class="neg">past -$3 soft-stop line — consider pausing new entries</span>';
-  } else {
-    statusEl.textContent = 'active';
-  }
-  const fills = d.fills_since_start || [];
-  $('ltFillCount').textContent = fills.length;
-  $('ltFillsEmpty').hidden = fills.length > 0;
-  $('ltFillsTable').tBodies[0].innerHTML = fills.slice().reverse().map(f => `<tr>
-    <td>${esc(f.ticker)}</td>
-    <td><span class="side-chip ${esc((f.side||'').toLowerCase())}">${esc((f.side||'').toUpperCase())}</span></td>
-    <td>${f.qty}</td>
-    <td>${(f.price * 100).toFixed(1)}¢</td>
-    <td>${esc(String(f.ts).replace('T',' ').slice(0,19))}</td></tr>`).join('');
-}
 
 async function pollLiveSignals() {
   const d = await fj('/api/live_signals', null);
   const rows = (d && d.signals) || [];
   const el = $('liveSignalsTable');
   if (!el) return;
+  // Nothing has ever been placed live until a session is toggled live, so an
+  // empty signals table is the normal state -- keep the whole panel out of the
+  // page rather than parking an empty header row at the top of it.
+  const panel = $('liveSignalsPanel');
+  if (panel) panel.hidden = rows.length === 0;
   el.tBodies[0].innerHTML = rows.slice().reverse().map(r => `<tr>
     <td>${esc(r.ticker)}</td>
     <td><span class="side-chip ${esc((r.side||'').toLowerCase())}">${esc(r.side)}</span></td>
@@ -1136,12 +1205,11 @@ async function pollLiveSignals() {
     <td>${r.error ? `<span class="neg">${esc(r.error)}</span>` : ''}</td></tr>`).join('');
 }
 
-pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal(); pollLoopLog(); pollLiveTest(); pollLiveSignals();
+pollThesis().then(pollCandles); pollCalibration(); pollBot(); pollSignal(); pollLoopLog(); pollLiveSignals();
 setInterval(pollBot, 3000);
 setInterval(pollSignal, 3000);
 setInterval(pollCalibration, 30000);
 setInterval(pollCandles, 30000);
 setInterval(pollThesis, 300000);
-setInterval(pollLiveTest, 10000);
 setInterval(pollLiveSignals, 10000);
 </script></body></html>"""
