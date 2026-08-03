@@ -26,7 +26,16 @@ DEFAULT_CONFIG = {
     "poll_secs": 5,
     "mode": "paper",
     "paper_bankroll": 500.0,   # paper-mode stake; 0/absent = use real balance
-    "live_requested": False,   # GUI toggle target; live also needs BOT_LIVE=1 + EV bar
+    "live_sessions_requested": [],  # session names (subset of POOL_NAMES)
+                               # toggled live via the /bot dashboard. A
+                               # session's presence here + BOT_LIVE=1 in
+                               # the environment together unlock live
+                               # trading for that session -- checked once
+                               # at toggle-time (POST /api/bot/live_session
+                               # in web.py), never re-derived from trade
+                               # history afterward (Kenny 2026-07-29: no
+                               # auto-disable if a live session's
+                               # performance later regresses).
     "use_ranges": True,        # gate entries/exits on the calibrated buy/sell ranges
     "ev_gate": True,           # skip entry buckets with proven-negative EV
     "weekend_curfew": True,    # no entries Sat/Sun 00Z-13Z (thin-tape bleed)

@@ -168,3 +168,16 @@ def test_candles_from_log_buckets_ohlc(tmp_path):
 def test_candles_from_log_missing_file(tmp_path):
     from web import candles_from_log
     assert candles_from_log(tmp_path / "nope.jsonl", 15, 8, now=1000) == []
+
+
+def test_status_payload_unlock_reflects_live_capability(tmp_path, monkeypatch):
+    _seed(tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"live_sessions_requested": ["weekday_night"]}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    p = bot_status_payload(tmp_path)
+    assert p["unlock"]["ok"] is True
+
+    (tmp_path / "config.json").write_text(json.dumps({"live_sessions_requested": []}))
+    p2 = bot_status_payload(tmp_path)
+    assert p2["unlock"]["ok"] is False

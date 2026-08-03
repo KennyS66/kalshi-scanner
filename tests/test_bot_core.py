@@ -5,10 +5,10 @@ from bot_core import DEFAULT_CONFIG, load_config, FlipDetector
 def test_default_config_keys():
     for k in ("flip_threshold", "min_entry_mins", "exit_mins", "risk_pct",
               "day_stop_pct", "max_open_plays", "decided_lo", "decided_hi",
-              "poll_secs", "mode", "live_requested"):
+              "poll_secs", "mode", "live_sessions_requested"):
         assert k in DEFAULT_CONFIG
     assert DEFAULT_CONFIG["mode"] == "paper"
-    assert DEFAULT_CONFIG["live_requested"] is False
+    assert DEFAULT_CONFIG["live_sessions_requested"] == []
 
 
 def test_load_config_merges_file_over_defaults(tmp_path):
@@ -482,3 +482,8 @@ def test_default_config_has_live_broker_mode_keys():
     assert DEFAULT_CONFIG["live_cap_usd"] == 20.0
     assert DEFAULT_CONFIG["live_hard_stop_usd"] == -8.0
     assert DEFAULT_CONFIG["live_daily_soft_stop_usd"] == -3.0
+
+
+def test_default_config_has_live_sessions_requested_not_live_requested():
+    assert DEFAULT_CONFIG["live_sessions_requested"] == []
+    assert "live_requested" not in DEFAULT_CONFIG

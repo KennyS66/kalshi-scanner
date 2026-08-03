@@ -1363,10 +1363,10 @@ def bot_status_payload(bot_dir=None) -> dict:
     except Exception:
         state = {}
     trades = _read_jsonl_tail(d / "bot_trades.jsonl", 1000)
-    from bot_broker import live_unlock_ok
+    from bot_broker import live_capability_ok
     from bot_core import load_config
     cfg = load_config(d / "config.json")
-    ok, reason = live_unlock_ok(trades, cfg, dict(os.environ))
+    ok, reason = live_capability_ok(cfg, dict(os.environ))
     from bot_core import bucket_stats, compute_findings, pool_by_date_stats
     try:
         tuner = json.loads((d / "tuner_report.json").read_text())
