@@ -25,6 +25,29 @@ FEATURE_LOG = Path("data/whales/signal_feature_log.jsonl")
 CONFIG_FILE = Path("data/bot/config.json")
 
 
+def _load_trades(path):
+    """Read a bot_trades.jsonl, skipping malformed lines.
+
+    An append that was in flight when the machine lost power leaves a
+    truncated or NUL-padded line behind (ext4 delayed allocation). Skip
+    just that line rather than letting the whole weekly report die.
+    A missing file means no trades yet (a short replay window can produce
+    none), which is an empty report, not an error.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+    return rows
+
+
 def _closed(trades):
     return [t for t in trades if t.get("status") == "closed"
             and t.get("net_pnl") is not None]
@@ -66,7 +89,7 @@ def main():
     # curfewed, so those rows will be empty here by construction).
     live_trades = []
     if TRADES_FILE.exists():
-        live_trades = [json.loads(l) for l in TRADES_FILE.read_text().splitlines() if l.strip()]
+        live_trades = _load_trades(TRADES_FILE)
     live_closed = _closed(live_trades)
     _print_table(f"LIVE paper trades (n={len(live_closed)}) — real day/weekend split, night is curfewed:",
                 _by_session(live_closed))
@@ -83,9 +106,7 @@ def main():
     rows = [r for r in rows_all if r.get("ts", 0) >= cutoff]
     replay("data/whales/signal_feature_log.jsonl", "/tmp/session_report_replay",
           bankroll=500.0, cfg_overrides=cfg, rows=rows)
-    replay_trades = [json.loads(l) for l in
-                     Path("/tmp/session_report_replay", "bot_trades.jsonl").read_text().splitlines()
-                     if l.strip()]
+    replay_trades = _load_trades(Path("/tmp/session_report_replay", "bot_trades.jsonl"))
     replay_closed = _closed(replay_trades)
     _print_table(f"REPLAY, curfews off, last {args.replay_days}d (n={len(replay_closed)}) — "
                 f"includes night, current config, research only:",
