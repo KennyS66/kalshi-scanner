@@ -32,6 +32,11 @@ STOP_CSS = r"""
 #stopBtn.pending { background:var(--bg3); color:var(--mute); border-color:var(--border); cursor:progress; }
 #stopBtn:disabled { background:var(--bg3); color:var(--mute); border-color:var(--border);
                     cursor:not-allowed; opacity:.65; }
+/* The one control that must be hittable in a hurry: meet the 44px touch
+   target on coarse pointers, where the header's compact scale is wrong. */
+@media (pointer: coarse) {
+  #stopBtn { padding:13px 18px; font-size:12px; }
+}
 #stopState { font-size:10px; font-weight:700; letter-spacing:.5px; color:var(--mute); }
 #stopState.stopped { color:var(--yellow); }
 #stopState.offline { color:var(--red); }
