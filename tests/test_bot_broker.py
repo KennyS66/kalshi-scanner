@@ -50,28 +50,6 @@ import bot_broker
 from bot_broker import fetch_bankroll, live_unlock_ok, LiveBroker, FALLBACK_BANKROLL
 
 
-_TUE_NIGHT = 1784592000.0            # 2026-07-21 00:00Z Tue -> weekday_night
-_TUE_DAY = _TUE_NIGHT + 14 * 3600     # 2026-07-21 14:00Z Tue -> weekday_day
-_SUN_NIGHT = 1784419200.0            # 2026-07-19 00:00Z Sun -> weekend_night
-_SUN_DAY = _SUN_NIGHT + 14 * 3600     # 2026-07-19 14:00Z Sun -> weekend_day
-_SESSION_TS = {"weekday_day": _TUE_DAY, "weekday_night": _TUE_NIGHT,
-               "weekend_day": _SUN_DAY, "weekend_night": _SUN_NIGHT}
-
-
-def _session_trades(session, n, avg):
-    ts = _SESSION_TS[session]
-    return [{"net_pnl": avg, "status": "closed", "entry_ts": ts} for _ in range(n)]
-
-
-def _all_sessions_trades(n=100, avg=0.01, overrides=None):
-    """100 trades at +0.01 avg in each of the 4 sessions by default --
-    overrides={session: (n, avg)} to make specific sessions fall short."""
-    overrides = overrides or {}
-    out = []
-    for s in _SESSION_TS:
-        sn, savg = overrides.get(s, (n, avg))
-        out += _session_trades(s, sn, savg)
-    return out
 
 
 def test_fetch_bankroll_returns_none_on_failure(monkeypatch):
@@ -85,48 +63,14 @@ def test_fetch_bankroll_returns_dollars(monkeypatch):
     assert fetch_bankroll() == 512.33
 
 
-def test_live_unlock_requires_all_four_conditions():
-    cfg_on = {"live_requested": True}
-    env_on = {"BOT_LIVE": "1"}
-    ok, _ = live_unlock_ok(_all_sessions_trades(), cfg_on, env_on)
-    assert ok
-    # one session a trade short of the floor
-    short = _all_sessions_trades(overrides={"weekday_day": (99, 0.01)})
-    assert not live_unlock_ok(short, cfg_on, env_on)[0]
-    # one session net-negative
-    neg = _all_sessions_trades(overrides={"weekend_night": (100, -0.01)})
-    assert not live_unlock_ok(neg, cfg_on, env_on)[0]
-    assert not live_unlock_ok(_all_sessions_trades(), {"live_requested": False}, env_on)[0]
-
-
-def test_live_unlock_requires_100_and_positive_avg_in_every_session():
-    """Per Kenny 2026-07-21: the bar is 100 settled + positive net avg in
-    EACH of the 4 sessions independently -- a strong weekday can't mask a
-    losing weekend, or vice versa."""
-    cfg_on, env_on = {"live_requested": True}, {"BOT_LIVE": "1"}
-    # every session short by name in the reason
-    for session in _SESSION_TS:
-        trades = _all_sessions_trades(overrides={session: (50, 0.01)})
-        ok, why = live_unlock_ok(trades, cfg_on, env_on)
-        assert not ok and session in why, (session, why)
-    # a session with 100 trades but a negative average is named too
-    trades = _all_sessions_trades(overrides={"weekend_day": (100, -0.5)})
-    ok, why = live_unlock_ok(trades, cfg_on, env_on)
-    assert not ok and "weekend_day" in why and "net avg" in why
-    # a globally-positive blended average no longer masks one bad session --
-    # weekday_day carries huge profit, weekend_night is a small loss
-    trades = _all_sessions_trades(overrides={
-        "weekday_day": (100, 5.0), "weekend_night": (100, -0.01)})
-    assert not live_unlock_ok(trades, cfg_on, env_on)[0]
-    assert not live_unlock_ok(_all_sessions_trades(), cfg_on, {})[0]  # no BOT_LIVE
 
 
 def test_live_broker_manual_buy_emits_signal_not_order(tmp_path, monkeypatch):
     import bot_broker
     monkeypatch.setattr(bot_broker, "requests", None)  # would explode if called
-    cfg = {"live_requested": True, "broker_mode": "manual"}
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "manual"}
     env = {"BOT_LIVE": "1"}
-    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    b = bot_broker.LiveBroker(cfg, env, bot_dir=tmp_path)
     fill = b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1000.0,
                             "ticker": "T1", "mins_left": 10.0})
     assert fill["price"] == 0.31
@@ -140,13 +84,13 @@ def test_live_broker_manual_buy_emits_signal_not_order(tmp_path, monkeypatch):
 def test_live_broker_auto_buy_places_market_order(tmp_path, monkeypatch):
     import bot_broker
     import live_broker
-    cfg = {"live_requested": True, "broker_mode": "auto"}
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "auto"}
     env = {"BOT_LIVE": "1"}
     calls = []
     monkeypatch.setattr(live_broker, "place_order", lambda *a, **k: calls.append((a, k)) or
                         {"order_id": "abc", "status": "executed",
                          "yes_price": 31, "no_price": 69})
-    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    b = bot_broker.LiveBroker(cfg, env, bot_dir=tmp_path)
     fill = b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1000.0,
                             "ticker": "T1", "mins_left": 10.0})
     assert fill["price"] == 0.31
@@ -158,23 +102,18 @@ def test_live_broker_auto_buy_places_market_order(tmp_path, monkeypatch):
 def test_live_broker_auto_buy_error_emits_signal_with_error_and_reraises(tmp_path, monkeypatch):
     import bot_broker
     import live_broker
-    cfg = {"live_requested": True, "broker_mode": "auto"}
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "auto"}
     env = {"BOT_LIVE": "1"}
     def _boom(*a, **k):
         raise RuntimeError("400 insufficient balance")
     monkeypatch.setattr(live_broker, "place_order", _boom)
-    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    b = bot_broker.LiveBroker(cfg, env, bot_dir=tmp_path)
     with pytest.raises(RuntimeError, match="insufficient balance"):
         b.buy("YES", 1, {"yes_ask": 0.31, "no_ask": 0.71, "ts": 1000.0,
                          "ticker": "T1", "mins_left": 10.0})
     rows = [_json.loads(l) for l in (tmp_path / "live_signals.jsonl").read_text().splitlines()]
     assert len(rows) == 1 and "insufficient balance" in rows[0]["error"]
 
-
-def test_live_broker_still_locked_when_unlock_fails():
-    with pytest.raises(RuntimeError, match="live trading locked"):
-        bot_broker.LiveBroker(_session_trades("weekday_day", 3, 0.01),
-                              {"live_requested": True}, {})
 
 
 def test_live_broker_fill_with_order_id_never_places_a_second_real_order(tmp_path, monkeypatch):
@@ -186,13 +125,13 @@ def test_live_broker_fill_with_order_id_never_places_a_second_real_order(tmp_pat
     fill() "this already happened, just do the bookkeeping." """
     import bot_broker
     import live_broker
-    cfg = {"live_requested": True, "broker_mode": "auto"}
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "auto"}
     env = {"BOT_LIVE": "1"}
     monkeypatch.setattr(live_broker, "place_order", lambda *a, **k:
                         (_ for _ in ()).throw(
                             AssertionError("fill() must not place a new order "
                                            "when order_id is already known")))
-    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    b = bot_broker.LiveBroker(cfg, env, bot_dir=tmp_path)
     fill = b.fill(0.49, 3, 1000.0, maker=True,
                  sig={"ticker": "T1", "side": "YES"}, order_id="already-placed-123")
     assert fill["price"] == 0.49
@@ -207,13 +146,13 @@ def test_live_broker_fill_without_order_id_places_a_new_order(tmp_path, monkeypa
     MUST place a genuinely new order."""
     import bot_broker
     import live_broker
-    cfg = {"live_requested": True, "broker_mode": "auto"}
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "auto"}
     env = {"BOT_LIVE": "1"}
     calls = []
     monkeypatch.setattr(live_broker, "place_order", lambda *a, **k:
                         calls.append(a) or {"order_id": "new-order-456",
                                             "yes_price": 55, "no_price": 45})
-    b = bot_broker.LiveBroker(_all_sessions_trades(), cfg, env, bot_dir=tmp_path)
+    b = bot_broker.LiveBroker(cfg, env, bot_dir=tmp_path)
     fill = b.fill(0.55, 2, 1000.0, maker=False,
                  sig={"ticker": "T1", "side": "YES"}, order_id=None)
     assert len(calls) == 1
@@ -262,3 +201,67 @@ def test_emit_live_signal_appends_multiple_rows(tmp_path):
             (tmp_path / "live_signals.jsonl").read_text().splitlines()]
     assert len(rows) == 2
     assert rows[0]["ticker"] == "T1" and rows[1]["ticker"] == "T2"
+
+
+# ── per-session live toggle (2026-07-29 design) ──────────────────────
+
+def test_live_capability_ok_requires_nonempty_sessions_and_bot_live():
+    from bot_broker import live_capability_ok
+    ok, reason = live_capability_ok({"live_sessions_requested": ["weekday_night"]}, {"BOT_LIVE": "1"})
+    assert ok
+    assert not live_capability_ok({"live_sessions_requested": []}, {"BOT_LIVE": "1"})[0]
+    assert not live_capability_ok({}, {"BOT_LIVE": "1"})[0]  # key absent entirely
+    assert not live_capability_ok({"live_sessions_requested": ["weekday_night"]}, {})[0]
+    assert not live_capability_ok({"live_sessions_requested": ["weekday_night"]}, {"BOT_LIVE": "0"})[0]
+
+
+def test_live_unlock_ok_checks_only_the_named_session():
+    from bot_broker import live_unlock_ok
+    cfg = {"live_sessions_requested": ["weekday_night"]}
+    env = {"BOT_LIVE": "1"}
+    assert live_unlock_ok(cfg, env, "weekday_night")[0]
+    ok, reason = live_unlock_ok(cfg, env, "weekend_day")
+    assert not ok
+    assert "weekend_day" in reason
+    # other sessions' presence/absence never affects this session's check
+    cfg2 = {"live_sessions_requested": ["weekday_night", "weekend_day", "weekend_night"]}
+    assert not live_unlock_ok(cfg2, env, "weekday_day")[0]   # still absent, still locked
+    assert live_unlock_ok(cfg2, env, "weekend_night")[0]      # present, still unlocked
+
+
+def test_live_unlock_ok_requires_bot_live_even_if_session_requested():
+    from bot_broker import live_unlock_ok
+    cfg = {"live_sessions_requested": ["weekday_night"]}
+    assert not live_unlock_ok(cfg, {}, "weekday_night")[0]
+    assert not live_unlock_ok(cfg, {"BOT_LIVE": "0"}, "weekday_night")[0]
+
+
+def test_live_unlock_ok_does_not_recheck_trade_history():
+    """The no-auto-disable-on-regression guarantee: once a session is in
+    live_sessions_requested, it stays unlocked regardless of what its
+    trade history would show if recomputed -- because these functions
+    never look at trade history at all. This test's real assertion is
+    the function signature itself: live_unlock_ok takes no trades
+    argument, so there is nothing for a regression to be recomputed
+    FROM."""
+    from bot_broker import live_unlock_ok
+    cfg = {"live_sessions_requested": ["weekday_night"]}
+    env = {"BOT_LIVE": "1"}
+    ok, reason = live_unlock_ok(cfg, env, "weekday_night")
+    assert ok and reason == "unlocked"
+
+
+def test_live_broker_constructs_with_no_trades_argument(tmp_path):
+    from bot_broker import LiveBroker
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "manual"}
+    env = {"BOT_LIVE": "1"}
+    b = LiveBroker(cfg, env, bot_dir=tmp_path)
+    assert b.mode == "live"
+    assert b.broker_mode == "manual"
+
+
+def test_live_broker_construction_fails_when_no_session_ever_requested(tmp_path):
+    from bot_broker import LiveBroker
+    import pytest
+    with pytest.raises(RuntimeError, match="live trading locked"):
+        LiveBroker({"live_sessions_requested": []}, {"BOT_LIVE": "1"}, bot_dir=tmp_path)

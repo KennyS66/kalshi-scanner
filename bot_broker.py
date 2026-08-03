@@ -91,31 +91,30 @@ def fetch_bankroll():
         return None
 
 
-def live_unlock_ok(trades: list, cfg: dict, env: dict):
-    """The unlock bar: 100 settled trades AND a positive net avg, each
-    independently proven in EVERY session (weekday_day, weekday_night,
-    weekend_day, weekend_night — per Kenny 2026-07-21, replacing the
-    original 2026-07-17 weekday+weekend-combined bar). A strong weekday
-    can no longer mask a negative weekend average, or vice versa — each
-    of the 4 tape regimes must clear the bar on its own. Session is taken
-    from the entry, same as bot_core.session_tag's other callers (EV
-    buckets, pool attribution, session_report.py), not the exit — this
-    was previously exit_ts-keyed and weekday/weekend-only; both changed
-    together since the finer split needs the finer (entry-based) tag.
-    Returns (ok, reason)."""
-    from bot_core import POOL_NAMES, session_gate_stats
-    stats = session_gate_stats(trades)
-    short = []
-    for p in POOL_NAMES:
-        st = stats[p]
-        if st["n"] < 100:
-            short.append(f"{p} {st['n']}/100")
-        elif st["net_avg"] <= 0:
-            short.append(f"{p} net avg {st['net_avg']:+.4f} <= 0")
-    if short:
-        return False, "not proven: " + "; ".join(short)
-    if not cfg.get("live_requested"):
-        return False, "GUI live toggle not set"
+def live_capability_ok(cfg: dict, env: dict):
+    """Coarse, cheap, construction-time check: is live trading available
+    AT ALL right now, for at least one session? Never looks at trade
+    history -- that only matters once, at the moment a session is
+    toggled live via POST /api/bot/live_session (see web.py). Returns
+    (ok, reason)."""
+    if not cfg.get("live_sessions_requested"):
+        return False, "no session has been toggled live"
+    if env.get("BOT_LIVE") != "1":
+        return False, "BOT_LIVE=1 not set in environment"
+    return True, "unlocked"
+
+
+def live_unlock_ok(cfg: dict, env: dict, session: str):
+    """Per-entry check: is THIS specific session unlocked for live
+    trading? Per Kenny 2026-07-29: once a session is toggled live it
+    stays live regardless of later performance (no auto-disable on
+    regression) -- so this never re-derives session_gate_stats from
+    trade history, it only checks live_sessions_requested + BOT_LIVE.
+    The 100-trade/positive-net-avg bar is checked exactly once, at
+    enable-time, server-side in web.py's live_session endpoint. Returns
+    (ok, reason)."""
+    if session not in (cfg.get("live_sessions_requested") or []):
+        return False, f"{session} not toggled live"
     if env.get("BOT_LIVE") != "1":
         return False, "BOT_LIVE=1 not set in environment"
     return True, "unlocked"
@@ -129,11 +128,12 @@ class LiveBroker:
     See the 2026-07-29 design spec for the full mode matrix."""
     mode = "live"
 
-    def __init__(self, trades: list, cfg: dict, env: dict = None, bot_dir=None):
-        ok, reason = live_unlock_ok(trades, cfg, env if env is not None else dict(os.environ))
+    def __init__(self, cfg: dict, env: dict = None, bot_dir=None):
+        ok, reason = live_capability_ok(cfg, env if env is not None else dict(os.environ))
         if not ok:
             raise RuntimeError(f"live trading locked: {reason}")
         self.cfg = cfg
+        self.env = env if env is not None else dict(os.environ)
         self.bot_dir = bot_dir
         self.broker_mode = cfg.get("broker_mode", "manual")
 
