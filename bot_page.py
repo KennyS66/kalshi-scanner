@@ -6,10 +6,12 @@ BOT_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f17">
 <title>kalshi · swing bot</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 :root {
+  color-scheme: dark;   /* native scrollbars/controls render dark, no flash */
   --bg:#0b0f17; --bg2:#121826; --bg3:#1b2334; --fg:#e8edf4; --mute:#8b96a8;
   --border:#263044; --hair:#1a2232;
   --green:#3fd68c; --red:#ff5c64; --yellow:#ffc53d;
@@ -75,7 +77,7 @@ header {
 .spot-btc { color:var(--orange); font-weight:800; font-size:15px; font-variant-numeric:tabular-nums; }
 .clock { color:var(--mute); font-size:12px; margin-left:auto; font-variant-numeric:tabular-nums; }
 .nav-link { color:var(--mute); font-size:11px; text-decoration:none;
-            padding:4px 10px; border:1px solid transparent; border-radius:6px; transition:all .18s; }
+            padding:4px 10px; border:1px solid transparent; border-radius:6px; transition:color .18s, background .18s, border-color .18s; }
 .nav-link:hover { color:var(--blue); border-color:var(--blue-bd); background:var(--blue-bg); }
 
 /* ── range banner ── */
@@ -163,7 +165,7 @@ tr:last-child td { border-bottom:none; }
 .controls { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
 button { background:var(--bg3); color:var(--fg); border:1px solid var(--border);
          border-radius:7px; padding:7px 16px; cursor:pointer; font:inherit;
-         font-weight:700; transition:all .18s; }
+         font-weight:700; transition:color .18s, background .18s, border-color .18s; }
 button:hover { border-color:var(--mute); }
 button.go:hover     { color:var(--green); border-color:var(--green-bd); background:var(--green-bg); }
 button.warn:hover   { color:var(--yellow); border-color:var(--yellow-bd); background:var(--yellow-bg); }

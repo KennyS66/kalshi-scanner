@@ -23,6 +23,7 @@ STOP_CSS = r"""
 #stopBtn {
   font-family:var(--mono); font-size:11px; font-weight:800; letter-spacing:.6px;
   padding:6px 14px; border-radius:7px; cursor:pointer;
+  touch-action:manipulation; -webkit-tap-highlight-color:transparent;
   background:var(--red-bg); color:var(--red); border:1px solid var(--red-bd);
   transition:background .15s, color .15s, border-color .15s;
 }
@@ -60,11 +61,11 @@ header.is-offline { border-bottom-color:var(--red-bd);    box-shadow:inset 0 -2p
 """
 
 STOP_HTML = """<span class="stop-wrap">
-  <span id="stopState">…</span>
+  <span id="stopState" aria-live="polite">…</span>
   <button id="stopBtn" onclick="stopToggle()">■ STOP</button>
 </span>"""
 
-BANNER_HTML = """<div id="stopBanner" hidden>
+BANNER_HTML = """<div id="stopBanner" role="alert" aria-live="assertive" hidden>
   <span>⚠ STOPPED</span><span class="tick" id="stopBannerDetail"></span>
 </div>"""
 

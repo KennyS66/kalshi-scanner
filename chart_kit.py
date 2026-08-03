@@ -37,7 +37,9 @@ CHART_CSS = r"""
                   text-transform:uppercase; color:var(--mute); margin-right:2px; }
 .chip { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.4px;
         padding:4px 10px; border-radius:99px; cursor:pointer; color:var(--mute);
-        background:transparent; border:1px solid var(--border); transition:all .15s; }
+        background:transparent; border:1px solid var(--border);
+        touch-action:manipulation;
+        transition:color .15s, background .15s, border-color .15s; }
 .chip:hover { color:var(--fg); border-color:var(--mute); }
 .chip.on { color:var(--fg); background:var(--bg3); border-color:var(--blue-bd); }
 .chip .dot { display:inline-block; width:7px; height:7px; border-radius:50%;
@@ -65,7 +67,11 @@ CHART_CSS = r"""
           border:1px solid var(--border); border-radius:var(--radius);
           overflow:hidden; }
 .sseg { background:var(--bg2); padding:10px 13px 8px; cursor:pointer;
-        position:relative; transition:background .18s; min-width:0; }
+        position:relative; transition:background .18s; min-width:0;
+        /* it is a <button> for keyboard/AT reasons -- undo the UA chrome */
+        font:inherit; color:inherit; text-align:left; border:0; width:100%;
+        display:block; touch-action:manipulation; }
+.sseg:focus-visible { outline:2px solid var(--blue); outline-offset:-2px; }
 .sseg:hover { background:var(--bg3); }
 .sseg.on { background:var(--bg3); }
 .sseg::before { content:""; position:absolute; inset:0 0 auto 0; height:2px;
@@ -84,7 +90,8 @@ CHART_CSS = r"""
 @media (max-width:720px) { .sstrip { grid-template-columns:repeat(2,1fr); } }
 """
 
-SESSION_STRIP_HTML = """<div class="sstrip" id="sessionStrip"></div>"""
+SESSION_STRIP_HTML = """<div class="sstrip" id="sessionStrip" role="group"
+     aria-label="Filter charts by trading session"></div>"""
 
 CHART_PANELS_HTML = """
   <div class="section-label">Analytics
@@ -97,7 +104,7 @@ CHART_PANELS_HTML = """
       <button class="chip on" data-range="all">all</button>
     </span>
     <span class="ctrlgrp" id="sessChips"><span class="lbl">Session</span></span>
-    <span class="ctrlcount" id="chartCount">—</span>
+    <span class="ctrlcount" id="chartCount" aria-live="polite">—</span>
   </div>
 
   <div class="grid">
@@ -401,6 +408,13 @@ function ckExitReasons(rows) {
 function ckSessionStrip() {
   const el = document.getElementById('sessionStrip');
   if (!el) return;
+  // The strip is rebuilt via innerHTML on every render (incl. the 30s
+  // poll), which destroys the focused node -- keyboard users would lose
+  // their place mid-interaction. Remember which segment held focus and
+  // give it back afterwards.
+  const focused = document.activeElement;
+  const keep = (focused && el.contains(focused))
+    ? focused.getAttribute('data-sess') : null;
   const g = new Date(), nowSess =
     (g.getUTCDay() >= 5 ? 'weekend' : 'weekday') + '_' + (g.getUTCHours() >= 13 ? 'day' : 'night');
   el.innerHTML = CK_SESSIONS.map(s => {
@@ -414,9 +428,10 @@ function ckSessionStrip() {
       `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}" fill="none"
       stroke="var(--seg)" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` : '';
     const on = CK_F.session === s;
-    return `<div class="sseg${on ? ' on' : ''}${s === nowSess ? ' live-now' : ''}"
+    return `<button type="button" class="sseg${on ? ' on' : ''}${s === nowSess ? ' live-now' : ''}"
         style="--seg:${CK_HUE[s]}" onclick="ckPick('session','${s}')"
-        title="click to filter every chart to ${ckLabel(s)}">
+        data-sess="${s}" aria-pressed="${on}"
+        aria-label="Filter all charts to ${ckLabel(s)}${on ? ' (active, click to clear)' : ''}">
       <div class="sseg-hd"><span class="sseg-name">${ckLabel(s)}</span>
         ${s === nowSess ? '<span class="sseg-now">NOW</span>' : ''}
         <span class="sseg-avg ${avg >= 0 ? 'pos' : 'neg'}">${n ? ckMoney(avg) : '—'}</span></div>
@@ -424,8 +439,12 @@ function ckSessionStrip() {
       <svg viewBox="0 0 100 26" preserveAspectRatio="none">
         <line x1="0" x2="100" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"
           stroke="var(--border)" stroke-width="1" vector-effect="non-scaling-stroke"/>${spark}</svg>
-    </div>`;
+    </button>`;
   }).join('');
+  if (keep) {
+    const back = el.querySelector(`[data-sess="${keep}"]`);
+    if (back) back.focus();
+  }
 }
 
 /* Clicking the active session chip clears the filter -- a filter you can
