@@ -33,9 +33,9 @@
   "limit_fill_timeout_secs": 30,
   "broker_mode": "manual",
   "live_qty": 1,
-  "live_cap_usd": 10.0,
-  "live_hard_stop_usd": -4.0,
-  "live_daily_soft_stop_usd": -1.5,
+  "live_cap_usd": 30.0,
+  "live_hard_stop_usd": -12.0,
+  "live_daily_soft_stop_usd": -4.5,
   "live_sell_retry_backoff_secs": 30.0,
   "loss_cap_baseline": -58.97
 }
