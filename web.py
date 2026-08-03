@@ -1523,6 +1523,49 @@ def bot_control_write(bot_dir, cmd: str) -> int:
     return nonce
 
 
+def bot_series_payload(bot_dir=None) -> dict:
+    """Every closed trade, as the four columns the charts actually plot.
+
+    Separate from bot_status_payload because the two have opposite shapes:
+    status is small, live, and polled every 5s; the series is the whole
+    680-trade history and only changes when a trade closes. Sending full
+    rows on the status endpoint would take it from 161 KB to ~525 KB per
+    poll, on the same event loop that serves the kill-switch POST.
+
+    Session is resolved here via bot_core.session_tag rather than
+    reimplemented in JS -- sessions gate live trading, pools, and pauses,
+    so a second definition drifting from the first would be a real bug.
+    """
+    from bot_core import session_tag
+    d = Path(bot_dir) if bot_dir else _BOT_DIR
+    rows = []
+    try:
+        with open(d / "bot_trades.jsonl") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    t = json.loads(line)
+                except Exception:
+                    continue          # power-loss torn line; skip, don't fail
+                if t.get("status") != "closed":
+                    continue
+                rows.append({"t": t.get("exit_ts") or 0.0,
+                             "p": t.get("net_pnl") or 0.0,
+                             "r": t.get("exit_reason") or "?",
+                             "s": session_tag(t.get("entry_ts"))})
+    except OSError:
+        return {"trades": []}
+    rows.sort(key=lambda r: r["t"])
+    return {"trades": rows}
+
+
+@app.get("/api/bot/series")
+async def api_bot_series() -> JSONResponse:
+    return JSONResponse(bot_series_payload())
+
+
 @app.get("/api/bot/status")
 async def api_bot_status() -> JSONResponse:
     return JSONResponse(bot_status_payload())

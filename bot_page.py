@@ -284,6 +284,7 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
          padding:7px 10px; font-size:11px; line-height:1.7; white-space:nowrap;
          box-shadow:0 6px 20px rgba(0,0,0,.45); font-variant-numeric:tabular-nums; }
 .eqtip .dim { font-family:var(--sans); }
+/*CHART_CSS*/
 /*STOP_CSS*/
 </style></head><body>
 
@@ -405,12 +406,15 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
     </div>
 
     <div class="panel">
-      <h3>Exit reasons</h3>
+      <h3>Exit reasons <span class="dim" style="text-transform:none">(counts &amp; win rate — net avg is charted below)</span></h3>
       <div class="tbl-wrap"><table id="reasonTable"><thead><tr>
         <th>reason</th><th>n</th><th>win%</th><th>net avg</th>
       </tr></thead><tbody></tbody></table></div>
     </div>
   </div>
+
+  <!--SESSION_STRIP-->
+<!--CHART_PANELS-->
 
   <div class="section-label">Risk &amp; Health</div>
   <div class="grid">
@@ -1215,8 +1219,10 @@ setInterval(pollCalibration, 30000);
 setInterval(pollCandles, 30000);
 setInterval(pollThesis, 300000);
 setInterval(pollLiveSignals, 10000);
+//CHART_JS
 //STOP_JS
 </script></body></html>"""
 
 from stop_control import inject as _inject_stop
-BOT_HTML = _inject_stop(BOT_HTML)
+from chart_kit import inject as _inject_charts
+BOT_HTML = _inject_charts(_inject_stop(BOT_HTML))

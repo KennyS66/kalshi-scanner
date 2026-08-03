@@ -377,3 +377,127 @@ def test_stop_sh_recovers_from_a_corrupt_control_file(tmp_path):
     (tmp_path / "bot_state.json").write_text(json.dumps({"last_control_nonce": 67}))
     assert _run_stop(tmp_path).returncode == 0
     assert json.loads((tmp_path / "control.json").read_text())["nonce"] == 68
+
+
+# ── /api/bot/series: slim chart data (2026-08-02 charts design) ───────
+#
+# The status payload sends trades[-50:] because full rows would push a
+# 5s-polled endpoint past half a megabyte. Charts need all 680 trades but
+# only four columns, so they get their own endpoint.
+
+from web import bot_series_payload
+
+
+def _trade(ts, pnl, reason="target", entry_ts=None):
+    return {"status": "closed", "exit_ts": ts, "net_pnl": pnl,
+            "exit_reason": reason, "entry_ts": entry_ts if entry_ts else ts - 60,
+            "ticker": "T1", "side": "YES", "qty": 3, "entry_price": 0.5,
+            "exit_price": 0.6, "fees": 0.02, "mode": "paper",
+            "entry_sig": {"a": 1}, "exit_sig": {"b": 2}}
+
+
+def _write_trades(d, rows):
+    (d / "bot_trades.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_series_returns_every_closed_trade_not_just_fifty(tmp_path):
+    _write_trades(tmp_path, [_trade(1000.0 + i, 0.1) for i in range(300)])
+    out = bot_series_payload(tmp_path)
+    assert len(out["trades"]) == 300, "charts must see the whole history"
+
+
+def test_series_carries_only_chart_columns(tmp_path):
+    _write_trades(tmp_path, [_trade(1000.0, 1.25, "stretch")])
+    row = bot_series_payload(tmp_path)["trades"][0]
+    assert set(row) == {"t", "p", "r", "s"}
+    assert row["t"] == 1000.0 and row["p"] == 1.25 and row["r"] == "stretch"
+
+
+def test_series_resolves_session_server_side(tmp_path):
+    """Session is derived with bot_core.session_tag rather than
+    reimplemented in JS -- sessions are the organizing concept of this bot
+    and a second definition would eventually drift from the first."""
+    wd_night = 1784592000.0            # Tue 00:00Z
+    wd_day = wd_night + 14 * 3600      # Tue 14:00Z
+    _write_trades(tmp_path, [_trade(wd_night + 60, 1.0, entry_ts=wd_night),
+                             _trade(wd_day + 60, 1.0, entry_ts=wd_day)])
+    got = [r["s"] for r in bot_series_payload(tmp_path)["trades"]]
+    assert got == ["weekday_night", "weekday_day"]
+
+
+def test_series_skips_unparseable_and_open_rows(tmp_path):
+    p = tmp_path / "bot_trades.jsonl"
+    p.write_text(json.dumps(_trade(1000.0, 1.0)) + "\n"
+                 + "{not json\n"
+                 + json.dumps({"status": "open", "ticker": "T2"}) + "\n"
+                 + json.dumps(_trade(2000.0, 2.0)) + "\n")
+    out = bot_series_payload(tmp_path)
+    assert [r["p"] for r in out["trades"]] == [1.0, 2.0]
+
+
+def test_series_is_ordered_by_exit_time(tmp_path):
+    _write_trades(tmp_path, [_trade(3000.0, 1.0), _trade(1000.0, 2.0),
+                             _trade(2000.0, 3.0)])
+    assert [r["t"] for r in bot_series_payload(tmp_path)["trades"]] \
+        == [1000.0, 2000.0, 3000.0]
+
+
+def test_series_payload_stays_small(tmp_path):
+    """The whole point of a separate endpoint: 680 full rows are ~391 KB,
+    the same trades as chart columns are an order of magnitude smaller."""
+    _write_trades(tmp_path, [_trade(1000.0 + i, 0.1) for i in range(680)])
+    assert len(json.dumps(bot_series_payload(tmp_path))) < 80_000
+
+
+def test_series_empty_when_no_trade_log(tmp_path):
+    assert bot_series_payload(tmp_path) == {"trades": []}
+
+
+def test_no_duplicate_js_declarations_on_the_bot_page():
+    """chart_kit and stop_control are concatenated into bot_page's single
+    <script> block, so a name either module shares with the page is a
+    redeclaration SyntaxError that kills ALL the JS on the page -- charts,
+    kill-switch and dashboard alike. This actually happened: chart_kit
+    declared `const SESSIONS`, which bot_page.py already defines.
+    """
+    import re
+    from collections import Counter
+    from bot_page import BOT_HTML
+    body = BOT_HTML.split("<script>")[-1]
+    names = re.findall(r"^(?:const|let|function)\s+([A-Za-z_$][\w$]*)",
+                       body, re.MULTILINE)
+    dupes = {n: c for n, c in Counter(names).items() if c > 1}
+    assert not dupes, f"duplicate top-level JS declarations: {dupes}"
+
+
+def _node_bin():
+    import shutil, os
+    return (shutil.which("node")
+            or next((p for p in [os.path.expanduser("~/.local/node/bin/node")]
+                     if os.path.exists(p)), None))
+
+
+def test_bot_page_script_block_parses():
+    """The single strongest guard on this page: bot_page, chart_kit and
+    stop_control are concatenated into ONE <script>, so a syntax error in
+    any of them silently kills every bit of JS on /bot -- charts,
+    kill-switch and dashboard together, with a page that still looks fine.
+    Both known breakages (a `const SESSIONS` redeclaration, and a bad
+    bracket from a careless rename) were caught only by running a parser.
+    """
+    import subprocess, tempfile, os
+    node = _node_bin()
+    if not node:
+        import pytest
+        pytest.skip("node not available")
+    from bot_page import BOT_HTML
+    body = BOT_HTML.split("<script>")[-1].split("</script>")[0]
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        f.write(body)
+        path = f.name
+    try:
+        r = subprocess.run([node, "--check", path], capture_output=True, text=True)
+        assert r.returncode == 0, f"/bot script block does not parse:\n{r.stderr[:800]}"
+    finally:
+        os.unlink(path)
