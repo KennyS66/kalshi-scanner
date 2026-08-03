@@ -57,7 +57,11 @@ start_bg btc_monitor    "btc_monitor.sh"   ./btc_monitor.sh
 start_bg exit_watcher   "exit_watcher.py"  "$PY" -u exit_watcher.py
 start_bg target_grader  "target_grader.py" "$PY" -u target_grader.py
 start_bg swing_bot      "swing_bot.py"     "$PY" -u swing_bot.py
-start_bg bot_tuner      "bot_tuner.py"     "$PY" -u bot_tuner.py --daemon
+# bot_tuner disabled 2026-08-02 (Kenny): the swing bot is the sole focus, and
+# the tuner competed for the box while writing 126MB of regenerable sweep
+# output (now gitignored). Its last suggestion was rejected on 2026-07-28 —
+# lost on 2/3 independent windows. Re-enable by uncommenting.
+# start_bg bot_tuner      "bot_tuner.py"     "$PY" -u bot_tuner.py --daemon
 start_bg trade_grader   "trade_grader.py"  "$PY" -u trade_grader.py
 
 echo
