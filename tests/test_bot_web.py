@@ -256,3 +256,54 @@ def test_api_live_session_endpoint_enable_and_disable(tmp_path, monkeypatch):
     assert r2.status_code == 200
     cfg2 = json.loads((tmp_path / "config.json").read_text())
     assert cfg2["live_sessions_requested"] == []
+
+
+def test_bot_session_pause_write_pause_and_resume(tmp_path):
+    from web import bot_session_pause_write
+    (tmp_path / "config.json").write_text(json.dumps({"paused_sessions": []}))
+    assert bot_session_pause_write(tmp_path, "weekday_night", "pause")["ok"] is True
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["paused_sessions"] == ["weekday_night"]
+    # idempotent -- no duplicate entry
+    bot_session_pause_write(tmp_path, "weekday_night", "pause")
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["paused_sessions"] == ["weekday_night"]
+    assert bot_session_pause_write(tmp_path, "weekday_night", "resume")["ok"] is True
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["paused_sessions"] == []
+
+
+def test_bot_session_pause_write_rejects_unknown_session_and_action(tmp_path):
+    from web import bot_session_pause_write
+    (tmp_path / "config.json").write_text(json.dumps({"paused_sessions": []}))
+    assert bot_session_pause_write(tmp_path, "not_a_session", "pause")["ok"] is False
+    assert bot_session_pause_write(tmp_path, "weekday_night", "explode")["ok"] is False
+
+
+def test_bot_session_pause_never_touches_live_sessions(tmp_path):
+    """Pausing and going live are independent axes: pausing a live session
+    must not quietly revoke its live status, or resuming would silently
+    need re-confirmation it never got."""
+    from web import bot_session_pause_write
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"live_sessions_requested": ["weekday_night"], "paused_sessions": []}))
+    bot_session_pause_write(tmp_path, "weekday_night", "pause")
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["live_sessions_requested"] == ["weekday_night"]
+    assert cfg["paused_sessions"] == ["weekday_night"]
+
+
+def test_api_session_pause_endpoint(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import web
+    monkeypatch.setattr(web, "_BOT_DIR", tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps({"paused_sessions": []}))
+    client = TestClient(web.app)
+    r = client.post("/api/bot/session_pause",
+                    json={"session": "weekend_day", "action": "pause"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["paused_sessions"] == ["weekend_day"]
+    r2 = client.post("/api/bot/session_pause",
+                     json={"session": "weekend_day", "action": "bogus"})
+    assert r2.status_code == 400

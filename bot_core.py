@@ -36,6 +36,10 @@ DEFAULT_CONFIG = {
                                # history afterward (Kenny 2026-07-29: no
                                # auto-disable if a live session's
                                # performance later regresses).
+    "paused_sessions": [],     # session names paused from the /bot dashboard.
+                               # Independent of live_sessions_requested: a
+                               # session can be live AND paused. Blocks new
+                               # entries only -- open plays still exit.
     "use_ranges": True,        # gate entries/exits on the calibrated buy/sell ranges
     "ev_gate": True,           # skip entry buckets with proven-negative EV
     "weekend_curfew": True,    # no entries Sat/Sun 00Z-13Z (thin-tape bleed)

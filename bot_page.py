@@ -194,6 +194,19 @@ button.danger:hover { border-color:var(--red-bd); background:var(--red-bg); }
 .grade-edge b { font-variant-numeric:tabular-nums; }
 .notional { color:var(--mute); font-size:11px; }
 /* gate progress bar inside its tile */
+.live-btn { margin-top:6px; width:100%; padding:6px 0; border-radius:6px; font-size:11px;
+            font-weight:900; text-transform:uppercase; letter-spacing:.5px; cursor:pointer;
+            border:1px solid var(--border); background:transparent; color:var(--mute); }
+.live-btn.locked { opacity:.4; cursor:not-allowed; }
+.live-btn.available { color:var(--green); border-color:var(--green-bd); background:var(--green-bg); }
+.live-btn.available:hover { background:var(--green); color:#06110c; }
+.live-btn.live { color:#06110c; background:var(--green); border-color:var(--green);
+                  box-shadow:0 0 14px rgba(63,214,140,.45); }
+.pause-btn { margin-top:4px; width:100%; padding:5px 0; border-radius:6px; font-size:10px;
+             font-weight:800; text-transform:uppercase; letter-spacing:.5px; cursor:pointer;
+             border:1px solid var(--border); background:transparent; color:var(--mute); }
+.pause-btn:hover { border-color:var(--yellow); color:var(--yellow); }
+.pause-btn.paused { color:#1a1405; background:var(--yellow); border-color:var(--yellow); }
 .gatebar { height:4px; background:var(--border); border-radius:3px; margin-top:6px; overflow:hidden; }
 .gatebar i { display:block; height:100%; background:var(--blue); border-radius:3px; }
 
@@ -454,6 +467,38 @@ async function fj(url, fallback) {
 async function ctl(cmd) {
   await fetch('/api/bot/control', {method:'POST',
     headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd})});
+  pollBot();
+}
+
+async function toggleLiveSession(session, curLive) {
+  if (!curLive) {
+    const mode = (lastBotCfg && lastBotCfg.broker_mode) || 'manual';
+    const verb = mode === 'auto'
+      ? 'places real orders automatically'
+      : 'flags entries for you to place manually';
+    if (!confirm(`Go live on ${session}? This ${verb}.`)) return;
+  }
+  const r = await fetch('/api/bot/live_session', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session, action: curLive ? 'disable' : 'enable'})
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(`Failed: ${d.reason}`); return; }
+  pollBot();
+}
+
+// Pausing a session is always safe, so it needs no confirmation -- but
+// RESUMING one that is live places real orders again, so that direction does.
+async function toggleSessionPause(session, curPaused) {
+  const isLive = ((lastBotCfg && lastBotCfg.live_sessions_requested) || []).includes(session);
+  if (curPaused && isLive &&
+      !confirm(`Resume ${session}? It is toggled LIVE and will trade for real.`)) return;
+  const r = await fetch('/api/bot/session_pause', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session, action: curPaused ? 'resume' : 'pause'})
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(`Failed: ${d.reason}`); return; }
   pollBot();
 }
 
@@ -959,12 +1004,21 @@ async function pollBot() {
     unlockEl.innerHTML = SESSIONS.map(s => {
       const st = gateSessions[s] || {n: 0, net_avg: 0, ok: false};
       const pct = Math.min(100, st.n);
+      const isLive = ((lastBotCfg && lastBotCfg.live_sessions_requested) || []).includes(s);
+      const btnCls = !st.ok ? 'live-btn locked' : isLive ? 'live-btn live' : 'live-btn available';
+      const btnLabel = !st.ok ? 'locked' : isLive ? 'LIVE' : 'go live';
+      const btnDisabled = !st.ok ? 'disabled' : '';
+      const paused = ((lastBotCfg && lastBotCfg.paused_sessions) || []).includes(s);
+      const pauseCls = paused ? 'pause-btn paused' : 'pause-btn';
+      const pauseLabel = paused ? 'paused' : 'running';
       return `<div class="tile">
           <div class="k"><span class="badge sess ${sessCls(s)}">${sessLabel(s)}</span>
             ${st.ok ? '<span class="pos" style="font-weight:900"> ✓</span>' : ''}</div>
           <div class="v">${st.n}<span class="dim" style="font-size:11px">/100</span></div>
           <div class="s ${st.n ? (st.net_avg > 0 ? 'pos' : 'neg') : ''}">net avg ${money(st.net_avg)}</div>
           <div class="gatebar"><i style="width:${pct}%"></i></div>
+          <button class="${btnCls}" ${btnDisabled} onclick="toggleLiveSession('${s}', ${isLive})">${btnLabel}</button>
+          <button class="${pauseCls}" onclick="toggleSessionPause('${s}', ${paused})">${pauseLabel}</button>
         </div>`;
     }).join('');
   }

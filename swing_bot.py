@@ -784,6 +784,13 @@ class Bot:
         blockers = entry_blockers(sig, self.cfg, committed,
                                   ps.get("halted", False), self.state["paused"],
                                   ranges)
+        # Per-session pause (GUI per-pool control). Lives in config, not
+        # state, so it survives roll_day_if_needed's per-pool reset and a
+        # bot restart -- a session Kenny paused stays paused until he
+        # un-pauses it. Blocks NEW entries only; open plays still exit
+        # normally, same as the global pause.
+        if pool in (self.cfg.get("paused_sessions") or []):
+            blockers.append(f"{pool} paused")
         ev = ev_gate_blocker(flip, sig, self.ev_stats, self.cfg)
         if ev:
             blockers.append(ev)

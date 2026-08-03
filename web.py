@@ -1478,6 +1478,34 @@ def bot_live_session_write(bot_dir, session: str, action: str, trades: list) -> 
     return {"ok": True, "reason": "updated"}
 
 
+def bot_session_pause_write(bot_dir, session: str, action: str) -> dict:
+    """Pause/resume ONE session, independent of the global pause and of
+    whether that session is live. Kept in config.json's paused_sessions
+    (not bot_state.json) on purpose: config survives roll_day_if_needed's
+    per-pool reset and a bot restart, so a session Kenny paused stays
+    paused until he says otherwise. Pausing blocks new entries only --
+    open plays still exit normally. Returns {"ok": bool, "reason": str}."""
+    from bot_core import POOL_NAMES, load_config
+    if session not in POOL_NAMES:
+        return {"ok": False, "reason": f"unknown session: {session}"}
+    if action not in ("pause", "resume"):
+        return {"ok": False, "reason": f"unknown action: {action}"}
+    d = Path(bot_dir) if bot_dir else _BOT_DIR
+    cfg = load_config(d / "config.json")
+    paused = list(cfg.get("paused_sessions") or [])
+    if action == "pause":
+        if session not in paused:
+            paused.append(session)
+    elif session in paused:
+        paused.remove(session)
+    cfg["paused_sessions"] = paused
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / "config.json.tmp"
+    tmp.write_text(json.dumps(cfg))
+    os.replace(tmp, d / "config.json")
+    return {"ok": True, "reason": "updated"}
+
+
 def bot_control_write(bot_dir, cmd: str) -> int:
     if cmd not in ("pause", "resume", "flatten"):
         raise ValueError(f"unknown bot command: {cmd}")
@@ -1525,6 +1553,17 @@ async def api_live_session(request: Request) -> JSONResponse:
     result = bot_live_session_write(_BOT_DIR, session, action, trades)
     status = 200 if result["ok"] else 400
     return JSONResponse(result, status_code=status)
+
+
+@app.post("/api/bot/session_pause")
+async def api_session_pause(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "bad json"}, status_code=400)
+    result = bot_session_pause_write(_BOT_DIR, body.get("session", ""),
+                                     body.get("action", ""))
+    return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
 
 @app.get("/bot", response_class=HTMLResponse)

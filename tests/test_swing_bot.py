@@ -1453,3 +1453,55 @@ def test_flatten_halts_pool_on_cancel_failure_but_still_processes_other_entries(
     events = _rows(tmp_path, EVENTS_FILE)
     halt_events = [e for e in events if e["action"] == "halt" and "order_error" in e["reason"]]
     assert len(halt_events) == 2
+
+
+# ── per-session pause (GUI per-pool resume/pause) ────────────────────
+
+_WD_NIGHT_TS = 1784592000.0            # Tue 00:00Z -> weekday_night
+_WD_DAY_TS = 1784592000.0 + 14 * 3600  # Tue 14:00Z -> weekday_day
+
+
+def _flip_pair(ts):
+    """Two sigs whose whale_trend flips sign -- enough to trigger an entry."""
+    return [_sig(ts=ts, whale_trend=3.0, momentum=30.0),
+            _sig(ts=ts + 5, whale_trend=-3.0, momentum=-30.0)]
+
+
+def test_paused_session_blocks_only_that_sessions_entries(tmp_path, monkeypatch):
+    """A session named in cfg["paused_sessions"] takes no new entries, while
+    every other session keeps trading -- the whole point of a per-pool
+    pause as opposed to the existing global one."""
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"paused_sessions": ["weekday_night"],
+         "overnight_curfew": False, "weekend_curfew": False}))
+    bot = _mkbot(tmp_path, _flip_pair(_WD_NIGHT_TS), monkeypatch)
+    for _ in range(2):
+        bot.tick()
+    assert bot.state["open_plays"] == {}, "paused session must not open a play"
+    reasons = [e["reason"] for e in _rows(tmp_path, EVENTS_FILE)
+               if e["action"] == "skip"]
+    assert any("weekday_night paused" in r for r in reasons), reasons
+
+
+def test_unpaused_session_still_enters_while_another_is_paused(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"paused_sessions": ["weekday_night"],
+         "overnight_curfew": False, "weekend_curfew": False}))
+    bot = _mkbot(tmp_path, _flip_pair(_WD_DAY_TS), monkeypatch)
+    for _ in range(2):
+        bot.tick()
+    assert bot.state["open_plays"], "weekday_day is not paused and must still enter"
+
+
+def test_session_pause_survives_a_day_roll(tmp_path, monkeypatch):
+    """Pausing lives in config.json, not state, so roll_day_if_needed --
+    which resets day_pnl/halted for every pool -- must not silently
+    un-pause a session the user deliberately paused."""
+    from swing_bot import roll_day_if_needed
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"paused_sessions": ["weekday_night"],
+         "overnight_curfew": False, "weekend_curfew": False}))
+    bot = _mkbot(tmp_path, _flip_pair(_WD_NIGHT_TS), monkeypatch)
+    bot.state["day"] = "1999-01-01"
+    assert roll_day_if_needed(bot.state, _WD_NIGHT_TS) is True
+    assert bot.cfg["paused_sessions"] == ["weekday_night"]

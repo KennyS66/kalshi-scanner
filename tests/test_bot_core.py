@@ -487,3 +487,7 @@ def test_default_config_has_live_broker_mode_keys():
 def test_default_config_has_live_sessions_requested_not_live_requested():
     assert DEFAULT_CONFIG["live_sessions_requested"] == []
     assert "live_requested" not in DEFAULT_CONFIG
+
+
+def test_default_config_has_paused_sessions():
+    assert DEFAULT_CONFIG["paused_sessions"] == []

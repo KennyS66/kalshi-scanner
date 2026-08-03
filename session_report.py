@@ -98,7 +98,12 @@ def main():
     # weekend_night performance, using the CURRENT live config so it's an
     # apples-to-apples read against what's actually running.
     cfg = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
-    for k in ("loop_deadman_mins", "live_requested", "mode", "paper_bankroll"):
+    # paused_sessions is dropped along with the live/mode keys: the whole
+    # point of this replay is to see what every session WOULD do with
+    # curfews off, so a session Kenny paused live must not silently
+    # vanish from the report.
+    for k in ("loop_deadman_mins", "live_sessions_requested", "paused_sessions",
+              "mode", "paper_bankroll"):
         cfg.pop(k, None)
 
     rows_all = _rows(str(FEATURE_LOG))
