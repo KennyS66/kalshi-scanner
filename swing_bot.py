@@ -641,6 +641,14 @@ class Bot:
         mins = self.cfg.get("loop_deadman_mins") or 0
         if not mins:
             return
+        # Live money only. Paper has nothing to protect, and unattended
+        # paper collection is the whole point of paper mode -- the
+        # 680-trade history was gathered exactly that way. Scoping it here
+        # (rather than zeroing loop_deadman_mins in config for a paper
+        # run) means the guard returns automatically the moment mode flips
+        # to live, with no config anyone has to remember to restore.
+        if self.broker.mode != "live":
+            return
         try:
             age = now_ts - self.loop_log.stat().st_mtime
         except OSError:
@@ -708,7 +716,8 @@ class Bot:
         pool (not just one) since this reads one account-wide balance, not
         a per-pool P&L -- unlike _check_day_stop/_check_max_loss, which are
         genuinely per-pool because paper's bankroll is split 4 ways."""
-        if not (self.broker.mode == "live" and self.broker.broker_mode == "auto"):
+        if not (self.broker.mode == "live"
+                and getattr(self.broker, "broker_mode", None) == "auto"):
             return
         from bot_broker import _balance_dollars
         try:

@@ -1,3 +1,4 @@
+import os
 import json
 import time
 from unittest.mock import Mock
@@ -438,6 +439,10 @@ def _mkbot_deadman(tmp_path, sigs, monkeypatch, hb_age_secs):
     it = iter(sigs)
     bot = Bot(tmp_path, fetch_fn=lambda: next(it, None),
               offsets_file=tmp_path / "banner_offsets.json", loop_log=hb)
+    # The deadman guards live money only (paper collects unattended by
+    # design), so exercise it in live mode. Overriding the broker's mode
+    # keeps this focused on the deadman without real live credentials.
+    bot.broker.mode = "live"
     return bot, now
 
 
@@ -1689,3 +1694,38 @@ def test_taker_paths_still_work_when_maker_only_is_off(tmp_path, monkeypatch):
     for _ in sigs:
         bot.tick()
     assert bot.state["open_plays"], "market entry must still work with the flag off"
+
+
+# ── deadman applies to live money only (2026-08-03) ───────────────────
+#
+# "No unsupervised trading" is about real money. In paper mode there is
+# nothing to protect, and collecting unattended paper data is the entire
+# point of paper mode -- the 680-trade history was gathered that way.
+# Scoping it to live also means the guard comes BACK automatically when
+# mode flips to live, with no config to remember to restore.
+
+
+def _deadman_bot(tmp_path, monkeypatch, mode):
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"loop_deadman_mins": 45,
+         "overnight_curfew": False, "weekend_curfew": False}))
+    stale = tmp_path / "loop_log.jsonl"
+    stale.write_text("{}\n")
+    os.utime(stale, (time.time() - 9999, time.time() - 9999))   # very stale
+    bot = _mkbot(tmp_path, [_sig(ts=_WD_NIGHT_TS)], monkeypatch)
+    bot.loop_log = stale
+    bot.broker.mode = mode
+    return bot
+
+
+def test_deadman_does_not_pause_a_paper_bot(tmp_path, monkeypatch):
+    bot = _deadman_bot(tmp_path, monkeypatch, "paper")
+    bot.tick()
+    assert bot.state["paused"] is False, "paper must keep collecting unattended"
+
+
+def test_deadman_still_pauses_a_live_bot(tmp_path, monkeypatch):
+    bot = _deadman_bot(tmp_path, monkeypatch, "live")
+    bot.tick()
+    assert bot.state["paused"] is True
+    assert bot.state.get("paused_by") == "deadman"
