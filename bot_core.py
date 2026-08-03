@@ -72,6 +72,16 @@ DEFAULT_CONFIG = {
                                # chases to market if it doesn't fill in time
     "limit_fill_timeout_secs": 30,  # how long a resting entry waits before
                                      # chasing to a market (taker) fill
+    "maker_only": False,        # never pay the taker fee: skip entries too
+                                # close to expiry to rest a limit, and cancel
+                                # rather than chase a timed-out limit. Kalshi
+                                # charges makers ZERO and takers ~0.07*p*(1-p)
+                                # per contract (confirmed 2026-08-03 against
+                                # real account fills). NOTE: exits still take
+                                # -- a resting exit can fail to fill, and this
+                                # bot's worst losses are already stuck
+                                # positions, so that half needs its own
+                                # validated design, not a flag.
     "broker_mode": "manual",   # "manual": mode=live entries write a
                                 # live_signal event for a human to place by
                                 # hand (no order API call). "auto": places

@@ -37,5 +37,6 @@
   "live_hard_stop_usd": -12.0,
   "live_daily_soft_stop_usd": -4.5,
   "live_sell_retry_backoff_secs": 30.0,
-  "loss_cap_baseline": -58.97
+  "loss_cap_baseline": -58.97,
+  "maker_only": true
 }

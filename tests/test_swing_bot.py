@@ -1630,3 +1630,62 @@ def test_unpaused_resting_entry_still_fills_normally(tmp_path, monkeypatch):
     bot.tick()
     assert bot.state["pending_entries"] == {}
     assert bot.state["open_plays"], "an unpaused resting order must still fill"
+
+
+# ── maker_only: never pay the taker fee on entries (2026-08-03) ────────
+#
+# Confirmed against real account fills: Kalshi charges makers ZERO and
+# takers ~0.07*p*(1-p)/contract. Kenny: "bot should only be doing maker
+# orders." Entries have two taker paths -- the too-close-to-expiry
+# market fallback, and chase-to-market when a resting limit times out.
+
+
+def _maker_cfg(**over):
+    cfg = {"maker_only": True, "limit_entries": True, "overnight_curfew": False,
+           "weekend_curfew": False, "scale_out": False}
+    cfg.update(over)
+    return cfg
+
+
+def test_maker_only_skips_entries_too_close_to_expiry_instead_of_taking(tmp_path, monkeypatch):
+    """entry_tier returns None near expiry and the bot market-fills. Under
+    maker_only that trade is skipped: paying the taker fee is not an
+    option, so no-trade is the only maker-consistent outcome."""
+    (tmp_path / "config.json").write_text(json.dumps(_maker_cfg()))
+    # 4.5 clears min_entry_mins (4.0) but is under ENTRY_TIER_MIN_MINS (5.0),
+    # so entry_tier returns None -- exactly the market-fallback path.
+    sigs = [_sig(ts=_WD_NIGHT_TS, whale_trend=3.0, momentum=30.0, mins_left=4.5),
+            _sig(ts=_WD_NIGHT_TS + 5, whale_trend=-3.0, momentum=-30.0, mins_left=4.5)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick()
+    assert bot.state["open_plays"] == {} and bot.state["pending_entries"] == {}
+    reasons = [e["reason"] for e in _rows(tmp_path, EVENTS_FILE) if e["action"] == "skip"]
+    assert any("maker_only" in r for r in reasons), reasons
+
+
+def test_maker_only_cancels_a_timed_out_limit_instead_of_chasing(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text(json.dumps(
+        _maker_cfg(limit_fill_timeout_secs=10)))
+    sigs = [_sig(ts=_WD_NIGHT_TS, whale_trend=3.0, momentum=30.0),
+            _sig(ts=_WD_NIGHT_TS + 5, whale_trend=-3.0, momentum=-30.0),
+            _sig(ts=_WD_NIGHT_TS + 60, whale_trend=-3.5, momentum=-30.0)]  # past timeout
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick()
+    assert bot.state["open_plays"] == {}, "must not chase to market"
+    assert bot.state["pending_entries"] == {}
+    reasons = [e["reason"] for e in _rows(tmp_path, EVENTS_FILE) if e["action"] == "cancel"]
+    assert any("maker_only" in r for r in reasons), reasons
+
+
+def test_taker_paths_still_work_when_maker_only_is_off(tmp_path, monkeypatch):
+    """The flag must be opt-in: default behaviour is unchanged."""
+    (tmp_path / "config.json").write_text(json.dumps(
+        _maker_cfg(maker_only=False, limit_entries=False)))
+    sigs = [_sig(ts=_WD_NIGHT_TS, whale_trend=3.0, momentum=30.0, mins_left=4.5),
+            _sig(ts=_WD_NIGHT_TS + 5, whale_trend=-3.0, momentum=-30.0, mins_left=4.5)]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick()
+    assert bot.state["open_plays"], "market entry must still work with the flag off"

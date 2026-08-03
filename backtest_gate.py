@@ -30,18 +30,21 @@ def fee(price: float) -> float:
 
 
 def maker_fee(price: float) -> float:
-    """Approximate Kalshi maker fee per contract: 25% of the taker rate,
-    confirmed 2026-07-21 against three independent secondary sources
-    (Kalshi's own fee-schedule PDF returned HTTP 429 on every fetch
-    attempt, so this is NOT verified against the primary source). Applies
-    only to fills that genuinely rested and waited to be filled, not an
-    order that filled the instant it was placed (that's a taker fill by
-    definition regardless of order type) -- see bot_broker.PaperBroker.fill.
-    Also unconfirmed whether Kalshi's maker discount applies to the BTC
-    15-minute range markets this bot actually trades; treat as a real but
-    imperfectly-verified assumption until confirmed via account data or
-    the primary schedule."""
-    return round(fee(price) * 0.25, 4)
+    """Kalshi maker fee per contract on these markets: ZERO.
+
+    CONFIRMED 2026-08-03 against Kenny's own live account fills -- the
+    primary source the previous 25%-of-taker estimate was missing. 86
+    genuine resting fills across 36 KXBTC15M tickers, 501.8 contracts,
+    prices 0.07-0.87, every one with fee_cost exactly 0.00; the same
+    volume taken would have cost $9.32. The taker formula above is
+    confirmed by the same data (implied rate median 0.0701 over 1851
+    taker fills vs the modeled 0.07).
+
+    Applies only to fills that genuinely rested and waited, not an order
+    that filled the instant it was placed -- that is a taker fill by
+    definition regardless of order type (see bot_broker.PaperBroker.fill).
+    """
+    return 0.0
 
 
 def load_rows():

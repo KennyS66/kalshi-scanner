@@ -138,7 +138,11 @@ def test_live_broker_fill_with_order_id_never_places_a_second_real_order(tmp_pat
     assert fill["price"] == 0.49
     assert fill["qty"] == 3
     assert fill["order_id"] == "already-placed-123"
-    assert fill["fee_total"] > 0   # maker fee still computed
+    # Maker fills are free on these markets (confirmed against real
+    # account fills 2026-08-03), so fee_total is legitimately 0 here --
+    # the point of this test is that no SECOND order was placed.
+    assert fill["fee_total"] == 0.0
+    assert fill["maker"] is True
 
 
 def test_live_broker_fill_without_order_id_places_a_new_order(tmp_path, monkeypatch):

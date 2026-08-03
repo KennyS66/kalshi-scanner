@@ -83,3 +83,20 @@ def test_replay_never_hits_live_balance_endpoint(tmp_path, monkeypatch):
                     cfg_overrides={"limit_entries": False})
     assert calls == []
     assert result["trades"] == 1
+
+
+def test_maker_fee_is_zero_confirmed_against_real_account_fills():
+    """Kalshi charges makers NOTHING on these markets. Confirmed 2026-08-03
+    against the live account: 86 genuine resting fills across 36 tickers,
+    501.8 contracts, prices 0.07-0.87 -- every single one fee_cost 0.00,
+    where the same volume as taker would have cost $9.32. This replaces
+    the previous 25%-of-taker guess, which the docstring itself flagged as
+    unverified (Kalshi's fee PDF kept returning HTTP 429).
+
+    Taker side of the model is confirmed by the same data: implied rate
+    median 0.0701 over 1851 taker fills vs the modeled 0.07.
+    """
+    from backtest_gate import fee, maker_fee
+    for p in (0.07, 0.25, 0.5, 0.87):
+        assert maker_fee(p) == 0.0
+        assert fee(p) > 0.0

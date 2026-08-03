@@ -306,6 +306,15 @@ class Bot:
         ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         tier = entry_tier(sig.get("mins_left"), ask) if self.cfg.get("limit_entries", True) else None
         if tier is None:
+            # Kalshi charges makers nothing and takers ~0.07*p*(1-p) per
+            # contract (confirmed against real fills 2026-08-03). Under
+            # maker_only there is no taker fallback: skipping is the only
+            # maker-consistent outcome this close to expiry.
+            if self.cfg.get("maker_only"):
+                self._event("skip", "maker_only: no resting tier available "
+                            "(too close to expiry to rest a limit)",
+                            sig.get("ticker"), sig)
+                return
             self._enter(side, sig, ranges)
             return
         tier_name, offset = tier
@@ -429,6 +438,10 @@ class Bot:
                 if status.get("status") == "executed":
                     self._fill_pending(t, pend, sig, maker=True)
                 elif (sig.get("ts") or 0.0) - pend["placed_ts"] >= timeout:
+                    if self.cfg.get("maker_only"):
+                        self._cancel_pending(t, pend, sig,
+                                             "maker_only: limit timed out, not chasing")
+                        continue
                     try:
                         live_broker.cancel_order(pend["order_id"])
                     except Exception as e:
@@ -446,6 +459,10 @@ class Bot:
             if ask <= pend["limit_price"]:
                 self._fill_pending(t, pend, sig, maker=True)
             elif (sig.get("ts") or 0.0) - pend["placed_ts"] >= timeout:
+                if self.cfg.get("maker_only"):
+                    self._cancel_pending(t, pend, sig,
+                                         "maker_only: limit timed out, not chasing")
+                    continue
                 self._fill_pending(t, pend, sig, maker=False, chase=True)
             # else: still waiting, leave it pending
 

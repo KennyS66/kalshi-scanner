@@ -449,9 +449,13 @@ def test_entry_tier_skips_cheap_price():
 from backtest_gate import fee, maker_fee
 
 
-def test_maker_fee_is_quarter_of_taker():
+def test_maker_fee_is_zero_and_taker_fee_is_not():
+    """Superseded the old 25%-of-taker guess on 2026-08-03: real account
+    fills show Kalshi charges makers nothing on these markets (86 resting
+    fills, 501.8 contracts, every fee_cost 0.00). See backtest_gate."""
     for price in (0.05, 0.20, 0.50, 0.80, 0.95):
-        assert maker_fee(price) == pytest.approx(fee(price) * 0.25, abs=0.0001)
+        assert maker_fee(price) == 0.0
+        assert fee(price) > 0.0
 
 
 from bot_core import session_gate_stats
