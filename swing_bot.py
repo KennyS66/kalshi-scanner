@@ -705,29 +705,34 @@ class Bot:
     # ── main tick ─────────────────────────────────────────────────────
     def tick(self, now_ts=None):
         now_ts = now_ts if now_ts is not None else time.time()
-        if roll_day_if_needed(self.state, now_ts):
-            self._event("day_roll", self.state["day"])
-        self.cfg = load_config(self.dir / CONFIG_FILE)   # hot-reload
-        self.detector.flip_threshold = self.cfg["flip_threshold"]
-        self._refresh_bankroll(now_ts)
-        self._handle_control()
-        self._check_loop_deadman(now_ts)
-        self._check_day_stop()
-        self._check_profit_lock()
-        self._check_max_loss()
-        self._check_live_stop()
+        try:
+            if roll_day_if_needed(self.state, now_ts):
+                self._event("day_roll", self.state["day"])
+            self.cfg = load_config(self.dir / CONFIG_FILE)   # hot-reload
+            self.detector.flip_threshold = self.cfg["flip_threshold"]
+            self._refresh_bankroll(now_ts)
+            self._handle_control()
+            self._check_loop_deadman(now_ts)
+            self._check_day_stop()
+            self._check_profit_lock()
+            self._check_max_loss()
+            self._check_live_stop()
 
-        sig = self.fetch()
-        if sig is None:
-            self.feed_fails += 1
-            if self.feed_fails == 3:
-                self._event("feed_down", "3 consecutive fetch failures")
-        else:
-            self.feed_fails = 0
-            self._manage(sig)
-
-        self.state["heartbeat"] = now_ts
-        save_state(self.dir, self.state)
+            sig = self.fetch()
+            if sig is None:
+                self.feed_fails += 1
+                if self.feed_fails == 3:
+                    self._event("feed_down", "3 consecutive fetch failures")
+            else:
+                self.feed_fails = 0
+                self._manage(sig)
+        finally:
+            # Heartbeat/state ALWAYS persist, even when the tick dies mid-
+            # _manage -- otherwise an every-tick exception leaves the last
+            # good state unsaved while the process looks alive, and the
+            # deadman reads a stale heartbeat as a dead loop.
+            self.state["heartbeat"] = now_ts
+            save_state(self.dir, self.state)
 
     def _manage(self, sig):
         ticker = sig.get("ticker")
@@ -791,6 +796,16 @@ class Bot:
         # normally, same as the global pause.
         if pool in (self.cfg.get("paused_sessions") or []):
             blockers.append(f"{pool} paused")
+        # Live mode: a session that isn't toggled live takes no entries at
+        # all -- the 2026-07-29 spec's "decline individually, not refuse to
+        # run". Skipping here (like paused_sessions) keeps the broker's own
+        # session raise as an unreachable backstop instead of a tick-killer.
+        if self.broker.mode == "live":
+            from bot_broker import live_unlock_ok
+            ok, _why = live_unlock_ok(self.cfg, getattr(self.broker, "env", {}),
+                                      pool)
+            if not ok:
+                blockers.append(f"{pool} not live")
         ev = ev_gate_blocker(flip, sig, self.ev_stats, self.cfg)
         if ev:
             blockers.append(ev)

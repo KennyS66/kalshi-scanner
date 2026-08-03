@@ -139,9 +139,15 @@ class LiveBroker:
 
     def _check_session(self, sig: dict) -> str:
         """Resolve this entry's session and raise if it isn't unlocked.
-        Returns the session name (callers that already need it, like
-        _signal_fill/_auto_fill via _pool_of, can reuse the return value
-        instead of re-deriving it)."""
+        Called from buy() only, as a backstop behind swing_bot._manage's
+        entry blocker (which skips the entry cleanly before any broker
+        call). NOT called from sell() or fill(): an exit must never be
+        blocked by the session gate -- a play entered in a live session
+        can need to close after the clock crosses into a non-live session,
+        and raising there traps the position and aborts the tick (2026-08-02
+        code-review finding #1). fill() finalizes an entry whose placement
+        was already gated, and by fill time the pend is deleted from state,
+        so raising would silently lose the entry."""
         session = self._pool_of(sig)
         ok, reason = live_unlock_ok(self.cfg, self.env, session)
         if not ok:
@@ -186,7 +192,7 @@ class LiveBroker:
         return self._auto_fill(side, "buy", qty, price, sig, "market", "market")
 
     def sell(self, side: str, qty: int, sig: dict) -> dict:
-        self._check_session(sig)
+        # no session check: exits are always allowed (see _check_session)
         ask = sig["yes_ask"] if side == "YES" else sig["no_ask"]
         spread = max(0.0, sig.get("spread") or 0.0)
         price = max(0.01, round(ask - spread, 4))
@@ -213,7 +219,7 @@ class LiveBroker:
         placement (the chase-to-market path, after the original resting
         order was cancelled, and plain buy()/sell() calls)."""
         sig = sig or {}
-        self._check_session(sig)
+        # no session check: placement was already gated (see _check_session)
         side = sig.get("side", "YES")
         tier = "patient" if maker else "market"
         if self.broker_mode == "manual":

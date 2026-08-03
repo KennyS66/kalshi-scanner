@@ -1505,3 +1505,67 @@ def test_session_pause_survives_a_day_roll(tmp_path, monkeypatch):
     bot.state["day"] = "1999-01-01"
     assert roll_day_if_needed(bot.state, _WD_NIGHT_TS) is True
     assert bot.cfg["paused_sessions"] == ["weekday_night"]
+
+
+# ── live-manual per-session gating (2026-08-02 code-review finding #1) ──
+#
+# With mode=live + broker_mode=manual and only SOME sessions toggled live
+# (the actual Monday plan: weekday_night only), the bot must decline
+# non-live-session entries per the 2026-07-29 spec ("simply decline ...
+# entries individually, not refuse to run at all") -- NOT raise an
+# uncaught RuntimeError that aborts the tick before heartbeat/state save.
+
+
+def _mk_live_manual_bot(tmp_path, sigs, monkeypatch, extra_cfg=None):
+    monkeypatch.setenv("BOT_LIVE", "1")
+    cfg = {"mode": "live", "broker_mode": "manual",
+           "live_sessions_requested": ["weekday_night"],
+           "overnight_curfew": False, "weekend_curfew": False,
+           "scale_out": False, "limit_entries": False}
+    cfg.update(extra_cfg or {})
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    return _mkbot(tmp_path, sigs, monkeypatch)
+
+
+def test_live_manual_entry_in_nonlive_session_skips_not_raises(tmp_path, monkeypatch):
+    bot = _mk_live_manual_bot(tmp_path, _flip_pair(_WD_DAY_TS), monkeypatch)
+    for _ in range(2):
+        bot.tick()          # must not raise
+    assert bot.state["open_plays"] == {}
+    assert bot.state["pending_entries"] == {}
+    reasons = [e["reason"] for e in _rows(tmp_path, EVENTS_FILE)
+               if e["action"] == "skip"]
+    assert any("weekday_day not live" in r for r in reasons), reasons
+
+
+def test_live_manual_entry_in_live_session_still_enters(tmp_path, monkeypatch):
+    bot = _mk_live_manual_bot(tmp_path, _flip_pair(_WD_NIGHT_TS), monkeypatch)
+    for _ in range(2):
+        bot.tick()
+    assert "M1" in bot.state["open_plays"], "the live session itself must still enter"
+
+
+def test_live_manual_exit_across_session_boundary_still_closes(tmp_path, monkeypatch):
+    """A weekday_night play still open when the clock crosses 13Z must exit
+    normally in weekday_day -- the old behavior raised on sell every tick
+    forever, so the play could never close and the deadman froze the bot."""
+    sigs = _flip_pair(_WD_NIGHT_TS) + [
+        _sig(ts=_WD_DAY_TS, whale_trend=-3.0, momentum=-30.0, mins_left=1.5)]
+    bot = _mk_live_manual_bot(tmp_path, sigs, monkeypatch)
+    for _ in range(3):
+        bot.tick()          # must not raise
+    assert bot.state["open_plays"] == {}
+    trades = _rows(tmp_path, TRADES_FILE)
+    assert len(trades) == 1 and trades[0]["status"] == "closed"
+
+
+def test_tick_persists_heartbeat_even_when_manage_raises(tmp_path, monkeypatch):
+    """Any exception inside the tick must not skip the heartbeat/state
+    save -- a silently-stale heartbeat is how the old bug froze the bot
+    while the process looked alive (code-review finding #3)."""
+    bot = _mkbot(tmp_path, [_sig()], monkeypatch)
+    monkeypatch.setattr(bot, "_manage", Mock(side_effect=RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        bot.tick(now_ts=4242.0)
+    saved = json.loads((tmp_path / STATE_FILE).read_text())
+    assert saved["heartbeat"] == 4242.0

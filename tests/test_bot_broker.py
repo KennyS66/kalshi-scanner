@@ -285,18 +285,35 @@ def test_live_broker_buy_checks_the_entrys_own_session(tmp_path):
                          "ticker": "T2", "mins_left": 10.0})
 
 
-def test_live_broker_sell_and_fill_also_check_session(tmp_path):
+def test_live_broker_sell_exempt_from_session_gate(tmp_path):
+    """Exits must never be blocked by the session gate: a play entered in a
+    live session can legitimately need to close after the clock crosses into
+    a non-live session, and blocking the sell traps the position (2026-08-02
+    code-review finding #1). The gate exists to stop NEW un-earned exposure,
+    not risk reduction."""
     from bot_broker import LiveBroker
-    import pytest
     cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "manual"}
     env = {"BOT_LIVE": "1"}
     b = LiveBroker(cfg, env, bot_dir=tmp_path)
     weekend_ts = 1784419200.0  # Sun 00:00Z -> weekend_night, not requested
-    with pytest.raises(RuntimeError, match="live trading locked"):
-        b.sell("YES", 1, {"yes_ask": 0.50, "no_ask": 0.50, "spread": 0.02,
-                          "ts": weekend_ts, "ticker": "T3"})
-    with pytest.raises(RuntimeError, match="live trading locked"):
-        b.fill(0.50, 1, weekend_ts, maker=True, sig={"ticker": "T3", "side": "YES", "ts": weekend_ts})
+    fill = b.sell("YES", 1, {"yes_ask": 0.50, "no_ask": 0.50, "spread": 0.02,
+                             "ts": weekend_ts, "ticker": "T3"})
+    assert fill["price"] == 0.48  # ask - spread, same as an unlocked sell
+
+
+def test_live_broker_fill_exempt_from_session_gate(tmp_path):
+    """Entry gating happens at placement time (swing_bot blocks the entry
+    before any order exists; buy() double-checks). By fill time the pend has
+    already been deleted from state, so a raise here would silently lose the
+    entry AND abort the tick — fill must not re-check the session."""
+    from bot_broker import LiveBroker
+    cfg = {"live_sessions_requested": ["weekday_night"], "broker_mode": "manual"}
+    env = {"BOT_LIVE": "1"}
+    b = LiveBroker(cfg, env, bot_dir=tmp_path)
+    weekend_ts = 1784419200.0
+    fill = b.fill(0.50, 1, weekend_ts, maker=True,
+                  sig={"ticker": "T3", "side": "YES", "ts": weekend_ts})
+    assert fill["price"] == 0.50 and fill["signal_only"]
 
 
 def test_live_broker_fails_closed_when_session_cannot_be_resolved(tmp_path):
