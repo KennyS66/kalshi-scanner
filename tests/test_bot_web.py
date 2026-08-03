@@ -181,3 +181,78 @@ def test_status_payload_unlock_reflects_live_capability(tmp_path, monkeypatch):
     (tmp_path / "config.json").write_text(json.dumps({"live_sessions_requested": []}))
     p2 = bot_status_payload(tmp_path)
     assert p2["unlock"]["ok"] is False
+
+
+# ── per-session live toggle endpoint (2026-07-29 design) ─────────────
+
+def test_bot_live_session_write_enable_requires_passing_gate(tmp_path):
+    from web import bot_live_session_write
+    # 50 trades, net avg positive -- fails the 100-trade floor
+    trades = [{"status": "closed", "net_pnl": 0.1, "entry_ts": 1784592000.0,
+              "entry_sig": {"ts": 1784592000.0}} for _ in range(50)]
+    (tmp_path / "config.json").write_text(json.dumps({"live_sessions_requested": []}))
+    result = bot_live_session_write(tmp_path, "weekday_night", "enable", trades)
+    assert result["ok"] is False
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert "weekday_night" not in cfg.get("live_sessions_requested", [])
+
+
+def test_bot_live_session_write_enable_succeeds_when_gate_passes(tmp_path):
+    from web import bot_live_session_write
+    trades = [{"status": "closed", "net_pnl": 0.1, "entry_ts": 1784592000.0,
+              "entry_sig": {"ts": 1784592000.0}} for _ in range(100)]
+    (tmp_path / "config.json").write_text(json.dumps({"live_sessions_requested": []}))
+    result = bot_live_session_write(tmp_path, "weekday_night", "enable", trades)
+    assert result["ok"] is True
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["live_sessions_requested"] == ["weekday_night"]
+
+
+def test_bot_live_session_write_enable_is_idempotent(tmp_path):
+    from web import bot_live_session_write
+    trades = [{"status": "closed", "net_pnl": 0.1, "entry_ts": 1784592000.0,
+              "entry_sig": {"ts": 1784592000.0}} for _ in range(100)]
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"live_sessions_requested": ["weekday_night"]}))
+    result = bot_live_session_write(tmp_path, "weekday_night", "enable", trades)
+    assert result["ok"] is True
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["live_sessions_requested"] == ["weekday_night"]   # no duplicate
+
+
+def test_bot_live_session_write_disable_never_needs_gate(tmp_path):
+    from web import bot_live_session_write
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"live_sessions_requested": ["weekday_night", "weekend_day"]}))
+    result = bot_live_session_write(tmp_path, "weekday_night", "disable", trades=[])
+    assert result["ok"] is True
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["live_sessions_requested"] == ["weekend_day"]
+
+
+def test_bot_live_session_write_rejects_unknown_session(tmp_path):
+    from web import bot_live_session_write
+    (tmp_path / "config.json").write_text(json.dumps({"live_sessions_requested": []}))
+    result = bot_live_session_write(tmp_path, "not_a_real_session", "enable", trades=[])
+    assert result["ok"] is False
+
+
+def test_api_live_session_endpoint_enable_and_disable(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import web
+    monkeypatch.setattr(web, "_BOT_DIR", tmp_path)
+    trades = [{"status": "closed", "net_pnl": 0.1, "entry_ts": 1784592000.0,
+              "entry_sig": {"ts": 1784592000.0}} for _ in range(100)]
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "\n".join(json.dumps(t) for t in trades))
+    (tmp_path / "config.json").write_text(json.dumps({"live_sessions_requested": []}))
+    client = TestClient(web.app)
+    r = client.post("/api/bot/live_session", json={"session": "weekday_night", "action": "enable"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["live_sessions_requested"] == ["weekday_night"]
+    r2 = client.post("/api/bot/live_session", json={"session": "weekday_night", "action": "disable"})
+    assert r2.status_code == 200
+    cfg2 = json.loads((tmp_path / "config.json").read_text())
+    assert cfg2["live_sessions_requested"] == []

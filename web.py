@@ -1444,6 +1444,40 @@ def _gate_split(trades: list) -> dict:
     return {"sessions": session_gate_stats(trades)}
 
 
+def bot_live_session_write(bot_dir, session: str, action: str, trades: list) -> dict:
+    """Enable/disable one session in config.json's live_sessions_requested
+    list. "enable" re-verifies that session's own 100-trade/positive-net-avg
+    gate from live trade history -- the ONE place this feature ever
+    computes session_gate_stats for the purpose of unlocking. "disable"
+    never needs the gate (turning trading off is always safe). Returns
+    {"ok": bool, "reason": str}."""
+    from bot_core import POOL_NAMES, session_gate_stats, load_config
+    if session not in POOL_NAMES:
+        return {"ok": False, "reason": f"unknown session: {session}"}
+    d = Path(bot_dir) if bot_dir else _BOT_DIR
+    cfg = load_config(d / "config.json")
+    requested = list(cfg.get("live_sessions_requested") or [])
+    if action == "enable":
+        stats = session_gate_stats(trades)[session]
+        if stats["n"] < 100:
+            return {"ok": False, "reason": f"{session} {stats['n']}/100 settled"}
+        if stats["net_avg"] <= 0:
+            return {"ok": False, "reason": f"{session} net avg {stats['net_avg']:+.4f} <= 0"}
+        if session not in requested:
+            requested.append(session)
+    elif action == "disable":
+        if session in requested:
+            requested.remove(session)
+    else:
+        return {"ok": False, "reason": f"unknown action: {action}"}
+    cfg["live_sessions_requested"] = requested
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / "config.json.tmp"
+    tmp.write_text(json.dumps(cfg))
+    os.replace(tmp, d / "config.json")
+    return {"ok": True, "reason": "updated"}
+
+
 def bot_control_write(bot_dir, cmd: str) -> int:
     if cmd not in ("pause", "resume", "flatten"):
         raise ValueError(f"unknown bot command: {cmd}")
@@ -1477,6 +1511,20 @@ async def api_bot_control(request: Request) -> JSONResponse:
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     return JSONResponse({"ok": True, "nonce": nonce})
+
+
+@app.post("/api/bot/live_session")
+async def api_live_session(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "bad json"}, status_code=400)
+    session = body.get("session", "")
+    action = body.get("action", "")
+    trades = _read_jsonl_tail(_BOT_DIR / "bot_trades.jsonl", 100000)
+    result = bot_live_session_write(_BOT_DIR, session, action, trades)
+    status = 200 if result["ok"] else 400
+    return JSONResponse(result, status_code=status)
 
 
 @app.get("/bot", response_class=HTMLResponse)
