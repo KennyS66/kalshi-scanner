@@ -1017,3 +1017,35 @@
 {"ts": 1785334303.6381083, "type": "HB", "spot": 64370.08, "msg": "level watcher alive"}
 {"ts": 1785335505.518863, "type": "HB", "spot": 64145.13, "msg": "level watcher alive"}
 {"ts": 1785336707.0830905, "type": "HB", "spot": 64042.55, "msg": "level watcher alive"}
+{"ts": 1785337911.6104896, "type": "HB", "spot": 63991.77, "msg": "level watcher alive"}
+{"ts": 1785339113.8306007, "type": "HB", "spot": 63956.71, "msg": "level watcher alive"}
+{"ts": 1785340316.29667, "type": "HB", "spot": 63919.73, "msg": "level watcher alive"}
+{"ts": 1785341518.8224268, "type": "HB", "spot": 63876.18, "msg": "level watcher alive"}
+{"ts": 1785342724.8878198, "type": "HB", "spot": 63903.6, "msg": "level watcher alive"}
+{"ts": 1785343932.1961544, "type": "HB", "spot": 63617.83, "msg": "level watcher alive"}
+{"ts": 1785345135.2895503, "type": "HB", "spot": 63717.49, "msg": "level watcher alive"}
+{"ts": 1785346337.4625762, "type": "HB", "spot": 63711.61, "msg": "level watcher alive"}
+{"ts": 1785347541.273721, "type": "HB", "spot": 63989.94, "msg": "level watcher alive"}
+{"ts": 1785348742.235955, "type": "HB", "spot": 64354.71, "msg": "level watcher alive"}
+{"ts": 1785349943.7088144, "type": "HB", "spot": 63781.66, "msg": "level watcher alive"}
+{"ts": 1785351146.023267, "type": "HB", "spot": 64444.14, "msg": "level watcher alive"}
+{"ts": 1785352347.449664, "type": "HB", "spot": 64248.26, "msg": "level watcher alive"}
+{"ts": 1785353550.1656008, "type": "HB", "spot": 63943.36, "msg": "level watcher alive"}
+{"ts": 1785354752.5294855, "type": "HB", "spot": 63495.79, "msg": "level watcher alive"}
+{"ts": 1785355955.22932, "type": "HB", "spot": 63421.15, "msg": "level watcher alive"}
+{"ts": 1785357157.1732314, "type": "HB", "spot": 63480.9, "msg": "level watcher alive"}
+{"ts": 1785358359.9565105, "type": "HB", "spot": 63443.79, "msg": "level watcher alive"}
+{"ts": 1785359563.4888706, "type": "HB", "spot": 63365.25, "msg": "level watcher alive"}
+{"ts": 1785360766.1820364, "type": "HB", "spot": 63500.11, "msg": "level watcher alive"}
+{"ts": 1785361969.432718, "type": "HB", "spot": 63628.53, "msg": "level watcher alive"}
+{"ts": 1785363172.4914343, "type": "HB", "spot": 63977.8, "msg": "level watcher alive"}
+{"ts": 1785364377.388865, "type": "HB", "spot": 63898.89, "msg": "level watcher alive"}
+{"ts": 1785365580.2577367, "type": "HB", "spot": 63843.27, "msg": "level watcher alive"}
+{"ts": 1785366790.2693498, "type": "HB", "spot": 63820.05, "msg": "level watcher alive"}
+{"ts": 1785367995.012345, "type": "HB", "spot": 63914.0, "msg": "level watcher alive"}
+{"ts": 1785369200.2454987, "type": "HB", "spot": 63896.93, "msg": "level watcher alive"}
+{"ts": 1785370403.5873644, "type": "HB", "spot": 63980.62, "msg": "level watcher alive"}
+{"ts": 1785371610.4284625, "type": "HB", "spot": 63780.13, "msg": "level watcher alive"}
+{"ts": 1785387840.1909394, "type": "HB", "spot": 63862.12, "msg": "level watcher resumed after power outage \u2014 scanner + collectors back up; WAIT bias, key 64000, spot below"}
+{"ts": 1785391618.1700995, "type": "HB", "spot": 63979.99, "msg": "marketloop iteration \u2014 WAIT bias, spot 63980 just below 64k key; chop, no confirmed break"}
+{"ts": 1785393492.912592, "type": "HB", "spot": null, "msg": "marketloop iter \u2014 WAIT chop around 64k key"}

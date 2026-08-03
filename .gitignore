@@ -5,6 +5,11 @@ __pycache__/
 gh_2.49.0_linux_amd64/
 logs/
 
+# Tuner sweep output — regenerable from bot_tuner.py --daemon (126MB+ of
+# per-config replay journals); never tracked, and auto_commit_cron's `git add -A`
+# would otherwise sweep it into the repo permanently.
+data/bot/tuner_sweep/
+
 # Calibration runtime state — accumulated locally, not part of repo
 data/whales/picks_log.jsonl
 data/whales/picks_outcomes.json
