@@ -48,10 +48,22 @@ start_bg() {  # <name> <pgrep-pattern> <command...>
   if pgrep -f "$pat" >/dev/null 2>&1; then
     echo "  $name already running"
   else
-    nohup "$@" >"/tmp/${name}.log" 2>&1 &
+    # logs/ not /tmp: /tmp is wiped on every reboot, so a collector's dying
+    # words were always gone by the time anyone looked -- which is exactly
+    # why the 2026-08-03 outage and the two-week cron-push failure were
+    # undiagnosable. Append rather than truncate so the evidence of the
+    # crash SURVIVES the restart that follows it; keep one older generation
+    # so a systemd restart loop still can't fill the disk. logs/ is
+    # gitignored.
+    local log="logs/${name}.log"
+    if [[ -f "$log" ]] && (( $(stat -c %s "$log" 2>/dev/null || echo 0) > 5242880 )); then
+      mv -f "$log" "$log.old"
+    fi
+    nohup "$@" >>"$log" 2>&1 &
     echo "  started $name (pid $!)"
   fi
 }
+mkdir -p logs
 echo "Starting data collectors..."
 start_bg btc_monitor    "btc_monitor.sh"   ./btc_monitor.sh
 start_bg exit_watcher   "exit_watcher.py"  "$PY" -u exit_watcher.py

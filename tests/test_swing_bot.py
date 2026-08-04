@@ -2020,3 +2020,28 @@ def test_manual_live_exit_does_not_feed_the_in_memory_ev_gate(tmp_path, monkeypa
 
     assert bot.ev_stats == before, \
         "a signal-only fill was folded into the in-memory EV buckets"
+
+
+def test_startup_flags_an_open_play_that_has_no_enter_event(tmp_path, monkeypatch):
+    """The other direction: a tracked position whose enter event was lost.
+
+    _enter records the position in open_plays BEFORE writing the event (the
+    right order -- the buy already happened, so losing the position matters
+    far more than losing an audit row). The cost is that a failed event write
+    drives enters - exits - open_plays NEGATIVE, which the >-baseline check
+    silently swallowed while quietly lowering the baseline.
+    """
+    for row in [{"ts": 1.0, "ticker": "A", "action": "enter"},
+                {"ts": 2.0, "ticker": "A", "action": "exit"}]:
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+    s = fresh_state()
+    s["open_plays"]["B"] = {"side": "YES", "qty": 5,          # enter event lost
+                            "entry": {"price": 0.5, "qty": 5,
+                                      "fee_total": 0.1, "ts": 3.0}}
+    save_state(tmp_path, s)
+
+    _mkbot(tmp_path, [], monkeypatch)
+
+    flagged = [e for e in _rows(tmp_path, EVENTS_FILE) if e["action"] == "reconcile"]
+    assert len(flagged) == 1, "an open play with no enter event went unreported"
+    assert "-1" in flagged[0]["reason"]

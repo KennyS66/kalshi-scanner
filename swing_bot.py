@@ -235,10 +235,20 @@ class Bot:
         exits = sum(1 for e in rows if e.get("action") == "exit")
         open_n = len(self.state.get("open_plays") or {})
         gap = enters - exits - open_n
-        if gap > self.state.get("reconcile_baseline", 0):
-            msg = (f"{gap:+d} entries unaccounted for "
-                   f"({enters} enter / {exits} exit / {open_n} open) -- "
-                   f"trades likely missing from {TRADES_FILE}")
+        # Any DEVIATION from the accepted baseline, in either direction.
+        # Positive means an exit booked P&L without leaving a trade row.
+        # Negative means a tracked position whose enter event never landed --
+        # _enter writes open_plays before the event on purpose (the buy has
+        # already happened, so losing the position is far worse than losing
+        # an audit row), which makes this the shape that failure takes.
+        # Testing only `>` swallowed the negative case and quietly lowered
+        # the baseline underneath it.
+        if gap != self.state.get("reconcile_baseline", 0):
+            detail = (f"{gap:+d} entries with no exit and no open play -- "
+                      f"trades likely missing from {TRADES_FILE}") if gap > 0 else (
+                      f"{gap:+d} open plays with no enter event -- "
+                      f"events likely missing from {EVENTS_FILE}")
+            msg = f"{detail} ({enters} enter / {exits} exit / {open_n} open)"
             self._event("reconcile", msg)
             print(f"swing_bot WARNING: {msg}", file=sys.stderr, flush=True)
         self.state["reconcile_baseline"] = gap
