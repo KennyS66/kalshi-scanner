@@ -1,0 +1,35 @@
+[Unit]
+# Install:
+#   cp deploy/kalshi-scanner.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now kalshi-scanner
+# Requires lingering so it comes up at boot without a login:
+#   loginctl enable-linger kenny        (already on for this box)
+#
+# Before this existed the scanner had no supervisor at all: the 2026-07-30
+# power cut left it down until 2026-08-02, and the 2026-08-03 reboot cost
+# another ~13 hours of paper collection. Nothing noticed either time.
+Description=Kalshi whale scanner: collectors, swing bot, :9050 dashboard
+After=network-online.target
+Wants=network-online.target
+# Same reasoning as daedalus-crypto.service: dying unnoticed is the failure
+# mode worth engineering against, so disable the start-rate limit. A genuine
+# startup crash-loop still retries every RestartSec and is visible in the log.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kenny/bots/kalshi-scanner
+# start.sh launches the five collectors with nohup, then `exec`s main.py --web,
+# so main.py IS this process and systemd restarts the stack when it exits. The
+# collectors stay in the unit's cgroup, so the default KillMode=control-group
+# tears them down on stop/restart instead of leaving duplicates behind -- and
+# start_bg's pgrep guard makes a re-run idempotent either way.
+ExecStart=/home/kenny/bots/kalshi-scanner/start.sh
+Restart=always
+RestartSec=15
+# Fixed path so the existing log tooling keeps working. logs/ is gitignored.
+StandardOutput=append:/home/kenny/bots/kalshi-scanner/logs/scanner_supervised.log
+StandardError=append:/home/kenny/bots/kalshi-scanner/logs/scanner_supervised.log
+
+[Install]
+WantedBy=default.target
