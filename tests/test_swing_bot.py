@@ -2045,3 +2045,32 @@ def test_startup_flags_an_open_play_that_has_no_enter_event(tmp_path, monkeypatc
     flagged = [e for e in _rows(tmp_path, EVENTS_FILE) if e["action"] == "reconcile"]
     assert len(flagged) == 1, "an open play with no enter event went unreported"
     assert "-1" in flagged[0]["reason"]
+
+
+def test_failed_pending_fill_keeps_the_resting_entry(tmp_path, monkeypatch):
+    """_fill_pending deletes the pending entry BEFORE attempting the fill.
+
+    If the fill raises, the resting entry is gone from state for good. In
+    live+auto that is the dangerous case: fill(order_id=...) is finalising an
+    order that has ALREADY executed on the exchange, so dropping it leaves a
+    real position nothing is tracking. Same shape as the _exit defect --
+    forget the thing first, then do the operation that can fail.
+    """
+    bot = _mkbot(tmp_path, [], monkeypatch)
+    bot.state["pending_entries"]["M1"] = {
+        "side": "YES", "qty": 1, "limit_price": 0.45, "tier": "patient",
+        "placed_ts": 1000.0, "ranges": None, "entry_sig": {"ts": 1000.0},
+        "pool": "weekday_night"}
+
+    def boom(*a, **k):
+        raise RuntimeError("fill failed mid-flight")
+
+    monkeypatch.setattr(bot.broker, "fill", boom)
+    sig = _sig(ticker="M1", ts=1005.0, yes_ask=0.45, no_ask=0.55)
+
+    with pytest.raises(RuntimeError):
+        bot._fill_pending("M1", bot.state["pending_entries"]["M1"], sig, maker=True)
+
+    assert "M1" in bot.state["pending_entries"], \
+        "resting entry was dropped by a fill that never completed"
+    assert "M1" not in bot.state["open_plays"]

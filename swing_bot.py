@@ -391,7 +391,6 @@ class Bot:
                     sig["ticker"], sig)
 
     def _fill_pending(self, ticker, pend, sig, maker, chase=False):
-        del self.state["pending_entries"][ticker]
         price = (sig["yes_ask"] if pend["side"] == "YES" else sig["no_ask"]) \
                 if chase else pend["limit_price"]
         order_id = None if chase else pend.get("order_id")
@@ -401,11 +400,22 @@ class Bot:
         except Exception as e:
             if self.broker.mode == "live" and self.broker.broker_mode == "auto":
                 ps = self.state["pools"][pend["pool"]]
-                ps["halted"] = True
-                self._event("halt", f"[{pend['pool']}] order_error: {e} -- auto entries "
-                            f"blocked until manually resumed", ticker, sig)
+                # Halt once, not once per tick: the pending entry now
+                # survives the failure (see below), so this path is reached
+                # again on every retry until it clears or the market rolls.
+                if not ps["halted"]:
+                    ps["halted"] = True
+                    self._event("halt", f"[{pend['pool']}] order_error: {e} -- auto entries "
+                                f"blocked until manually resumed", ticker, sig)
                 return
             raise
+        # Only now that the fill is in hand is it safe to forget the resting
+        # entry. Deleting it first meant a fill that raised took the order
+        # with it -- and in live+auto, fill(order_id=...) is FINALISING an
+        # order that has already executed on the exchange, so dropping it
+        # left a real position with nothing tracking it. Retrying is safe:
+        # that path skips placement and just rebuilds the fill dict.
+        del self.state["pending_entries"][ticker]
         me = self.state.setdefault("market_entries", {})
         me[ticker] = me.get(ticker, 0) + 1
         self.state["open_plays"][ticker] = {
@@ -947,7 +957,10 @@ class Bot:
         self._place_entry(flip, sig, ranges)
 
     def run(self):
-        print(f"swing_bot up — mode={self.broker.mode} dir={self.dir}", flush=True)
+        # Timestamped: logs/swing_bot.log appends across restarts, so without
+        # this the banners from consecutive runs are indistinguishable.
+        print(f"[{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')}] "
+              f"swing_bot up — mode={self.broker.mode} dir={self.dir}", flush=True)
         while True:
             try:
                 self.tick()
