@@ -495,3 +495,43 @@ def test_default_config_has_live_sessions_requested_not_live_requested():
 
 def test_default_config_has_paused_sessions():
     assert DEFAULT_CONFIG["paused_sessions"] == []
+
+
+# ── synthetic (signal-only) rows must never feed the live gates ──────────
+
+def _synthetic(**over):
+    """A manual-mode live row: quoted-price fill, zero fees, signal_only."""
+    t = _trade(**over)
+    t["mode"] = "live"
+    t["signal_only"] = True
+    return t
+
+
+def test_session_gate_stats_ignores_signal_only_rows():
+    """A manual live test must not feed the gate that authorized it.
+
+    LiveBroker._signal_fill returns a synthetic fill at the quoted price with
+    fee_total 0.0. Counting those in session_gate_stats makes the 100-trade /
+    positive-net-avg bar easier the longer a manual test runs -- circular.
+    """
+    from bot_core import session_gate_stats
+    ts = 1784592000.0                                  # weekday_night
+    real = [{"status": "closed", "net_pnl": -1.0, "entry_ts": ts,
+             "entry_sig": {"ts": ts}, "mode": "paper"} for _ in range(100)]
+    synthetic = [{"status": "closed", "net_pnl": +5.0, "entry_ts": ts,
+                  "entry_sig": {"ts": ts}, "mode": "live",
+                  "signal_only": True} for _ in range(50)]
+
+    stats = session_gate_stats(real + synthetic)["weekday_night"]
+
+    assert stats["n"] == 100, "synthetic rows inflated the settled count"
+    assert stats["net_avg"] == -1.0, "synthetic rows moved net_avg"
+    assert stats["ok"] is False, "the gate opened on synthetic fills"
+
+
+def test_bucket_stats_ignores_signal_only_rows():
+    """Same contamination, on the EV gate that blocks individual entries."""
+    real = [_trade(pnl=-0.5) for _ in range(12)]
+    both = bucket_stats(real + [_synthetic(pnl=+9.0) for _ in range(12)])
+    only_real = bucket_stats(real)
+    assert both == only_real, "synthetic rows leaked into the EV buckets"

@@ -538,7 +538,7 @@ class Bot:
         # Crediting first leaves the play looking unscaled at full size when
         # the append fails, so the next tick banks the same half over again --
         # a double-count on top of the lost row, worse than the _exit case.
-        append_jsonl(self.dir / TRADES_FILE, {
+        row = {
             "ticker": ticker, "mode": self.broker.mode, "side": play["side"],
             "qty": half, "entry_price": entry["price"],
             "exit_price": fill["price"], "entry_ts": entry["ts"],
@@ -546,7 +546,10 @@ class Bot:
             "fees": round(entry_fee_half + fill["fee_total"], 4),
             "net_pnl": pnl, "exit_reason": "target_half",
             "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
-            "status": "closed"})
+            "status": "closed"}
+        if entry.get("signal_only") or fill.get("signal_only"):
+            row["signal_only"] = True      # see bot_core.is_signal_only
+        append_jsonl(self.dir / TRADES_FILE, row)
         ps = self.state["pools"].setdefault(pool, _fresh_pool())
         ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
         ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
@@ -598,7 +601,7 @@ class Bot:
         # from bot_trades.jsonl for good while its P&L stays on the books
         # -- that is how KXBTC15M-26JUL210515-15 vanished on 2026-07-21.
         # Raising here leaves state untouched, so the exit simply retries.
-        append_jsonl(self.dir / TRADES_FILE, {
+        row = {
             "ticker": ticker, "mode": self.broker.mode, "side": play["side"],
             "qty": play["qty"], "entry_price": play["entry"]["price"],
             "exit_price": fill["price"], "entry_ts": play["entry"]["ts"],
@@ -606,15 +609,26 @@ class Bot:
             "fees": round(play["entry"]["fee_total"] + fill["fee_total"], 4),
             "net_pnl": pnl, "exit_reason": reason,
             "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
-            "status": "closed"})
+            "status": "closed"}
+        # Either leg synthetic makes the whole round trip synthetic. Journal
+        # it, but keep it out of the live-unlock and EV gates -- see
+        # bot_core.is_signal_only. Key is omitted entirely on real fills so
+        # the paper row format is unchanged.
+        if play["entry"].get("signal_only") or fill.get("signal_only"):
+            row["signal_only"] = True
+        append_jsonl(self.dir / TRADES_FILE, row)
         ps = self.state["pools"].setdefault(pool, _fresh_pool())
         ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
         ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
         del self.state["open_plays"][ticker]
         self.detector.forget(ticker)
-        # one EV sample per entry decision: fold any banked scale-out leg in
-        update_bucket_stats(self.ev_stats, play["side"], play["entry_sig"],
-                            round(pnl + (play.get("scaled") or {}).get("pnl", 0.0), 4))
+        # one EV sample per entry decision: fold any banked scale-out leg in.
+        # Synthetic rows are skipped for the same reason bucket_stats drops
+        # them at boot -- otherwise the EV gate stays contaminated for the
+        # whole session and only cleans up on the next restart.
+        if not row.get("signal_only"):
+            update_bucket_stats(self.ev_stats, play["side"], play["entry_sig"],
+                                round(pnl + (play.get("scaled") or {}).get("pnl", 0.0), 4))
         self._event("exit", f"{reason} pnl {pnl:+.2f}", ticker, sig)
 
     def _flatten(self, reason, pool=None):

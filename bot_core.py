@@ -478,6 +478,23 @@ POOL_NAMES = ("weekday_day", "weekday_night", "weekend_day", "weekend_night")
 LIVE_UNLOCK_FLOOR = 100
 
 
+def is_signal_only(t: dict) -> bool:
+    """True for a synthetic manual-mode row.
+
+    In broker_mode "manual", LiveBroker._signal_fill emits a live_signal for a
+    human to place by hand and returns a fill at the *quoted* price with
+    fee_total 0.0. Those rows are journaled like any other so the signal
+    history stays complete, but they model what a signal would have made --
+    they are not real executions, and being zero-fee they are optimistic.
+
+    They must never feed the live-unlock gate or the EV gate: a manual live
+    test would otherwise make the very bar that authorized it easier the
+    longer it ran. Real auto-mode fills (_auto_fill) carry no such marker and
+    still count.
+    """
+    return bool(t.get("signal_only"))
+
+
 def session_gate_stats(trades: list, floor: int = LIVE_UNLOCK_FLOOR) -> dict:
     """{session: {n, net_avg, ok}} for the 4-way live-unlock gate -- single
     source of truth shared by bot_broker.live_unlock_ok (the actual gate)
@@ -487,7 +504,7 @@ def session_gate_stats(trades: list, floor: int = LIVE_UNLOCK_FLOOR) -> dict:
     2026-07-21; see dual-100-trade-gate memory). `ok` requires n >= floor
     AND net_avg > 0, same threshold live_unlock_ok enforces."""
     closed = [t for t in trades if t.get("status") == "closed"
-              and t.get("net_pnl") is not None]
+              and t.get("net_pnl") is not None and not is_signal_only(t)]
     by_session = {p: [] for p in POOL_NAMES}
     for t in closed:
         sig = dict(t.get("entry_sig") or {})
@@ -544,7 +561,8 @@ def bucket_stats(trades: list) -> dict:
     trade history, not just trades closed after the snapshot fix."""
     stats = {}
     for t in trades:
-        if t.get("status") != "closed" or t.get("net_pnl") is None:
+        if (t.get("status") != "closed" or t.get("net_pnl") is None
+                or is_signal_only(t)):
             continue
         sig = dict(t.get("entry_sig") or {})
         sig.setdefault("ts", t.get("entry_ts"))

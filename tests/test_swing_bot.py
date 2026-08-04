@@ -1951,3 +1951,72 @@ def test_scale_out_retry_after_failed_row_write_banks_exactly_once(tmp_path, mon
         pytest.approx(before + rows[0]["net_pnl"]), "pool credited more than once"
     assert len(sells) == 1, f"sold {len(sells)} times, expected 1"
     assert play["qty"] == 2 and play["scaled"]
+
+
+def _live_manual_bot(tmp_path, monkeypatch):
+    """Live bot in broker_mode 'manual': fills are signal-only synthetics."""
+    import bot_broker
+    ts = 1784592000.0                                       # weekday_night
+    trades = [{"status": "closed", "net_pnl": 0.01, "entry_ts": ts,
+               "entry_sig": {"ts": ts}} for _ in range(100)]
+    (tmp_path / "bot_trades.jsonl").write_text(
+        "".join(json.dumps(t) + "\n" for t in trades))
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"mode": "live", "live_sessions_requested": ["weekday_night"],
+         "broker_mode": "manual", "overnight_curfew": False,
+         "weekend_curfew": False, "paper_bankroll": 500.0}))
+    monkeypatch.setenv("BOT_LIVE", "1")
+    return Bot(tmp_path, fetch_fn=lambda: None,
+               offsets_file=tmp_path / "banner_offsets.json",
+               loop_log=tmp_path / "loop_log.jsonl")
+
+
+def test_manual_live_exit_marks_the_trade_row_signal_only(tmp_path, monkeypatch):
+    """Without this the gate filter is dead code -- nothing sets the flag."""
+    bot = _live_manual_bot(tmp_path, monkeypatch)
+    play = _mk_open_play(qty=2, entry_ts=1784592000.0)
+    play["entry"]["signal_only"] = True          # as _enter would have stored it
+    bot.state["open_plays"]["M1"] = play
+
+    sig = _sig(ticker="M1", ts=1784592100.0, yes_ask=0.60, no_ask=0.40)
+    bot._exit("M1", play, sig, "target")
+
+    rows = [t for t in _rows(tmp_path, TRADES_FILE) if t.get("ticker") == "M1"]
+    assert len(rows) == 1
+    assert rows[0]["mode"] == "live"
+    assert rows[0].get("signal_only") is True, \
+        "synthetic manual-mode fill was journaled as if it were a real execution"
+
+
+def test_paper_rows_carry_no_signal_only_key(tmp_path, monkeypatch):
+    """Keep the paper row format byte-identical -- no churn on 690 rows."""
+    sigs = [
+        _sig(),
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                 # enter
+        _sig(whale_trend=3.5, momentum=30.0, mins_left=1.5, ts=1010.0),  # time exit
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    rows = _rows(tmp_path, TRADES_FILE)
+    assert len(rows) == 1 and rows[0]["mode"] == "paper"
+    assert "signal_only" not in rows[0]
+
+
+def test_manual_live_exit_does_not_feed_the_in_memory_ev_gate(tmp_path, monkeypatch):
+    """bucket_stats filters synthetics at boot; _exit updates ev_stats live.
+
+    Without this guard the EV gate is contaminated for the whole session and
+    only cleans itself up on the next restart.
+    """
+    bot = _live_manual_bot(tmp_path, monkeypatch)
+    before = json.loads(json.dumps(bot.ev_stats))
+
+    play = _mk_open_play(qty=2, entry_ts=1784592000.0)
+    play["entry"]["signal_only"] = True
+    bot.state["open_plays"]["M1"] = play
+    bot._exit("M1", play, _sig(ticker="M1", ts=1784592100.0,
+                               yes_ask=0.60, no_ask=0.40), "target")
+
+    assert bot.ev_stats == before, \
+        "a signal-only fill was folded into the in-memory EV buckets"
