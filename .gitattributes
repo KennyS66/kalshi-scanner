@@ -1,0 +1,11 @@
+# Append-only journals. The local bot and the cloud pre-market routine both
+# add lines at the END of these files, so replaying local commits onto the
+# remote's version conflicts every single time both have written -- which is
+# what silently blocked auto_commit_cron.sh's push for two weeks (it aborted
+# the rebase and exited before pushing). "union" keeps both sides' lines,
+# which is the correct resolution for an append-only log.
+#
+# Deliberately NOT applied to *.json: those are single JSON objects
+# (bot_state.json, control.json, the picks), and union-merging an object
+# produces syntactically invalid JSON rather than a conflict you'd notice.
+data/**/*.jsonl merge=union
