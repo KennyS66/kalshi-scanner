@@ -10,6 +10,7 @@ Run:  python3 -u swing_bot.py &
 import datetime as dt
 import json
 import os
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -209,6 +210,38 @@ class Bot:
             self.state["pools"] = _migrate_pools(
                 trades, self.cfg.get("paper_bankroll") or 500.0,
                 self.state.get("day"))
+        self._reconcile_open_plays()
+
+    def _reconcile_open_plays(self):
+        """Every entry must have either exited or still be open. A gap means
+        an exit booked P&L without leaving a trade row -- exactly how
+        KXBTC15M-26JUL210515-15 was lost on 2026-07-21 and only noticed
+        thirteen days later.
+
+        Warns, never raises: the bot has to come up, and that historical
+        orphan is a permanent +1 in the counts until the log is repaired.
+
+        Only a gap *wider* than the accepted baseline warns. Firing on every
+        boot over a known-bad history would bury the next orphan in its own
+        noise, which is the one thing this check exists to prevent. A repaired
+        log silently lowers the baseline and re-arms the check.
+        """
+        try:
+            rows = [json.loads(l) for l in
+                    (self.dir / EVENTS_FILE).read_text().splitlines() if l.strip()]
+        except Exception:
+            return          # no event log yet -- nothing to reconcile against
+        enters = sum(1 for e in rows if e.get("action") == "enter")
+        exits = sum(1 for e in rows if e.get("action") == "exit")
+        open_n = len(self.state.get("open_plays") or {})
+        gap = enters - exits - open_n
+        if gap > self.state.get("reconcile_baseline", 0):
+            msg = (f"{gap:+d} entries unaccounted for "
+                   f"({enters} enter / {exits} exit / {open_n} open) -- "
+                   f"trades likely missing from {TRADES_FILE}")
+            self._event("reconcile", msg)
+            print(f"swing_bot WARNING: {msg}", file=sys.stderr, flush=True)
+        self.state["reconcile_baseline"] = gap
 
     def _read_trades(self):
         try:
@@ -529,23 +562,31 @@ class Bot:
             now = sig.get("ts") or 0.0
             if last_err is not None and (now - last_err) < backoff:
                 return   # still backing off from the last failed sell attempt
-        if self.broker.mode == "live" and self.broker.broker_mode == "auto":
-            try:
+        # A previous attempt may have sold and then failed to write the trade
+        # row (see below). The position is already gone from the account, so
+        # reuse that recorded fill instead of dumping it a second time.
+        fill = play.get("exit_fill")
+        if fill is None:
+            if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+                try:
+                    fill = self.broker.sell(play["side"], play["qty"], fill_sig)
+                except Exception as e:
+                    play["sell_error_ts"] = sig.get("ts") or 0.0
+                    self._event("skip", f"live sell failed, backing off {backoff:.0f}s: {e}",
+                                ticker, sig)
+                    return
+            else:
                 fill = self.broker.sell(play["side"], play["qty"], fill_sig)
-            except Exception as e:
-                play["sell_error_ts"] = sig.get("ts") or 0.0
-                self._event("skip", f"live sell failed, backing off {backoff:.0f}s: {e}",
-                            ticker, sig)
-                return
-        else:
-            fill = self.broker.sell(play["side"], play["qty"], fill_sig)
+            # Persisted by tick()'s finally, so a crash between here and the
+            # trade-row write still can't cause a second sell on restart.
+            play["exit_fill"] = fill
         pnl = round_trip_pnl(play["entry"], fill)
         pool = _play_pool(play)
-        ps = self.state["pools"].setdefault(pool, _fresh_pool())
-        ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
-        ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
-        del self.state["open_plays"][ticker]
-        self.detector.forget(ticker)
+        # Durable record BEFORE any state mutation. Booking the P&L or
+        # deleting the play first means a failed append loses the trade
+        # from bot_trades.jsonl for good while its P&L stays on the books
+        # -- that is how KXBTC15M-26JUL210515-15 vanished on 2026-07-21.
+        # Raising here leaves state untouched, so the exit simply retries.
         append_jsonl(self.dir / TRADES_FILE, {
             "ticker": ticker, "mode": self.broker.mode, "side": play["side"],
             "qty": play["qty"], "entry_price": play["entry"]["price"],
@@ -555,6 +596,11 @@ class Bot:
             "net_pnl": pnl, "exit_reason": reason,
             "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
             "status": "closed"})
+        ps = self.state["pools"].setdefault(pool, _fresh_pool())
+        ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
+        ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
+        del self.state["open_plays"][ticker]
+        self.detector.forget(ticker)
         # one EV sample per entry decision: fold any banked scale-out leg in
         update_bucket_stats(self.ev_stats, play["side"], play["entry_sig"],
                             round(pnl + (play.get("scaled") or {}).get("pnl", 0.0), 4))

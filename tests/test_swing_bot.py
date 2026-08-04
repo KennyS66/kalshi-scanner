@@ -1729,3 +1729,158 @@ def test_deadman_still_pauses_a_live_bot(tmp_path, monkeypatch):
     bot.tick()
     assert bot.state["paused"] is True
     assert bot.state.get("paused_by") == "deadman"
+
+
+import swing_bot
+
+
+def test_failed_trade_row_write_leaves_no_half_applied_exit(tmp_path, monkeypatch):
+    """A trade-log write failure must not book P&L for a play it then forgets.
+
+    The July 2026 orphan (KXBTC15M-26JUL210515-15) went exactly this way:
+    _exit credited the pool and deleted the play, then the append raised, so
+    the trade vanished from bot_trades.jsonl while its P&L stayed booked.
+    """
+    sigs = [
+        _sig(),                                              # seeds detector
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),     # flip -> enter YES
+        _sig(whale_trend=4.0, momentum=20.0, yes_ask=0.60, ts=1010.0),  # hold
+        _sig(whale_trend=-3.0, momentum=-20.0, yes_ask=0.60, ts=1015.0),  # flip -> exit
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    bot.tick(now_ts=1000.0)
+    bot.tick(now_ts=1000.0)
+    bot.tick(now_ts=1000.0)
+    assert bot.state["open_plays"], "expected an open play before the exit tick"
+    pnl_before = bot.state["pools"]["weekday_night"]["total_pnl"]
+
+    real_append = swing_bot.append_jsonl
+
+    def fail_trades_file(path, row):
+        if str(path).endswith(TRADES_FILE):
+            raise OSError("simulated disk failure writing the trade row")
+        return real_append(path, row)
+
+    monkeypatch.setattr(swing_bot, "append_jsonl", fail_trades_file)
+
+    with pytest.raises(OSError):
+        bot.tick(now_ts=1000.0)
+
+    assert _rows(tmp_path, TRADES_FILE) == [], "no trade row should have landed"
+    assert bot.state["pools"]["weekday_night"]["total_pnl"] == pnl_before, \
+        "P&L was booked for a trade that never reached the log"
+    assert bot.state["open_plays"], \
+        "the play was forgotten even though its exit was never recorded"
+
+
+def test_exit_retry_after_failed_row_write_does_not_sell_twice(tmp_path, monkeypatch):
+    """Writing the trade row first means a failed exit retries next tick.
+
+    The sell already hit the broker, so the retry must reuse that fill rather
+    than dumping the position a second time -- harmless on paper, a real
+    double-sell on live money.
+    """
+    sigs = [
+        _sig(),                                                          # seed
+        _sig(whale_trend=3.0, momentum=30.0, ts=1005.0),                 # enter YES
+        _sig(whale_trend=3.5, momentum=30.0, mins_left=1.5, ts=1010.0),  # time exit
+        _sig(whale_trend=3.5, momentum=30.0, mins_left=1.4, ts=1015.0),  # retry
+    ]
+    bot = _mkbot(tmp_path, sigs, monkeypatch)
+    bot.tick(now_ts=1000.0)
+    bot.tick(now_ts=1000.0)
+    assert bot.state["open_plays"], "expected an open play before the exit tick"
+
+    sells = []
+    real_sell = bot.broker.sell
+
+    def counting_sell(side, qty, sig):
+        sells.append((side, qty))
+        return real_sell(side, qty, sig)
+
+    monkeypatch.setattr(bot.broker, "sell", counting_sell)
+
+    real_append = swing_bot.append_jsonl
+
+    def fail_trades_file(path, row):
+        if str(path).endswith(TRADES_FILE):
+            raise OSError("simulated disk failure writing the trade row")
+        return real_append(path, row)
+
+    monkeypatch.setattr(swing_bot, "append_jsonl", fail_trades_file)
+    with pytest.raises(OSError):
+        bot.tick(now_ts=1000.0)          # sell lands, trade row does not
+
+    monkeypatch.setattr(swing_bot, "append_jsonl", real_append)
+    bot.tick(now_ts=1000.0)              # retry: row lands this time
+
+    assert bot.state["open_plays"] == {}, "retry should have completed the exit"
+    assert len(_rows(tmp_path, TRADES_FILE)) == 1
+    assert len(sells) == 1, f"position was sold {len(sells)} times, expected 1"
+
+
+def test_startup_flags_entries_that_never_produced_an_exit(tmp_path, monkeypatch):
+    """Boot-time reconciliation: enters - exits must equal the open plays.
+
+    This is the check that would have surfaced the 2026-07-21 orphan the day
+    it happened instead of thirteen days later.
+    """
+    for row in [{"ts": 1.0, "ticker": "A", "action": "enter"},
+                {"ts": 2.0, "ticker": "A", "action": "exit"},
+                {"ts": 3.0, "ticker": "B", "action": "enter"}]:   # B: never exited
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+
+    bot = _mkbot(tmp_path, [], monkeypatch)
+
+    flagged = [e for e in _rows(tmp_path, EVENTS_FILE) if e["action"] == "reconcile"]
+    assert len(flagged) == 1, "boot should flag the unaccounted-for entry"
+    assert "1" in flagged[0]["reason"]
+    assert bot.state["open_plays"] == {}
+
+
+def test_startup_stays_quiet_when_an_open_play_accounts_for_the_gap(tmp_path, monkeypatch):
+    """An entry with no exit is fine while the play is still open."""
+    for row in [{"ts": 1.0, "ticker": "A", "action": "enter"},
+                {"ts": 2.0, "ticker": "A", "action": "exit"},
+                {"ts": 3.0, "ticker": "B", "action": "enter"}]:
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+    s = fresh_state()
+    s["open_plays"]["B"] = {"side": "YES", "qty": 5,
+                            "entry": {"price": 0.5, "qty": 5, "fee_total": 0.1,
+                                      "ts": 3.0}}
+    save_state(tmp_path, s)
+
+    _mkbot(tmp_path, [], monkeypatch)
+
+    flagged = [e for e in _rows(tmp_path, EVENTS_FILE) if e["action"] == "reconcile"]
+    assert flagged == [], "the open play accounts for the missing exit"
+
+
+def test_startup_reconcile_warns_once_then_only_when_the_gap_grows(tmp_path, monkeypatch):
+    """A known-bad history must not warn on every boot.
+
+    The 2026-07-21 orphan is a permanent +1. If that fired every restart, the
+    next orphan would be indistinguishable from the standing noise -- which is
+    the whole point of the check.
+    """
+    for row in [{"ts": 1.0, "ticker": "A", "action": "enter"},
+                {"ts": 2.0, "ticker": "A", "action": "exit"},
+                {"ts": 3.0, "ticker": "B", "action": "enter"}]:   # orphan #1
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+
+    def flagged():
+        return [e for e in _rows(tmp_path, EVENTS_FILE) if e["action"] == "reconcile"]
+
+    bot = _mkbot(tmp_path, [], monkeypatch)
+    assert len(flagged()) == 1, "first sighting of the gap should warn"
+    save_state(tmp_path, bot.state)          # as tick()'s finally would
+
+    bot = _mkbot(tmp_path, [], monkeypatch)
+    assert len(flagged()) == 1, "steady state must stay quiet"
+    save_state(tmp_path, bot.state)
+
+    append_jsonl(tmp_path / EVENTS_FILE,
+                 {"ts": 4.0, "ticker": "C", "action": "enter"})   # orphan #2
+    _mkbot(tmp_path, [], monkeypatch)
+    assert len(flagged()) == 2, "a NEW orphan must warn"
+    assert "+2" in flagged()[1]["reason"]
