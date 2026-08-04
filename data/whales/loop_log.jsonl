@@ -1049,3 +1049,4 @@
 {"ts": 1785387840.1909394, "type": "HB", "spot": 63862.12, "msg": "level watcher resumed after power outage \u2014 scanner + collectors back up; WAIT bias, key 64000, spot below"}
 {"ts": 1785391618.1700995, "type": "HB", "spot": 63979.99, "msg": "marketloop iteration \u2014 WAIT bias, spot 63980 just below 64k key; chop, no confirmed break"}
 {"ts": 1785393492.912592, "type": "HB", "spot": null, "msg": "marketloop iter \u2014 WAIT chop around 64k key"}
+{"ts": 1785717089.6276658, "type": "STATUS", "spot": 63180.51, "msg": "marketloop re-armed after 3d17h power outage (Jul 30 00:50 -> Aug 2 17:53 MDT). Scanner restarted, daedalus + bot_tuner stopped, swing bot is sole focus. Day plan: UP bias conv 2, key 63000, spot 63181 (above)."}
