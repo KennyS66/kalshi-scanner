@@ -513,24 +513,31 @@ class Bot:
             if last_err is not None and (now - last_err) < backoff:
                 return   # still backing off from the last failed sell attempt
         half = play["qty"] // 2
-        if self.broker.mode == "live" and self.broker.broker_mode == "auto":
-            try:
+        # A previous attempt may have sold and then failed to write the trade
+        # row. That half is already gone from the account, so reuse its fill
+        # instead of banking a second one.
+        fill = play.get("scale_fill")
+        if fill is None:
+            if self.broker.mode == "live" and self.broker.broker_mode == "auto":
+                try:
+                    fill = self.broker.sell(play["side"], half, fill_sig)
+                except Exception as e:
+                    play["sell_error_ts"] = sig.get("ts") or 0.0
+                    self._event("skip", f"live sell failed, backing off {backoff:.0f}s: {e}",
+                                ticker, sig)
+                    return
+            else:
                 fill = self.broker.sell(play["side"], half, fill_sig)
-            except Exception as e:
-                play["sell_error_ts"] = sig.get("ts") or 0.0
-                self._event("skip", f"live sell failed, backing off {backoff:.0f}s: {e}",
-                            ticker, sig)
-                return
-        else:
-            fill = self.broker.sell(play["side"], half, fill_sig)
+            play["scale_fill"] = fill      # persisted by tick()'s finally
         entry = play["entry"]
         entry_fee_half = round(entry["fee_total"] * half / entry["qty"], 4)
         pnl = round((fill["price"] - entry["price"]) * half
                     - entry_fee_half - fill["fee_total"], 4)
         pool = _play_pool(play)
-        ps = self.state["pools"].setdefault(pool, _fresh_pool())
-        ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
-        ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
+        # Durable record BEFORE crediting the pool or shrinking the play.
+        # Crediting first leaves the play looking unscaled at full size when
+        # the append fails, so the next tick banks the same half over again --
+        # a double-count on top of the lost row, worse than the _exit case.
         append_jsonl(self.dir / TRADES_FILE, {
             "ticker": ticker, "mode": self.broker.mode, "side": play["side"],
             "qty": half, "entry_price": entry["price"],
@@ -540,10 +547,14 @@ class Bot:
             "net_pnl": pnl, "exit_reason": "target_half",
             "entry_sig": play["entry_sig"], "exit_sig": _snap(sig),
             "status": "closed"})
+        ps = self.state["pools"].setdefault(pool, _fresh_pool())
+        ps["day_pnl"] = round(ps["day_pnl"] + pnl, 4)
+        ps["total_pnl"] = round(ps.get("total_pnl", 0.0) + pnl, 4)
         entry["qty"] -= half
         entry["fee_total"] = round(entry["fee_total"] - entry_fee_half, 4)
         play["qty"] -= half
         play["scaled"] = {"pnl": pnl}
+        play.pop("scale_fill", None)       # consumed
         self._event("scale", f"banked {half} @ {fill['price']} pnl {pnl:+.2f}"
                     f" — {play['qty']} ride to stretch", ticker, sig)
 

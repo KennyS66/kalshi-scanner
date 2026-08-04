@@ -1884,3 +1884,70 @@ def test_startup_reconcile_warns_once_then_only_when_the_gap_grows(tmp_path, mon
     _mkbot(tmp_path, [], monkeypatch)
     assert len(flagged()) == 2, "a NEW orphan must warn"
     assert "+2" in flagged()[1]["reason"]
+
+
+def _fail_on_trades_file(monkeypatch):
+    """Make append_jsonl blow up for the trade journal only."""
+    real_append = swing_bot.append_jsonl
+
+    def boom(path, row):
+        if str(path).endswith(TRADES_FILE):
+            raise OSError("simulated disk failure writing the trade row")
+        return real_append(path, row)
+
+    monkeypatch.setattr(swing_bot, "append_jsonl", boom)
+    return real_append
+
+
+def test_failed_scale_row_write_does_not_credit_the_pool(tmp_path, monkeypatch):
+    """Same ordering defect _exit had, in the scale-out path."""
+    bot = _mkbot(tmp_path, [], monkeypatch)
+    play = _mk_open_play(qty=4)
+    bot.state["open_plays"]["M1"] = play
+    before = bot.state["pools"]["weekday_night"]["total_pnl"]
+
+    _fail_on_trades_file(monkeypatch)
+    sig = _sig(ticker="M1", ts=1050.0, yes_ask=0.60, no_ask=0.40)
+    with pytest.raises(OSError):
+        bot._scale_out("M1", play, sig)
+
+    assert _rows(tmp_path, TRADES_FILE) == [], "no trade row should have landed"
+    assert bot.state["pools"]["weekday_night"]["total_pnl"] == before, \
+        "pool was credited for a banked leg that never reached the log"
+
+
+def test_scale_out_retry_after_failed_row_write_banks_exactly_once(tmp_path, monkeypatch):
+    """The consequence that makes this worse than the _exit defect.
+
+    Crediting the pool before entry["qty"] -= half and play["scaled"] run
+    leaves the play looking unscaled at full size, so the next tick banks the
+    same half again -- a double-count on top of a double-sell.
+    """
+    bot = _mkbot(tmp_path, [], monkeypatch)
+    play = _mk_open_play(qty=4)
+    bot.state["open_plays"]["M1"] = play
+    before = bot.state["pools"]["weekday_night"]["total_pnl"]
+
+    sells = []
+    real_sell = bot.broker.sell
+
+    def counting_sell(side, qty, sig):
+        sells.append((side, qty))
+        return real_sell(side, qty, sig)
+
+    monkeypatch.setattr(bot.broker, "sell", counting_sell)
+
+    real_append = _fail_on_trades_file(monkeypatch)
+    sig = _sig(ticker="M1", ts=1050.0, yes_ask=0.60, no_ask=0.40)
+    with pytest.raises(OSError):
+        bot._scale_out("M1", play, sig)
+
+    monkeypatch.setattr(swing_bot, "append_jsonl", real_append)
+    bot._scale_out("M1", play, sig)                     # retry
+
+    rows = _rows(tmp_path, TRADES_FILE)
+    assert len(rows) == 1, f"banked {len(rows)} times, expected 1"
+    assert bot.state["pools"]["weekday_night"]["total_pnl"] == \
+        pytest.approx(before + rows[0]["net_pnl"]), "pool credited more than once"
+    assert len(sells) == 1, f"sold {len(sells)} times, expected 1"
+    assert play["qty"] == 2 and play["scaled"]
