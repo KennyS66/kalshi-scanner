@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from settle_bot import (SETTLE_DIR, DEFAULT_CONFIG, load_config, fresh_state,
                         load_state, save_state, append_jsonl)
 
@@ -228,3 +230,80 @@ def test_cancelled_market_is_never_retried_on_a_fresh_qualifying_signal(tmp_path
     assert bot.state["open"] == {}
     actions = [e["action"] for e in _rows(tmp_path, EVENTS_FILE)]
     assert actions == ["place", "cancel"]     # no second place after the cancel
+
+
+from settle_bot import settle_side, settle_pnl
+
+
+def test_settle_side_reads_the_sign_of_distance():
+    assert settle_side({"distance": 12.5}) == "YES"
+    assert settle_side({"distance": -3.0}) == "NO"
+    assert settle_side({"distance": 0.0}) == "NO"      # at/below strike = NO
+
+
+def test_settle_pnl_pays_one_minus_entry_on_a_win():
+    pos = {"side": "YES", "qty": 1, "entry_price": 0.41, "fee_total": 0.0}
+    assert settle_pnl(pos, "YES") == 0.59
+    assert settle_pnl(pos, "NO") == -0.41
+    no_pos = {"side": "NO", "qty": 1, "entry_price": 0.58, "fee_total": 0.0}
+    assert settle_pnl(no_pos, "NO") == 0.42
+    assert settle_pnl(no_pos, "YES") == -0.58
+
+
+def test_position_resolves_when_its_market_rolls_away(tmp_path):
+    sigs = [_sig(sig_combined=15.0),
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill
+            _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
+                 sig_combined=0.0),                                  # near expiry
+            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]     # M1 gone
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["open"] == {}
+    rows = _rows(tmp_path, TRADES_FILE)
+    assert len(rows) == 1
+    assert rows[0]["settled"] == "YES" and rows[0]["net_pnl"] == 0.59
+    assert rows[0]["status"] == "settled"
+
+
+def test_failed_journal_write_leaves_the_position_open(tmp_path, monkeypatch):
+    """Write-ordering: the durable row lands before the position is forgotten."""
+    import settle_bot
+    sigs = [_sig(sig_combined=15.0),
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),
+            _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
+                 sig_combined=0.0),
+            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]
+    bot = _mkbot(tmp_path, sigs)
+    bot.tick(now_ts=1000.0)
+    bot.tick(now_ts=1005.0)
+    assert "M1" in bot.state["open"]
+
+    real = settle_bot.append_jsonl
+
+    def boom(path, row):
+        if str(path).endswith(TRADES_FILE):
+            raise OSError("disk full")
+        return real(path, row)
+
+    monkeypatch.setattr(settle_bot, "append_jsonl", boom)
+    bot.tick(now_ts=1010.0)          # near-expiry tick for M1: records last_sig
+    with pytest.raises(OSError):
+        bot.tick(now_ts=1015.0)      # M2 arrives -> M1 resolves -> journal write fails
+    assert "M1" in bot.state["open"], "position forgotten with no journal row"
+    assert _rows(tmp_path, TRADES_FILE) == []
+
+
+def test_settle_rows_never_touch_the_swing_bot_journal(tmp_path):
+    """The contamination guard: data/bot/ feeds the swing bot's live gates."""
+    sigs = [_sig(sig_combined=15.0),
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),
+            _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
+                 sig_combined=0.0),
+            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert _rows(tmp_path, TRADES_FILE)                      # it did write
+    assert not (tmp_path / "bot_trades.jsonl").exists()
+    assert not (tmp_path / "bot_events.jsonl").exists()
