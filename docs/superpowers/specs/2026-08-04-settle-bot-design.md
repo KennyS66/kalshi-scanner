@@ -143,8 +143,17 @@ There is deliberately no exit logic. A position is held until its market settles
 
 **Settlement detection**, stated precisely because a live daemon cannot use
 `trade_grader`'s post-hoc "final observed tick": an open position resolves when its
-ticker stops appearing in the feed (the market has rolled) **or** its last seen
-`mins_left` reached ~0. At that point the side is decided by the sign of `distance` on
+ticker has been absent from the feed for `absent_ticks_to_resolve` consecutive ticks
+(default 3, ~15s at `poll_secs` 5) **or** its last seen `mins_left` reached ~0.
+
+**Amended 2026-08-05, after a review finding.** This originally resolved on the FIRST
+tick carrying a different ticker. A single stray off-ticker tick would then book a
+mid-hold position `unresolved`, drop it from the journal, and — because `_seen` blocks
+re-entry — lose that market permanently. `swing_bot` uses the same ticker-mismatch
+convention, but on a roll it *books a trade*, whereas this strategy *discards the
+sample*; on a forward test whose whole purpose is measuring fill rate and edge, silently
+dropping samples biases the number being measured. A genuine roll still resolves within
+seconds, so the debounce costs nothing real. At that point the side is decided by the sign of `distance` on
 the **last tick observed for that ticker**, which is the same quantity `trade_grader`
 uses and which cross-checked at 99.5% against its independent record. P&L is booked as
 `1 - entry_price` if the held side won, else `-entry_price`.

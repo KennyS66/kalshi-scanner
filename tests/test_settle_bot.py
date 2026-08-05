@@ -251,11 +251,14 @@ def test_settle_pnl_pays_one_minus_entry_on_a_win():
 
 
 def test_position_resolves_when_its_market_rolls_away(tmp_path):
+    """Debounce: it takes absent_ticks_to_resolve (default 3) consecutive
+    off-ticker ticks -- not one -- before the market is treated as rolled."""
+    m2 = _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)
     sigs = [_sig(sig_combined=15.0),
             _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill
             _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
                  sig_combined=0.0),                                  # near expiry
-            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]     # M1 gone
+            m2, m2, m2]     # M1 gone: 3 consecutive off-ticker ticks
     bot = _mkbot(tmp_path, sigs)
     for _ in sigs:
         bot.tick(now_ts=1000.0)
@@ -269,11 +272,12 @@ def test_position_resolves_when_its_market_rolls_away(tmp_path):
 def test_failed_journal_write_leaves_the_position_open(tmp_path, monkeypatch):
     """Write-ordering: the durable row lands before the position is forgotten."""
     import settle_bot
+    m2 = _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)
     sigs = [_sig(sig_combined=15.0),
             _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),
             _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
                  sig_combined=0.0),
-            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]
+            m2, m2, m2]
     bot = _mkbot(tmp_path, sigs)
     bot.tick(now_ts=1000.0)
     bot.tick(now_ts=1005.0)
@@ -288,19 +292,22 @@ def test_failed_journal_write_leaves_the_position_open(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settle_bot, "append_jsonl", boom)
     bot.tick(now_ts=1010.0)          # near-expiry tick for M1: records last_sig
+    bot.tick(now_ts=1015.0)          # off-ticker #1 -- debounce, no resolve yet
+    bot.tick(now_ts=1020.0)          # off-ticker #2 -- debounce, no resolve yet
     with pytest.raises(OSError):
-        bot.tick(now_ts=1015.0)      # M2 arrives -> M1 resolves -> journal write fails
+        bot.tick(now_ts=1025.0)      # off-ticker #3 crosses threshold -> resolve -> journal write fails
     assert "M1" in bot.state["open"], "position forgotten with no journal row"
     assert _rows(tmp_path, TRADES_FILE) == []
 
 
 def test_settle_rows_never_touch_the_swing_bot_journal(tmp_path):
     """The contamination guard: data/bot/ feeds the swing bot's live gates."""
+    m2 = _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)
     sigs = [_sig(sig_combined=15.0),
             _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),
             _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
                  sig_combined=0.0),
-            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]
+            m2, m2, m2]
     bot = _mkbot(tmp_path, sigs)
     for _ in sigs:
         bot.tick(now_ts=1000.0)
@@ -312,14 +319,65 @@ def test_settle_rows_never_touch_the_swing_bot_journal(tmp_path):
 def test_unresolved_when_no_near_expiry_tick_was_ever_seen(tmp_path):
     """A position whose market rolls away without ever ticking close to
     expiry must be booked unresolved, not journaled -- never guessed at."""
+    m2 = _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)
     sigs = [_sig(sig_combined=15.0),
             _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill;
             # last_sig mins_left=7.0 stays well above SETTLE_MINS forever
-            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]    # M1 gone
+            m2, m2, m2]    # M1 gone: 3 consecutive off-ticker ticks (debounce)
     bot = _mkbot(tmp_path, sigs)
     for _ in sigs:
         bot.tick(now_ts=1000.0)
     assert "M1" not in bot.state["open"]
     assert bot.state["unresolved"] == 1
     assert bot.state["done"]["M1"] == "unresolved"
+    assert _rows(tmp_path, TRADES_FILE) == []
+
+
+def test_single_off_ticker_tick_does_not_resolve(tmp_path):
+    """Debounce: one stray off-ticker tick must not book a live sample as
+    unresolved or drop it from the journal -- that would silently bias the
+    fill-rate/edge statistics this forward test exists to measure."""
+    sigs = [_sig(sig_combined=15.0),
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill
+            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]    # one stray tick
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" in bot.state["open"]
+    assert bot.state["open"]["M1"]["absent_ticks"] == 1
+    assert _rows(tmp_path, TRADES_FILE) == []
+
+
+def test_three_consecutive_off_ticker_ticks_resolve(tmp_path):
+    """Debounce threshold: three consecutive off-ticker ticks do resolve."""
+    m2 = _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)
+    sigs = [_sig(sig_combined=15.0),
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill
+            _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
+                 sig_combined=0.0),                                  # near expiry
+            m2, m2, m2]
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["open"] == {}
+    rows = _rows(tmp_path, TRADES_FILE)
+    assert len(rows) == 1
+    assert rows[0]["settled"] == "YES"
+
+
+def test_own_ticker_tick_resets_the_absence_counter(tmp_path):
+    """An intervening tick for the position's own market resets the debounce
+    counter -- off, off, own, off, off must NOT resolve."""
+    m2 = _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)
+    own = _sig(ticker="M1", yes_ask=0.41, mins_left=6.0, sig_combined=0.0)
+    sigs = [_sig(sig_combined=15.0),
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill
+            m2, m2,               # 2 off-ticker ticks
+            own,                  # own-ticker tick resets the counter
+            m2, m2]               # 2 more off-ticker ticks -- still below 3
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" in bot.state["open"]
+    assert bot.state["open"]["M1"]["absent_ticks"] == 2
     assert _rows(tmp_path, TRADES_FILE) == []

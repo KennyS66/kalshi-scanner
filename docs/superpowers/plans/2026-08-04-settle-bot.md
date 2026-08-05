@@ -713,6 +713,28 @@ Add `_resolve` to `Bot`:
 
 Wire it into `tick`, replacing the `last_sig` refresh loop:
 
+**AMENDED 2026-08-05 (human ruling, supersedes the version below).** Resolve only after
+the market has been absent for `cfg["absent_ticks_to_resolve"]` consecutive ticks
+(add it to `DEFAULT_CONFIG` as 3), resetting the counter whenever the position's own
+ticker is seen:
+
+```python
+            for t in list(self.state["open"]):
+                pos = self.state["open"][t]
+                if t == sig.get("ticker") and sig.get("status") == "ok":
+                    pos["last_sig"] = dict(sig)
+                    pos["absent"] = 0
+                elif sig.get("ticker"):
+                    pos["absent"] = pos.get("absent", 0) + 1
+                    if pos["absent"] >= self.cfg.get("absent_ticks_to_resolve", 3):
+                        self._resolve(t, pos, sig)
+```
+
+Why: resolving on the FIRST ticker mismatch meant one stray off-ticker tick booked a
+mid-hold position `unresolved`, dropped it from the journal, and `_seen` then blocked
+re-entry forever — silently biasing the fill-rate and edge numbers this build exists to
+measure. Superseded original:
+
 ```python
             for t in list(self.state["open"]):
                 if t == sig.get("ticker") and sig.get("status") == "ok":

@@ -34,6 +34,9 @@ DEFAULT_CONFIG = {
     "qty": 1,                  # flat, always
     "poll_secs": 5,
     "mode": "paper",
+    "absent_ticks_to_resolve": 3,  # debounce: consecutive off-ticker ticks
+                                    # before a stray tick books a live sample
+                                    # as unresolved and blocks re-entry
 }
 
 
@@ -239,8 +242,12 @@ class Bot:
             for t in list(self.state["open"]):
                 if t == sig.get("ticker") and sig.get("status") == "ok":
                     self.state["open"][t]["last_sig"] = dict(sig)
+                    self.state["open"][t]["absent_ticks"] = 0
                 elif sig.get("ticker") and t != sig.get("ticker"):
-                    self._resolve(t, self.state["open"][t], sig)
+                    pos = self.state["open"][t]
+                    pos["absent_ticks"] = pos.get("absent_ticks", 0) + 1
+                    if pos["absent_ticks"] >= self.cfg["absent_ticks_to_resolve"]:
+                        self._resolve(t, pos, sig)
             if not self._seen(sig.get("ticker") or ""):
                 side = entry_decision(sig, self.cfg)
                 if side:
