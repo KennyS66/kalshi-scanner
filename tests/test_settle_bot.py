@@ -1,7 +1,7 @@
 import json
 
-from settle_bot import (DEFAULT_CONFIG, load_config, fresh_state, load_state,
-                        save_state, append_jsonl)
+from settle_bot import (SETTLE_DIR, DEFAULT_CONFIG, load_config, fresh_state,
+                        load_state, save_state, append_jsonl)
 
 
 def test_default_config_has_the_spec_values():
@@ -46,3 +46,12 @@ def test_append_jsonl_creates_parents_and_appends(tmp_path):
     append_jsonl(p, {"b": 2})
     rows = [json.loads(l) for l in p.read_text().splitlines()]
     assert rows == [{"a": 1}, {"b": 2}]
+
+
+def test_settle_dir_is_isolated_from_the_swing_bot_journal():
+    """settle_bot must never write into data/bot/ -- that directory feeds
+    bot_core.session_gate_stats, the gate that authorizes live trading for
+    the OTHER strategy."""
+    parts = SETTLE_DIR.parts
+    assert parts[-2:] == ("data", "settle")
+    assert "bot" not in parts[-1:]
