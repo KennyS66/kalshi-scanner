@@ -544,10 +544,14 @@ def update_bucket_stats(stats: dict, side: str, entry_sig: dict,
                         net_pnl: float) -> None:
     """Fold one closed trade into stats in place (incremental, O(1))."""
     b = entry_bucket(side, entry_sig or {})
-    d = stats.setdefault(b, {"n": 0, "wins": 0, "net": 0.0})
+    d = stats.setdefault(b, {"n": 0, "wins": 0, "net": 0.0, "net_sq": 0.0})
     d["n"] += 1
     d["wins"] += 1 if net_pnl > 0 else 0
     d["net"] = round(d["net"] + net_pnl, 4)
+    # sum of squares -> per-bucket variance, so ev_gate_blocker can ask
+    # whether a gap clears the bucket's own standard error instead of
+    # trusting a 12-sample mean at face value.
+    d["net_sq"] = round(d.get("net_sq", 0.0) + net_pnl * net_pnl, 4)
     d["net_avg"] = round(d["net"] / d["n"], 4)
     d["win_pct"] = round(100.0 * d["wins"] / d["n"], 1)
 
@@ -691,14 +695,53 @@ def compute_findings(trades: list, state: dict, cfg: dict, ev_buckets: dict) -> 
     return out
 
 
+def session_bucket_mean(stats: dict, session: str):
+    """(mean, n) pooled across every bucket of one session — the baseline a
+    single bucket gets judged against."""
+    n = 0
+    net = 0.0
+    for b, d in (stats or {}).items():
+        if b.rsplit("|", 1)[-1] == session:
+            n += d.get("n", 0)
+            net += d.get("net", 0.0)
+    return (net / n if n else 0.0), n
+
+
 def ev_gate_blocker(side: str, sig: dict, stats: dict, cfg: dict):
-    """Reason to skip this entry per learned bucket EV, or None."""
+    """Reason to skip this entry per learned bucket EV, or None.
+
+    Judged RELATIVE to the bucket's own session, not against zero. The
+    sessions have very different base rates (weekday_night +0.23 vs
+    weekend_night -1.25 as of 2026-08-04), so an absolute zero threshold
+    blocked buckets that were twice as good as their session while missing
+    buckets that were worse than theirs. It also learns nothing on a
+    strategy whose global mean is negative — nearly everything is "below
+    zero", which is how 10 of 19 eligible buckets came to be blocked at
+    under 1 SE of separation.
+
+    Two guards against acting on noise:
+      * empirical-Bayes shrink the bucket mean toward its session mean with
+        prior weight `ev_gate_prior`, so a thin bucket barely moves off the
+        session baseline;
+      * require the shrunk gap to clear `ev_gate_z` standard errors of the
+        bucket's own mean, so a 12-sample bucket (SE ~1.0) needs real
+        separation rather than a sign.
+    """
     if not cfg.get("ev_gate", True):
         return None
     b = entry_bucket(side, sig)
     d = (stats or {}).get(b)
     floor = cfg.get("ev_gate_min_samples", 12)
-    if d and d["n"] >= floor and d["net_avg"] < 0:
-        return (f"ev_gate: bucket {b} net avg {d['net_avg']:+.2f} "
-                f"over {d['n']} trades")
+    if not d or d["n"] < floor:
+        return None
+    smean, sn = session_bucket_mean(stats, b.rsplit("|", 1)[-1])
+    if sn <= d["n"]:
+        return None   # this bucket IS the session — nothing to contrast against
+    k = cfg.get("ev_gate_prior", 12)
+    shrunk = (d["n"] * d["net_avg"] + k * smean) / (d["n"] + k)
+    var = max(d.get("net_sq", 0.0) / d["n"] - d["net_avg"] ** 2, 0.0)
+    se = math.sqrt(var / d["n"])
+    if shrunk < smean - cfg.get("ev_gate_z", 1.0) * se:
+        return (f"ev_gate: bucket {b} shrunk {shrunk:+.2f} vs session "
+                f"{smean:+.2f} over {d['n']} trades")
     return None

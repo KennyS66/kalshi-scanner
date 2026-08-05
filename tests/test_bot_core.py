@@ -251,6 +251,7 @@ def test_bucket_stats_and_incremental_update_agree():
         update_bucket_stats(inc, t["side"], t["entry_sig"], t["net_pnl"])
     assert agg == inc
     assert agg["YES|mid|7-11m|weak|unknown"] == {"n": 2, "wins": 1, "net": 0.5,
+                                                  "net_sq": 1.25,   # 1.0^2 + 0.5^2
                                                   "net_avg": 0.25, "win_pct": 50.0}
 
 
@@ -272,19 +273,35 @@ def test_pool_by_date_stats_groups_by_exit_date_and_entry_session():
     assert out[day]["weekday_night"] == -0.5
 
 
-def test_ev_gate_blocks_only_proven_negative_buckets():
+def test_ev_gate_blocks_only_buckets_proven_worse_than_their_session():
+    """Semantics changed 2026-08-04: the bar is the bucket's own SESSION, not
+    an absolute zero. The old version asserted that 12 trades at -0.5 block;
+    under the relative rule they do not, because that bucket WAS the whole
+    session — there is nothing to contrast it against, and a strategy whose
+    global mean is negative would otherwise gate off nearly everything.
+    """
     cfg = dict(DEFAULT_CONFIG)
-    sig = {"yes_ask": 0.50, "no_ask": 0.50, "mins_left": 8}
-    losing = bucket_stats([_trade(pnl=-0.5) for _ in range(12)])
-    assert "ev_gate" in ev_gate_blocker("YES", sig, losing, cfg)
-    small = bucket_stats([_trade(pnl=-0.5) for _ in range(11)])
-    assert ev_gate_blocker("YES", sig, small, cfg) is None      # under floor
-    winning = bucket_stats([_trade(pnl=0.5) for _ in range(20)])
-    assert ev_gate_blocker("YES", sig, winning, cfg) is None    # profitable
-    other = {"yes_ask": 0.70, "no_ask": 0.30, "mins_left": 8}   # different bucket
-    assert ev_gate_blocker("YES", other, losing, cfg) is None
+    sig = _ev_sig(0.50)
+    healthy = _st(+0.5, 0.20, 60)                       # rest of the session
+
+    bad = bucket_stats(_st(-3.0, 0.50, 30) + healthy)   # a genuine bad pocket
+    assert "ev_gate" in (ev_gate_blocker("YES", sig, bad, cfg) or "")
+
+    alone = bucket_stats(_st(-0.5, 0.50, 30))           # no sibling buckets
+    assert ev_gate_blocker("YES", sig, alone, cfg) is None, \
+        "blocked a bucket that is the entire session"
+
+    thin = bucket_stats(_st(-3.0, 0.50, 11) + healthy)
+    assert ev_gate_blocker("YES", sig, thin, cfg) is None       # under floor
+
+    good = bucket_stats(_st(+0.5, 0.50, 20) + _st(-0.14, 0.20, 60))
+    assert ev_gate_blocker("YES", sig, good, cfg) is None       # beats session
+
+    other = _ev_sig(0.70)                                          # unseen bucket
+    assert ev_gate_blocker("YES", other, bad, cfg) is None
+
     off = dict(cfg, ev_gate=False)
-    assert ev_gate_blocker("YES", sig, losing, off) is None
+    assert ev_gate_blocker("YES", sig, bad, off) is None
 
 
 from bot_core import trade_budget, loss_headroom, size_for_budget
@@ -535,3 +552,64 @@ def test_bucket_stats_ignores_signal_only_rows():
     both = bucket_stats(real + [_synthetic(pnl=+9.0) for _ in range(12)])
     only_real = bucket_stats(real)
     assert both == only_real, "synthetic rows leaked into the EV buckets"
+
+
+# ── EV gate: relative-to-session threshold + shrinkage ───────────────────
+
+WEEKEND_NIGHT_TS = 1784419200.0        # session_tag -> weekend_night
+
+
+def _st(pnl, ask, n, ts=WEEKEND_NIGHT_TS, mom=5.0, sd=3.5):
+    """n closed trades in one bucket of one session, mean `pnl` and a
+    realistic per-trade spread (live SD is 3.47) so standard errors are
+    meaningful -- identical P&Ls would give zero variance and make even a
+    12-sample bucket look statistically proven."""
+    return [{"status": "closed", "side": "YES",
+             "net_pnl": pnl - sd if i % 2 == 0 else pnl + sd,
+             "entry_ts": ts,
+             "entry_sig": {"yes_ask": ask, "no_ask": round(1 - ask, 2),
+                           "mins_left": 8.0, "momentum": mom, "ts": ts}}
+            for i in range(n)]
+
+
+def _ev_sig(ask, mom=5.0, ts=WEEKEND_NIGHT_TS):
+    return {"yes_ask": ask, "no_ask": round(1 - ask, 2), "mins_left": 8.0,
+            "momentum": mom, "ts": ts}
+
+
+def test_ev_gate_does_not_block_a_bucket_better_than_its_session():
+    """The reported bug: weekend_night averages -1.25, so a -0.5 bucket is
+    twice as GOOD as its session and must not be blocked. Comparing against
+    an absolute zero blocks it anyway."""
+    cfg = dict(DEFAULT_CONFIG)
+    trades = (_st(-0.5, 0.50, 20)          # the bucket under test: -0.50
+              + _st(-2.0, 0.20, 40))       # rest of the session: -2.00
+    stats = bucket_stats(trades)
+    assert ev_gate_blocker("YES", _ev_sig(0.50), stats, cfg) is None, \
+        "blocked a bucket that beats its own session average"
+
+
+def test_ev_gate_blocks_a_bucket_clearly_worse_than_its_session():
+    cfg = dict(DEFAULT_CONFIG)
+    trades = (_st(-3.0, 0.50, 30)          # the bad pocket
+              + _st(+0.5, 0.20, 60))       # healthy rest of session
+    stats = bucket_stats(trades)
+    assert "ev_gate" in (ev_gate_blocker("YES", _ev_sig(0.50), stats, cfg) or ""), \
+        "failed to block a bucket far below its session average"
+
+
+def test_ev_gate_shrinkage_protects_thin_buckets():
+    """Same bucket mean, different n -- the live failure mode.
+
+    Numbers taken from the real blocked buckets: one at -1.05 against a
+    session averaging about -0.24. At n=12 that gap is 0.8 SE (noise, must
+    survive); at n=60 it is 1.8 SE (evidence, must block).
+    """
+    cfg = dict(DEFAULT_CONFIG)
+    rest = _st(-0.14, 0.20, 100)
+    thin = bucket_stats(_st(-1.05, 0.50, 12) + rest)
+    thick = bucket_stats(_st(-1.05, 0.50, 60) + rest)
+    assert ev_gate_blocker("YES", _ev_sig(0.50), thin, cfg) is None, \
+        "a 12-sample bucket 0.8 SE below its session was treated as proven"
+    assert "ev_gate" in (ev_gate_blocker("YES", _ev_sig(0.50), thick, cfg) or ""), \
+        "a 60-sample bucket at the same mean is real evidence and should block"

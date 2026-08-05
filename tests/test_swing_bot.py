@@ -404,9 +404,19 @@ def _losing_trade_row(ask=0.52, mins=10.0, mom=30.0):
 
 
 def test_ev_gate_skips_poisoned_bucket_from_journal(tmp_path, monkeypatch):
-    # 12 historical losers in YES|mid|7-11m -> boot-loaded gate blocks entry.
+    # A poisoned bucket, boot-loaded from the journal, blocks the entry.
+    #
+    # Since 2026-08-04 the gate judges a bucket against its own SESSION, so
+    # the journal needs a healthy sibling bucket to contrast against -- 12
+    # losers that ARE the whole session prove nothing and no longer block.
+    # Losses are spread (-4.0/+1.0, mean -1.5) rather than identical so the
+    # bucket has a real standard error for the gate to clear.
+    poisoned = [dict(_losing_trade_row(),
+                     net_pnl=-4.0 if i % 2 == 0 else 1.0) for i in range(30)]
+    healthy = [dict(_losing_trade_row(ask=0.20),
+                    net_pnl=1.0 if i % 2 == 0 else 0.0) for i in range(60)]
     (tmp_path / TRADES_FILE).write_text(
-        "\n".join(json.dumps(_losing_trade_row()) for _ in range(12)))
+        "".join(json.dumps(r) + "\n" for r in poisoned + healthy))
     sigs = [_sig(), _sig(whale_trend=3.0, momentum=30.0, ts=1005.0)]
     bot = _mkbot(tmp_path, sigs, monkeypatch)
     for _ in sigs:
