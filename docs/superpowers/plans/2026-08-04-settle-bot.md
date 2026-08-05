@@ -411,10 +411,6 @@ def _mkbot(tmp_path, sigs):
     return Bot(tmp_path, fetch_fn=lambda: next(it, None))
 
 
-def test_qualifying_signal_rests_a_limit_and_does_not_open_yet():
-    pass  # replaced below -- see the real test
-
-
 def test_qualifying_signal_rests_a_limit(tmp_path):
     bot = _mkbot(tmp_path, [_sig(sig_combined=15.0)])
     bot.tick(now_ts=1000.0)
@@ -457,8 +453,6 @@ def test_one_attempt_per_market(tmp_path):
         bot.tick(now_ts=1000.0)
     assert len(_rows(tmp_path, EVENTS_FILE)) == 1     # placed once, not thrice
 ```
-
-Delete the `test_qualifying_signal_rests_a_limit_and_does_not_open_yet` stub before running — it is listed above only to show it must not survive.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -866,7 +860,8 @@ def test_run_survives_a_tick_that_raises(tmp_path, monkeypatch):
         raise KeyboardInterrupt      # end the loop on the second pass
 
     monkeypatch.setattr(bot, "tick", boom)
-    monkeypatch.setattr(bot.cfg, "get", lambda k, d=None: 0 if k == "poll_secs" else d)
+    bot.cfg["poll_secs"] = 0        # cfg is a plain dict -- set the key, do
+                                    # NOT monkeypatch.setattr a dict method
     with pytest.raises(KeyboardInterrupt):
         bot.run()
     assert any(e["action"] == "error" for e in _rows(tmp_path, EVENTS_FILE))
