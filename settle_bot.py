@@ -280,3 +280,21 @@ class Bot:
         finally:
             self.state["heartbeat"] = now_ts
             save_state(self.dir, self.state)
+
+    def run(self):
+        # Timestamped: logs/settle_bot.log appends across restarts, so
+        # untimestamped banners from consecutive runs are indistinguishable.
+        print(f"[{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')}] "
+              f"settle_bot up — mode={self.broker.mode} dir={self.dir}", flush=True)
+        while True:
+            try:
+                self.tick()
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                self._event("error", repr(e))
+            time.sleep(self.cfg.get("poll_secs", 5))
+
+
+if __name__ == "__main__":
+    Bot().run()

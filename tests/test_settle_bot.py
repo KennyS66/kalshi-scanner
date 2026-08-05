@@ -441,3 +441,22 @@ def test_reconcile_warns_when_a_fill_has_no_enter_event(tmp_path):
     flagged = [e for e in _rows(tmp_path, EVENTS_FILE)
                if e["action"] == "reconcile"]
     assert len(flagged) == 1 and "-1" in flagged[0]["reason"]
+
+
+def test_run_survives_a_tick_that_raises(tmp_path, monkeypatch):
+    """A bad tick must log an error event and keep the loop alive."""
+    bot = Bot(tmp_path, fetch_fn=lambda: None)
+    calls = {"n": 0}
+
+    def boom(now_ts=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+        raise KeyboardInterrupt      # end the loop on the second pass
+
+    monkeypatch.setattr(bot, "tick", boom)
+    bot.cfg["poll_secs"] = 0        # cfg is a plain dict -- set the key, do
+                                    # NOT monkeypatch.setattr a dict method
+    with pytest.raises(KeyboardInterrupt):
+        bot.run()
+    assert any(e["action"] == "error" for e in _rows(tmp_path, EVENTS_FILE))
