@@ -419,3 +419,25 @@ def test_reconcile_stays_quiet_at_a_steady_baseline(tmp_path):
     after = len([e for e in _rows(tmp_path, EVENTS_FILE)
                  if e["action"] == "reconcile"])
     assert after == before, "warned again at an unchanged baseline"
+
+
+def test_reconcile_warns_when_a_fill_has_no_enter_event(tmp_path):
+    """Negative gap: position in state but no corresponding enter event in journal.
+    Catches fills whose enter events never landed (the regression swing_bot
+    suffered for 13 days undetected)."""
+    # Write some events (place, cancel for a different ticker) so the file
+    # parses cleanly but contributes no enters/settles
+    for row in [{"ts": 1.0, "ticker": "X", "action": "place"},
+                {"ts": 2.0, "ticker": "X", "action": "cancel"}]:
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+    # Create state with an open position (C) whose enter event never landed
+    s = fresh_state()
+    s["open"]["C"] = {"side": "YES", "qty": 1, "entry_price": 0.45,
+                      "fee_total": 0.0, "entry_ts": 5.0}
+    save_state(tmp_path, s)
+    # Gap = 0 enters - 0 settles - 1 open = -1
+    # Baseline = 0, so -1 != 0 -> should warn with negative sign
+    Bot(tmp_path, fetch_fn=lambda: None)
+    flagged = [e for e in _rows(tmp_path, EVENTS_FILE)
+               if e["action"] == "reconcile"]
+    assert len(flagged) == 1 and "-1" in flagged[0]["reason"]
