@@ -162,11 +162,36 @@ class Bot:
         self.state = load_state(self.dir)
         self.cfg = load_config(self.dir / CONFIG_FILE)
         self.broker = PaperBroker()      # paper only, by construction
+        self._reconcile()
 
     def _event(self, action, reason="", ticker="", sig=None):
         append_jsonl(self.dir / EVENTS_FILE,
                      {"ts": (sig or {}).get("ts") or time.time(),
                       "ticker": ticker, "action": action, "reason": reason})
+
+    def _reconcile(self):
+        """Every entry either settled or is still open.
+
+        Mirrors swing_bot._reconcile_open_plays: warn on ANY deviation from
+        the stored baseline, in either direction. Positive means a position
+        was forgotten without a journal row; negative means a fill whose
+        event never landed. Warns, never raises -- the bot has to come up.
+        """
+        try:
+            rows = [json.loads(l) for l in
+                    (self.dir / EVENTS_FILE).read_text().splitlines() if l.strip()]
+        except Exception:
+            return
+        enters = sum(1 for e in rows if e.get("action") == "enter")
+        settles = sum(1 for e in rows if e.get("action") in ("settle", "unresolved"))
+        open_n = len(self.state.get("open") or {})
+        gap = enters - settles - open_n
+        if gap != self.state.get("reconcile_baseline", 0):
+            msg = (f"{gap:+d} entries unaccounted for "
+                   f"({enters} enter / {settles} settled / {open_n} open)")
+            self._event("reconcile", msg)
+            print(f"settle_bot WARNING: {msg}", file=sys.stderr, flush=True)
+        self.state["reconcile_baseline"] = gap
 
     def _seen(self, ticker) -> bool:
         """One attempt per market, ever -- pending, open, or already settled."""

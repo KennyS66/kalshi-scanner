@@ -381,3 +381,41 @@ def test_own_ticker_tick_resets_the_absence_counter(tmp_path):
     assert "M1" in bot.state["open"]
     assert bot.state["open"]["M1"]["absent_ticks"] == 2
     assert _rows(tmp_path, TRADES_FILE) == []
+
+
+def test_reconcile_warns_when_an_entry_has_no_settle(tmp_path):
+    for row in [{"ts": 1.0, "ticker": "A", "action": "enter"},
+                {"ts": 2.0, "ticker": "A", "action": "settle"},
+                {"ts": 3.0, "ticker": "B", "action": "enter"}]:   # B lost
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+    Bot(tmp_path, fetch_fn=lambda: None)
+    flagged = [e for e in _rows(tmp_path, EVENTS_FILE)
+               if e["action"] == "reconcile"]
+    assert len(flagged) == 1 and "+1" in flagged[0]["reason"]
+
+
+def test_reconcile_quiet_when_an_open_position_explains_the_gap(tmp_path):
+    for row in [{"ts": 1.0, "ticker": "A", "action": "enter"},
+                {"ts": 2.0, "ticker": "A", "action": "settle"},
+                {"ts": 3.0, "ticker": "B", "action": "enter"}]:
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+    s = fresh_state()
+    s["open"]["B"] = {"side": "YES", "qty": 1, "entry_price": 0.4,
+                      "fee_total": 0.0, "entry_ts": 3.0}
+    save_state(tmp_path, s)
+    Bot(tmp_path, fetch_fn=lambda: None)
+    assert [e for e in _rows(tmp_path, EVENTS_FILE)
+            if e["action"] == "reconcile"] == []
+
+
+def test_reconcile_stays_quiet_at_a_steady_baseline(tmp_path):
+    for row in [{"ts": 1.0, "ticker": "A", "action": "enter"}]:
+        append_jsonl(tmp_path / EVENTS_FILE, row)
+    b1 = Bot(tmp_path, fetch_fn=lambda: None)
+    save_state(tmp_path, b1.state)
+    before = len([e for e in _rows(tmp_path, EVENTS_FILE)
+                  if e["action"] == "reconcile"])
+    Bot(tmp_path, fetch_fn=lambda: None)
+    after = len([e for e in _rows(tmp_path, EVENTS_FILE)
+                 if e["action"] == "reconcile"])
+    assert after == before, "warned again at an unchanged baseline"
