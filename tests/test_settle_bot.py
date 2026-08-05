@@ -307,3 +307,19 @@ def test_settle_rows_never_touch_the_swing_bot_journal(tmp_path):
     assert _rows(tmp_path, TRADES_FILE)                      # it did write
     assert not (tmp_path / "bot_trades.jsonl").exists()
     assert not (tmp_path / "bot_events.jsonl").exists()
+
+
+def test_unresolved_when_no_near_expiry_tick_was_ever_seen(tmp_path):
+    """A position whose market rolls away without ever ticking close to
+    expiry must be booked unresolved, not journaled -- never guessed at."""
+    sigs = [_sig(sig_combined=15.0),
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill;
+            # last_sig mins_left=7.0 stays well above SETTLE_MINS forever
+            _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)]    # M1 gone
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert "M1" not in bot.state["open"]
+    assert bot.state["unresolved"] == 1
+    assert bot.state["done"]["M1"] == "unresolved"
+    assert _rows(tmp_path, TRADES_FILE) == []
