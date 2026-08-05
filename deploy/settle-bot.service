@@ -1,0 +1,25 @@
+[Unit]
+# Install:
+#   cp deploy/settle-bot.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now settle-bot
+# Linger is already enabled for this box, so it starts at boot without a login.
+#
+# Independent of kalshi-scanner.service on purpose: either can restart without
+# disturbing the other. It does need :9050 for the signal feed and simply
+# retries until that is up.
+Description=settle_bot: directional hold-to-settlement paper strategy
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kenny/bots/kalshi-scanner
+ExecStart=/home/kenny/bots/kalshi-scanner/.venv/bin/python -u /home/kenny/bots/kalshi-scanner/settle_bot.py
+Restart=always
+RestartSec=15
+StandardOutput=append:/home/kenny/bots/kalshi-scanner/logs/settle_bot.log
+StandardError=append:/home/kenny/bots/kalshi-scanner/logs/settle_bot.log
+
+[Install]
+WantedBy=default.target
