@@ -100,3 +100,24 @@ def entry_decision(sig: dict, cfg: dict):
     if sc <= -thr:
         return "NO"
     return None
+
+
+def limit_price(sig: dict, side: str):
+    """Resting BUY price for `side` -- join the bid, never cross.
+
+    Mirrors bot_core.sell_price_c / PaperBroker.sell so the maker price is
+    the same quantity the rest of the codebase already agrees on. Posting
+    any higher risks crossing and paying the taker fee, which is what the
+    whole edge is made of: gross t=2.91 at the maker rate, t=1.94 as taker.
+    """
+    ask = sig.get("yes_ask") if side == "YES" else sig.get("no_ask")
+    if ask is None:
+        return None
+    spread = max(0.0, sig.get("spread") or 0.0)   # crossed book -> clamp at 0
+    return max(0.01, round(ask - spread, 4))
+
+
+def limit_filled(sig: dict, pend: dict) -> bool:
+    """True once the market has traded down to our resting limit."""
+    ask = sig.get("yes_ask") if pend["side"] == "YES" else sig.get("no_ask")
+    return ask is not None and ask <= pend["limit"]

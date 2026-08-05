@@ -114,3 +114,31 @@ def test_entry_decision_reads_its_bounds_from_config_not_hardcoded():
                           dict(DEFAULT_CONFIG, min_mins_left=7.0)) is None
     assert entry_decision(_sig(sig_combined=15.0, mins_left=10.0),
                           dict(DEFAULT_CONFIG, max_mins_left=9.0)) is None
+
+
+from settle_bot import limit_price, limit_filled
+
+
+def test_limit_price_joins_the_bid_never_crosses():
+    # yes_ask 0.42, spread 0.01 -> rest at 0.41, strictly below the ask
+    assert limit_price(_sig(), "YES") == 0.41
+    assert limit_price(_sig(), "NO") == 0.58        # no_ask 0.59 - 0.01
+    assert limit_price(_sig(yes_ask=None), "YES") is None
+
+
+def test_limit_price_clamps_at_one_cent_and_handles_crossed_book():
+    assert limit_price(_sig(yes_ask=0.01, spread=0.05), "YES") == 0.01
+    # crossed book -> negative spread must not push the limit ABOVE the ask
+    assert limit_price(_sig(yes_ask=0.42, spread=-0.03), "YES") == 0.42
+
+
+def test_limit_fills_only_when_the_ask_reaches_it():
+    pend = {"side": "YES", "limit": 0.41, "qty": 1, "placed_ts": 1000.0,
+            "entry_sig": {}}
+    assert limit_filled(_sig(yes_ask=0.41), pend) is True
+    assert limit_filled(_sig(yes_ask=0.40), pend) is True
+    assert limit_filled(_sig(yes_ask=0.42), pend) is False
+    assert limit_filled(_sig(yes_ask=None), pend) is False
+    no_pend = dict(pend, side="NO", limit=0.58)
+    assert limit_filled(_sig(no_ask=0.57), no_pend) is True
+    assert limit_filled(_sig(no_ask=0.59), no_pend) is False
