@@ -121,3 +121,87 @@ def limit_filled(sig: dict, pend: dict) -> bool:
     """True once the market has traded down to our resting limit."""
     ask = sig.get("yes_ask") if pend["side"] == "YES" else sig.get("no_ask")
     return ask is not None and ask <= pend["limit"]
+
+
+from bot_broker import PaperBroker
+
+
+def fetch_signal():
+    try:
+        with urllib.request.urlopen(
+                "http://localhost:9050/api/crypto/signal", timeout=4) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+class Bot:
+    def __init__(self, bot_dir=None, fetch_fn=fetch_signal):
+        self.dir = Path(bot_dir) if bot_dir else SETTLE_DIR
+        self.fetch = fetch_fn
+        self.state = load_state(self.dir)
+        self.cfg = load_config(self.dir / CONFIG_FILE)
+        self.broker = PaperBroker()      # paper only, by construction
+
+    def _event(self, action, reason="", ticker="", sig=None):
+        append_jsonl(self.dir / EVENTS_FILE,
+                     {"ts": (sig or {}).get("ts") or time.time(),
+                      "ticker": ticker, "action": action, "reason": reason})
+
+    def _seen(self, ticker) -> bool:
+        """One attempt per market, ever -- pending, open, or already settled."""
+        return (ticker in self.state["pending"]
+                or ticker in self.state["open"]
+                or ticker in self.state.setdefault("done", {}))
+
+    def _place(self, side, sig):
+        ticker = sig["ticker"]
+        px = limit_price(sig, side)
+        if px is None:
+            return
+        self.state["pending"][ticker] = {
+            "side": side, "limit": px, "qty": self.cfg["qty"],
+            "placed_ts": sig.get("ts") or 0.0, "entry_sig": dict(sig)}
+        self._event("place", f"{side} x{self.cfg['qty']} limit {px}", ticker, sig)
+
+    def _process_pending(self, sig):
+        ticker = sig.get("ticker")
+        for t in list(self.state["pending"]):
+            pend = self.state["pending"][t]
+            if t != ticker or sig.get("status") != "ok":
+                continue          # not this market's tick -- leave it resting
+            m = sig.get("mins_left")
+            if limit_filled(sig, pend):
+                fill = self.broker.fill(pend["limit"], pend["qty"],
+                                        sig.get("ts") or 0.0, maker=True)
+                del self.state["pending"][t]
+                self.state["open"][t] = {
+                    "side": pend["side"], "qty": pend["qty"],
+                    "entry_price": fill["price"], "fee_total": fill["fee_total"],
+                    "entry_ts": fill["ts"], "entry_sig": pend["entry_sig"],
+                    "last_sig": dict(sig)}
+                self._event("enter",
+                            f"{pend['side']} x{pend['qty']} @ {fill['price']}",
+                            t, sig)
+            elif m is None or m < self.cfg["min_mins_left"]:
+                del self.state["pending"][t]
+                self.state.setdefault("done", {})[t] = "cancelled"
+                self._event("cancel", "window closed, not chasing", t, sig)
+
+    def tick(self, now_ts=None):
+        now_ts = now_ts if now_ts is not None else time.time()
+        try:
+            sig = self.fetch()
+            if not sig:
+                return
+            self._process_pending(sig)
+            for t in list(self.state["open"]):
+                if t == sig.get("ticker") and sig.get("status") == "ok":
+                    self.state["open"][t]["last_sig"] = dict(sig)
+            if not self._seen(sig.get("ticker") or ""):
+                side = entry_decision(sig, self.cfg)
+                if side:
+                    self._place(side, sig)
+        finally:
+            self.state["heartbeat"] = now_ts
+            save_state(self.dir, self.state)

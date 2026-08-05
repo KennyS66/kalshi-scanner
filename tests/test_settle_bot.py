@@ -142,3 +142,60 @@ def test_limit_fills_only_when_the_ask_reaches_it():
     no_pend = dict(pend, side="NO", limit=0.58)
     assert limit_filled(_sig(no_ask=0.57), no_pend) is True
     assert limit_filled(_sig(no_ask=0.59), no_pend) is False
+
+
+import bot_broker
+from settle_bot import Bot, TRADES_FILE, EVENTS_FILE
+
+
+def _rows(tmp_path, name):
+    p = tmp_path / name
+    return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+
+
+def _mkbot(tmp_path, sigs):
+    it = iter(sigs)
+    return Bot(tmp_path, fetch_fn=lambda: next(it, None))
+
+
+def test_qualifying_signal_rests_a_limit(tmp_path):
+    bot = _mkbot(tmp_path, [_sig(sig_combined=15.0)])
+    bot.tick(now_ts=1000.0)
+    assert list(bot.state["pending"]) == ["M1"]
+    assert bot.state["pending"]["M1"]["limit"] == 0.41
+    assert bot.state["pending"]["M1"]["qty"] == 1
+    assert bot.state["open"] == {}
+    assert any(e["action"] == "place" for e in _rows(tmp_path, EVENTS_FILE))
+
+
+def test_resting_order_fills_when_the_ask_reaches_it(tmp_path):
+    sigs = [_sig(sig_combined=15.0),                       # place at 0.41
+            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0)]   # fills
+    bot = _mkbot(tmp_path, sigs)
+    bot.tick(now_ts=1000.0)
+    bot.tick(now_ts=1005.0)
+    assert bot.state["pending"] == {}
+    assert bot.state["open"]["M1"]["entry_price"] == 0.41
+    assert bot.state["open"]["M1"]["qty"] == 1
+    assert bot.state["open"]["M1"]["fee_total"] == 0.0     # maker fee is zero
+    assert any(e["action"] == "enter" for e in _rows(tmp_path, EVENTS_FILE))
+
+
+def test_unfilled_order_is_cancelled_at_window_exit_never_chased(tmp_path):
+    sigs = [_sig(sig_combined=15.0),                              # place
+            _sig(sig_combined=15.0, mins_left=4.5, yes_ask=0.42)] # window closed
+    bot = _mkbot(tmp_path, sigs)
+    bot.tick(now_ts=1000.0)
+    bot.tick(now_ts=1005.0)
+    assert bot.state["pending"] == {}
+    assert bot.state["open"] == {}, "an expired limit was chased into a position"
+    assert any(e["action"] == "cancel" for e in _rows(tmp_path, EVENTS_FILE))
+
+
+def test_one_attempt_per_market(tmp_path):
+    sigs = [_sig(sig_combined=15.0), _sig(sig_combined=15.0),
+            _sig(sig_combined=15.0)]
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert len(_rows(tmp_path, EVENTS_FILE)) == 1     # placed once, not thrice
