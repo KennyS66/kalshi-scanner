@@ -4,10 +4,10 @@
 Enters on the LEVEL of sig_combined, buys that side as a maker, holds to
 settlement. No targets, no stops, no time exit.
 
-Deliberately shares nothing with swing_bot but the :9050 signal feed and
-pure helpers from bot_core. Its journal must never reach data/bot/ --
-bot_core.session_gate_stats and bucket_stats read that directory to decide
-whether the OTHER strategy may trade live.
+Deliberately shares nothing with swing_bot: its only dependencies are
+bot_broker.PaperBroker and the :9050 signal feed. Its journal must never
+reach data/bot/ -- bot_core.session_gate_stats and bucket_stats read that
+directory to decide whether the OTHER strategy may trade live.
 
 Spec: docs/superpowers/specs/2026-08-04-settle-bot-design.md
 Run:  python3 -u settle_bot.py
@@ -33,7 +33,6 @@ DEFAULT_CONFIG = {
     "max_mins_left": 11.0,
     "qty": 1,                  # flat, always
     "poll_secs": 5,
-    "mode": "paper",
     "absent_ticks_to_resolve": 3,  # debounce: consecutive off-ticker ticks
                                     # before a stray tick books a live sample
                                     # as unresolved and blocks re-entry
@@ -178,10 +177,18 @@ class Bot:
         event never landed. Warns, never raises -- the bot has to come up.
         """
         try:
-            rows = [json.loads(l) for l in
-                    (self.dir / EVENTS_FILE).read_text().splitlines() if l.strip()]
+            lines = (self.dir / EVENTS_FILE).read_text().splitlines()
         except Exception:
-            return
+            return  # no events file yet -- benign, self-heals on first write
+        rows = []
+        for l in lines:
+            if not l.strip():
+                continue
+            try:
+                rows.append(json.loads(l))
+            except Exception:
+                continue  # one truncated line (e.g. mid-write power loss)
+                          # must not blind the tripwire to every other row
         enters = sum(1 for e in rows if e.get("action") == "enter")
         settles = sum(1 for e in rows if e.get("action") in ("settle", "unresolved"))
         open_n = len(self.state.get("open") or {})

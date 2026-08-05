@@ -8,6 +8,12 @@ the live rule takes the first qualifying tick anywhere in [5, 11]. A result
 outside the band means the implementation does not match the rule that was
 measured, and is a bug rather than a new finding.
 
+Every qualifying market is booked at the resting limit price assuming a
+100% fill. A resting bid only fills when price actually trades down to it,
+typically after adverse movement, so this number is an upper bound on the
+edge, not an expected one -- the same adverse-selection mechanism cost a
+sibling market-making bot in this workspace -0.25/contract live.
+
 Usage: .venv/bin/python settle_replay.py
 """
 import datetime as dt
@@ -76,7 +82,8 @@ def main():
     print(f"ALL: n={total['n']:4} edge={total['edge']:+.4f}")
     ok = allpos and 0.02 <= total["edge"] <= 0.05
     print(f"GATE: {'PASS' if ok else 'FAIL'} "
-          f"(need +0.02..+0.05 overall and positive in 3/3)")
+          f"(need +0.02..+0.05 overall and positive in 3/3; "
+          f"assumes 100% fill, so this is an upper bound, not expected edge)")
 
 
 if __name__ == "__main__":

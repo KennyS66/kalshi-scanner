@@ -28,6 +28,16 @@ buy YES at `yes_ask`; if `<= -10` buy NO at `no_ask`; hold to settlement.
 | entry-time sensitivity (thr 10) | 3m +0.007 · 5m +0.022 · 7m +0.028 · 9m +0.028 · 11m +0.024 · 13m +0.014 |
 | per session | weekday_day +0.050 · weekday_night +0.037 · weekend_day +0.036 · weekend_night +0.038 |
 
+**Amended 2026-08-05, after a review finding.** This table's n=920 came from sampling
+ONE observation per market at ~10 minutes: only 920 of 1,452 markets (63%) qualified
+at that single draw. The shipped rule instead takes the FIRST qualifying tick anywhere
+in the [5, 11] minute window -- a running max over dozens of ticks per market, not one
+draw -- and against the same feed log that qualifies roughly 1,542 of 1,549 markets
+(~100%). The strategy therefore enters essentially every market it sees: real exposure
+and trade count are far higher than the 63%-qualification table above implies. This
+was already true when Task 8's replay gate shipped (`settle_replay.py`, n=1,541); the
+spec was amended for the debounce (below) but never for this.
+
 Two features of that table drive the design.
 
 **The entry-time curve is a smooth hump peaking at 7–9 minutes**, decaying at both
@@ -91,8 +101,11 @@ its rows would land in `data/bot/bot_trades.jsonl`, which `bot_core.session_gate
 writing into the file that authorizes live trading for the first one is the exact
 contamination class fixed in `a838f93`. Separate journal, structurally.
 
-It reuses `bot_core.session_tag` and the `:9050` signal feed. It does not import
-`swing_bot`.
+It depends only on `bot_broker.PaperBroker` and the `:9050` signal feed. It does not
+import `swing_bot` or `bot_core` at all -- in particular it does **not** reuse
+`bot_core.session_tag`; journal rows carry no session field. Per-session breakdowns
+(the table above has one) must be derived post-hoc from each row's `entry_sig.ts`,
+the same way the replay script windows by timestamp, not read off a stored tag.
 
 ## Entry rule
 
@@ -158,9 +171,22 @@ the **last tick observed for that ticker**, which is the same quantity `trade_gr
 uses and which cross-checked at 99.5% against its independent record. P&L is booked as
 `1 - entry_price` if the held side won, else `-entry_price`.
 
-A position whose ticker vanishes without a near-expiry tick (a data gap) is booked as
-`unresolved` and excluded from edge statistics rather than guessed at. The count of
-unresolved positions is reported, since a large one would invalidate the measurement.
+A position whose ticker vanishes without a near-expiry tick is booked as `unresolved`
+and excluded from edge statistics rather than guessed at. The count of unresolved
+positions is reported.
+
+**Amended 2026-08-05, after a review finding.** This was written as if `unresolved`
+were a rare data gap, and warned that a large rate "would invalidate the measurement."
+Measured against the real feed log, it is not rare: 361 of 1,542 entered markets
+(~23%) have a last own-ticker tick more than 0.5 minutes from expiry and are booked
+`unresolved` with no journal row. The cause is structural, not a logging gap:
+`web.py:618` drops a market from `active` once its price leaves `(0.01, 0.99)`, and
+1,408 of those 1,542 markets end at a price extreme -- so the feed simply stops
+emitting that ticker before expiry on the large majority of markets. Effect on the
+measurement: the journaled 77% subset scores +0.0280 (t=2.14) versus +0.0300 across
+all markets -- mildly optimistic, and a real loss of statistical power, but not
+invalidating. This also raises the sample size needed to reach the kill criterion's
+200-settled-position threshold; see Risks.
 
 This is the main defence against overfitting — there are no exit parameters to tune,
 which is where the swing bot's entire loss lives.
@@ -233,4 +259,9 @@ untested.
 
 **Kill criteria, stated in advance:** if after 200 filled positions the realised edge
 is below +0.01/contract, or the fill rate is under 20%, the strategy is dead and gets
-turned off rather than tuned.
+turned off rather than tuned. **Amended 2026-08-05:** "realised edge" can only be
+computed from settled positions (a journal row) -- `unresolved` positions carry no
+P&L. At the measured ~23% `unresolved` rate (see "No exit" above), roughly 260 filled
+positions are needed to accumulate the 200 settled positions this criterion is
+actually judged against. The 200-position threshold is unchanged; the number of fills
+required to reach it is larger than the spec originally implied.

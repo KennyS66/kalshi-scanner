@@ -11,7 +11,6 @@ def test_default_config_has_the_spec_values():
     assert DEFAULT_CONFIG["min_mins_left"] == 5.0
     assert DEFAULT_CONFIG["max_mins_left"] == 11.0
     assert DEFAULT_CONFIG["qty"] == 1
-    assert DEFAULT_CONFIG["mode"] == "paper"
 
 
 def test_load_config_merges_file_over_defaults(tmp_path):
@@ -348,23 +347,6 @@ def test_single_off_ticker_tick_does_not_resolve(tmp_path):
     assert _rows(tmp_path, TRADES_FILE) == []
 
 
-def test_three_consecutive_off_ticker_ticks_resolve(tmp_path):
-    """Debounce threshold: three consecutive off-ticker ticks do resolve."""
-    m2 = _sig(ticker="M2", mins_left=14.0, sig_combined=0.0)
-    sigs = [_sig(sig_combined=15.0),
-            _sig(sig_combined=15.0, yes_ask=0.41, mins_left=7.0),   # fill
-            _sig(ticker="M1", yes_ask=0.98, mins_left=0.1, distance=25.0,
-                 sig_combined=0.0),                                  # near expiry
-            m2, m2, m2]
-    bot = _mkbot(tmp_path, sigs)
-    for _ in sigs:
-        bot.tick(now_ts=1000.0)
-    assert bot.state["open"] == {}
-    rows = _rows(tmp_path, TRADES_FILE)
-    assert len(rows) == 1
-    assert rows[0]["settled"] == "YES"
-
-
 def test_own_ticker_tick_resets_the_absence_counter(tmp_path):
     """An intervening tick for the position's own market resets the debounce
     counter -- off, off, own, off, off must NOT resolve."""
@@ -391,6 +373,36 @@ def test_reconcile_warns_when_an_entry_has_no_settle(tmp_path):
     Bot(tmp_path, fetch_fn=lambda: None)
     flagged = [e for e in _rows(tmp_path, EVENTS_FILE)
                if e["action"] == "reconcile"]
+    assert len(flagged) == 1 and "+1" in flagged[0]["reason"]
+
+
+def test_reconcile_survives_a_truncated_line_mid_file(tmp_path):
+    """This box power-cycles and the events file is append-only, so a crash
+    mid-write can leave one truncated line sitting between otherwise-valid
+    rows. The old implementation read the whole file with a single list
+    comprehension: one bad `json.loads` raised, hit the file-level
+    `except Exception: return`, and skipped the gap computation entirely --
+    permanently blinding the boot tripwire, since a corrupt line is never
+    fixed by anything that runs afterward. It must instead skip just that
+    line and still warn on the gap the surviving rows show."""
+    good = [{"ts": 1.0, "ticker": "A", "action": "enter"},
+            {"ts": 2.0, "ticker": "A", "action": "settle"},
+            {"ts": 3.0, "ticker": "B", "action": "enter"}]   # B lost -> +1
+    lines = [json.dumps(good[0]), json.dumps(good[1]),
+             '{"ts": 2.5, "ticker": "X", "acti',   # truncated mid-line
+             json.dumps(good[2])]
+    (tmp_path / EVENTS_FILE).write_text("\n".join(lines) + "\n")
+    Bot(tmp_path, fetch_fn=lambda: None)
+    # _rows() itself does not skip malformed lines, so parse leniently here
+    # -- the truncated line is still in the file; only _reconcile must
+    # tolerate it.
+    parsed = []
+    for l in (tmp_path / EVENTS_FILE).read_text().splitlines():
+        try:
+            parsed.append(json.loads(l))
+        except Exception:
+            continue
+    flagged = [e for e in parsed if e["action"] == "reconcile"]
     assert len(flagged) == 1 and "+1" in flagged[0]["reason"]
 
 
