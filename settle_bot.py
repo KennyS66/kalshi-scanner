@@ -76,3 +76,27 @@ def append_jsonl(path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(json.dumps(row) + "\n")
+
+
+def entry_decision(sig: dict, cfg: dict):
+    """Side to buy for this signal row, or None.
+
+    The rule measured on 2026-08-04 over 1,452 markets: buy the side
+    sig_combined points to, inside the entry window. Nothing else.
+    """
+    if sig.get("status") != "ok":
+        return None
+    if sig.get("yes_ask") is None or sig.get("no_ask") is None:
+        return None
+    m = sig.get("mins_left")
+    if m is None or not (cfg["min_mins_left"] <= m <= cfg["max_mins_left"]):
+        return None
+    sc = sig.get("sig_combined")
+    if sc is None:
+        return None
+    thr = cfg["entry_threshold"]
+    if sc >= thr:
+        return "YES"
+    if sc <= -thr:
+        return "NO"
+    return None
