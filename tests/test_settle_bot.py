@@ -199,3 +199,32 @@ def test_one_attempt_per_market(tmp_path):
     for _ in sigs:
         bot.tick(now_ts=1000.0)
     assert len(_rows(tmp_path, EVENTS_FILE)) == 1     # placed once, not thrice
+
+
+def test_fill_books_the_resting_limit_not_a_gapped_ask(tmp_path):
+    """The market can gap straight through the resting limit -- the fill
+    must still book at the limit we posted, never at whatever the ask
+    happens to be on the touching tick. Swapping pend["limit"] for
+    sig["yes_ask"] in _process_pending would make this fail."""
+    sigs = [_sig(sig_combined=15.0),                                    # place at 0.41
+            _sig(sig_combined=15.0, yes_ask=0.30, mins_left=7.0)]       # gaps through it
+    bot = _mkbot(tmp_path, sigs)
+    bot.tick(now_ts=1000.0)
+    bot.tick(now_ts=1005.0)
+    assert bot.state["open"]["M1"]["entry_price"] == 0.41
+
+
+def test_cancelled_market_is_never_retried_on_a_fresh_qualifying_signal(tmp_path):
+    """_seen's `done` clause -- not just `pending` -- must block a second
+    attempt. Drive the order through cancellation, then feed a brand new
+    qualifying signal for the same ticker and confirm nothing is placed."""
+    sigs = [_sig(sig_combined=15.0),                               # place
+            _sig(sig_combined=15.0, mins_left=4.5, yes_ask=0.42),  # window closed -> cancel
+            _sig(sig_combined=15.0, mins_left=8.0, ts=2000.0)]     # fresh qualifying signal
+    bot = _mkbot(tmp_path, sigs)
+    for _ in sigs:
+        bot.tick(now_ts=1000.0)
+    assert bot.state["pending"] == {}
+    assert bot.state["open"] == {}
+    actions = [e["action"] for e in _rows(tmp_path, EVENTS_FILE)]
+    assert actions == ["place", "cancel"]     # no second place after the cancel
