@@ -98,3 +98,19 @@ def test_entry_needs_a_usable_quote_and_ok_status():
     assert entry_decision(_sig(sig_combined=15.0, no_ask=None), cfg) is None
     assert entry_decision(_sig(sig_combined=None), cfg) is None
     assert entry_decision(_sig(sig_combined=15.0, mins_left=None), cfg) is None
+
+
+def test_entry_decision_reads_its_bounds_from_config_not_hardcoded():
+    """Fails if entry_threshold / min_mins_left / max_mins_left were baked
+    into the function body -- a later task tunes these via config alone."""
+    # threshold raised: a signal that fires at the default must now be ignored
+    assert entry_decision(_sig(sig_combined=15.0),
+                          dict(DEFAULT_CONFIG, entry_threshold=20.0)) is None
+    # threshold lowered: a signal below the default must now fire
+    assert entry_decision(_sig(sig_combined=6.0),
+                          dict(DEFAULT_CONFIG, entry_threshold=5.0)) == "YES"
+    # window narrowed: a time inside the default window must now be excluded
+    assert entry_decision(_sig(sig_combined=15.0, mins_left=6.0),
+                          dict(DEFAULT_CONFIG, min_mins_left=7.0)) is None
+    assert entry_decision(_sig(sig_combined=15.0, mins_left=10.0),
+                          dict(DEFAULT_CONFIG, max_mins_left=9.0)) is None
