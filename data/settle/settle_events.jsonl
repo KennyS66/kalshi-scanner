@@ -1,0 +1,68 @@
+{"ts": 1785998046.4123466, "ticker": "KXBTC15M-26AUG060245-45", "action": "place", "reason": "NO x1 limit 0.47"}
+{"ts": 1785998072.8343985, "ticker": "KXBTC15M-26AUG060245-45", "action": "enter", "reason": "NO x1 @ 0.47"}
+{"ts": 1786006857.185699, "ticker": "KXBTC15M-26AUG060245-45", "action": "settle", "reason": "YES pnl -0.47"}
+{"ts": 1786007038.1965702, "ticker": "KXBTC15M-26AUG060515-15", "action": "place", "reason": "NO x1 limit 0.85"}
+{"ts": 1786007405.1758268, "ticker": "KXBTC15M-26AUG060515-15", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786007994.465635, "ticker": "KXBTC15M-26AUG060530-30", "action": "place", "reason": "YES x1 limit 0.82"}
+{"ts": 1786008173.434155, "ticker": "KXBTC15M-26AUG060530-30", "action": "enter", "reason": "YES x1 @ 0.82"}
+{"ts": 1786008644.060433, "ticker": "KXBTC15M-26AUG060530-30", "action": "settle", "reason": "NO pnl -0.82"}
+{"ts": 1786008837.0656054, "ticker": "KXBTC15M-26AUG060545-45", "action": "place", "reason": "NO x1 limit 0.76"}
+{"ts": 1786008883.9968019, "ticker": "KXBTC15M-26AUG060545-45", "action": "enter", "reason": "NO x1 @ 0.76"}
+{"ts": 1786009547.6878722, "ticker": "KXBTC15M-26AUG060545-45", "action": "settle", "reason": "NO pnl +0.24"}
+{"ts": 1786009796.8949857, "ticker": "KXBTC15M-26AUG060600-00", "action": "place", "reason": "NO x1 limit 0.3"}
+{"ts": 1786010087.4910998, "ticker": "KXBTC15M-26AUG060600-00", "action": "enter", "reason": "NO x1 @ 0.3"}
+{"ts": 1786010427.156996, "ticker": "KXBTC15M-26AUG060600-00", "action": "settle", "reason": "YES pnl -0.30"}
+{"ts": 1786010637.2810745, "ticker": "KXBTC15M-26AUG060615-15", "action": "place", "reason": "NO x1 limit 0.7"}
+{"ts": 1786011004.4710882, "ticker": "KXBTC15M-26AUG060615-15", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786011565.0727093, "ticker": "KXBTC15M-26AUG060630-30", "action": "place", "reason": "YES x1 limit 0.89"}
+{"ts": 1786011906.278617, "ticker": "KXBTC15M-26AUG060630-30", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786012441.4060595, "ticker": "KXBTC15M-26AUG060645-45", "action": "place", "reason": "YES x1 limit 0.61"}
+{"ts": 1786012462.0270908, "ticker": "KXBTC15M-26AUG060645-45", "action": "enter", "reason": "YES x1 @ 0.61"}
+{"ts": 1786013136.5136364, "ticker": "KXBTC15M-26AUG060645-45", "action": "settle", "reason": "NO pnl -0.61"}
+{"ts": 1786013339.9995637, "ticker": "KXBTC15M-26AUG060700-00", "action": "place", "reason": "YES x1 limit 0.69"}
+{"ts": 1786013387.4483747, "ticker": "KXBTC15M-26AUG060700-00", "action": "enter", "reason": "YES x1 @ 0.69"}
+{"ts": 1786014029.2293565, "ticker": "KXBTC15M-26AUG060700-00", "action": "settle", "reason": "NO pnl -0.69"}
+{"ts": 1786014237.6375642, "ticker": "KXBTC15M-26AUG060715-15", "action": "place", "reason": "NO x1 limit 0.77"}
+{"ts": 1786014606.8683364, "ticker": "KXBTC15M-26AUG060715-15", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786015138.404831, "ticker": "KXBTC15M-26AUG060730-30", "action": "place", "reason": "NO x1 limit 0.15"}
+{"ts": 1786015205.962791, "ticker": "KXBTC15M-26AUG060730-30", "action": "enter", "reason": "NO x1 @ 0.15"}
+{"ts": 1786015823.781809, "ticker": "KXBTC15M-26AUG060730-30", "action": "settle", "reason": "NO pnl +0.85"}
+{"ts": 1786016074.2034628, "ticker": "KXBTC15M-26AUG060745-45", "action": "place", "reason": "NO x1 limit 0.18"}
+{"ts": 1786016079.3014612, "ticker": "KXBTC15M-26AUG060745-45", "action": "enter", "reason": "NO x1 @ 0.18"}
+{"ts": 1786016765.4753985, "ticker": "KXBTC15M-26AUG060745-45", "action": "settle", "reason": "YES pnl -0.18"}
+{"ts": 1786016942.1528172, "ticker": "KXBTC15M-26AUG060800-00", "action": "place", "reason": "NO x1 limit 0.47"}
+{"ts": 1786017304.9210691, "ticker": "KXBTC15M-26AUG060800-00", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786017856.443065, "ticker": "KXBTC15M-26AUG060815-15", "action": "place", "reason": "NO x1 limit 0.89"}
+{"ts": 1786017887.4771173, "ticker": "KXBTC15M-26AUG060815-15", "action": "enter", "reason": "NO x1 @ 0.89"}
+{"ts": 1786018525.942637, "ticker": "KXBTC15M-26AUG060815-15", "action": "settle", "reason": "NO pnl +0.11"}
+{"ts": 1786018740.34596, "ticker": "KXBTC15M-26AUG060830-30", "action": "place", "reason": "NO x1 limit 0.67"}
+{"ts": 1786018745.443417, "ticker": "KXBTC15M-26AUG060830-30", "action": "enter", "reason": "NO x1 @ 0.67"}
+{"ts": 1786019431.2456517, "ticker": "KXBTC15M-26AUG060830-30", "action": "settle", "reason": "YES pnl -0.67"}
+{"ts": 1786019637.6915152, "ticker": "KXBTC15M-26AUG060845-45", "action": "place", "reason": "NO x1 limit 0.68"}
+{"ts": 1786019742.4887161, "ticker": "KXBTC15M-26AUG060845-45", "action": "enter", "reason": "NO x1 @ 0.68"}
+{"ts": 1786020328.1835482, "ticker": "KXBTC15M-26AUG060845-45", "action": "settle", "reason": "NO pnl +0.32"}
+{"ts": 1786020538.217534, "ticker": "KXBTC15M-26AUG060900-00", "action": "place", "reason": "NO x1 limit 0.63"}
+{"ts": 1786020555.9264731, "ticker": "KXBTC15M-26AUG060900-00", "action": "enter", "reason": "NO x1 @ 0.63"}
+{"ts": 1786021282.8048608, "ticker": "KXBTC15M-26AUG060900-00", "action": "settle", "reason": "NO pnl +0.37"}
+{"ts": 1786021438.6281493, "ticker": "KXBTC15M-26AUG060915-15", "action": "place", "reason": "YES x1 limit 0.36"}
+{"ts": 1786021519.1024623, "ticker": "KXBTC15M-26AUG060915-15", "action": "enter", "reason": "YES x1 @ 0.36"}
+{"ts": 1786022138.2365437, "ticker": "KXBTC15M-26AUG060915-15", "action": "settle", "reason": "NO pnl -0.36"}
+{"ts": 1786022397.029579, "ticker": "KXBTC15M-26AUG060930-30", "action": "place", "reason": "NO x1 limit 0.31"}
+{"ts": 1786022471.2611427, "ticker": "KXBTC15M-26AUG060930-30", "action": "enter", "reason": "NO x1 @ 0.31"}
+{"ts": 1786023028.0108707, "ticker": "KXBTC15M-26AUG060930-30", "action": "settle", "reason": "NO pnl +0.69"}
+{"ts": 1786023273.8688357, "ticker": "KXBTC15M-26AUG060945-45", "action": "place", "reason": "YES x1 limit 0.29"}
+{"ts": 1786023605.9233396, "ticker": "KXBTC15M-26AUG060945-45", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786024156.808837, "ticker": "KXBTC15M-26AUG061000-00", "action": "place", "reason": "YES x1 limit 0.58"}
+{"ts": 1786024298.1057136, "ticker": "KXBTC15M-26AUG061000-00", "action": "enter", "reason": "YES x1 @ 0.58"}
+{"ts": 1786024843.0822797, "ticker": "KXBTC15M-26AUG061000-00", "action": "settle", "reason": "YES pnl +0.42"}
+{"ts": 1786025037.8775072, "ticker": "KXBTC15M-26AUG061015-15", "action": "place", "reason": "NO x1 limit 0.66"}
+{"ts": 1786025115.729771, "ticker": "KXBTC15M-26AUG061015-15", "action": "enter", "reason": "NO x1 @ 0.66"}
+{"ts": 1786025729.492974, "ticker": "KXBTC15M-26AUG061015-15", "action": "settle", "reason": "NO pnl +0.34"}
+{"ts": 1786025939.541183, "ticker": "KXBTC15M-26AUG061030-30", "action": "place", "reason": "NO x1 limit 0.56"}
+{"ts": 1786026142.7282348, "ticker": "KXBTC15M-26AUG061030-30", "action": "enter", "reason": "NO x1 @ 0.56"}
+{"ts": 1786026652.2583122, "ticker": "KXBTC15M-26AUG061030-30", "action": "settle", "reason": "NO pnl +0.44"}
+{"ts": 1786026840.7996118, "ticker": "KXBTC15M-26AUG061045-45", "action": "place", "reason": "YES x1 limit 0.78"}
+{"ts": 1786027203.335746, "ticker": "KXBTC15M-26AUG061045-45", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786027737.0235963, "ticker": "KXBTC15M-26AUG061100-00", "action": "place", "reason": "NO x1 limit 0.53"}
+{"ts": 1786028105.5314364, "ticker": "KXBTC15M-26AUG061100-00", "action": "cancel", "reason": "window closed, not chasing"}
+{"ts": 1786028653.8141668, "ticker": "KXBTC15M-26AUG061115-15", "action": "place", "reason": "NO x1 limit 0.51"}
