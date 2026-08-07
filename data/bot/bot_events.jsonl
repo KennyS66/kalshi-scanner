@@ -4094,3 +4094,152 @@
 {"ts": 1786025260.3442087, "ticker": "KXBTC15M-26AUG061015-15", "action": "skip", "reason": "thin_edge: 3.0c net at win target < 4.0c floor", "sig": {"price": 0.59, "yes_ask": 0.6, "no_ask": 0.41, "mins_left": 7.3, "whale_trend": -4.4, "momentum": -9.11, "buy_pressure": 76936, "ts": 1786025260.3381932}}
 {"ts": 1786025678.8312776, "ticker": "KXBTC15M-26AUG061015-15", "action": "skip", "reason": "mins_left 0.4 < 4.0; thin_edge: 1.0c net at win target < 4.0c floor", "sig": {"price": 0.59, "yes_ask": 0.59, "no_ask": 0.43, "mins_left": 0.4, "whale_trend": -2.5, "momentum": -17.14, "buy_pressure": 359884, "ts": 1786025678.8236904}}
 {"ts": 1786027711.4040704, "ticker": "KXBTC15M-26AUG061100-00", "action": "skip", "reason": "thin_edge: 1.5c net at win target < 4.0c floor; ev_gate: bucket YES|mid|11m+|strong|weekday_day net avg -0.50 over 13 trades", "sig": {"price": 0.45, "yes_ask": 0.46, "no_ask": 0.55, "mins_left": 11.5, "whale_trend": 3.0, "momentum": 15.57, "buy_pressure": -848, "ts": 1786027711.3964326}}
+{"ts": 1786029050.3384008, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786031342.116365, "ticker": "KXBTC15M-26AUG061200-00", "action": "skip", "reason": "thin_edge: 2.5c net at win target < 4.0c floor", "sig": {"price": 0.73, "yes_ask": 0.74, "no_ask": 0.27, "mins_left": 11.0, "whale_trend": -5.2, "momentum": -0.38, "buy_pressure": -39595, "ts": 1786031342.1093392}}
+{"ts": 1786032604.7953572, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786033249.2123876, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786033285.024147, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786033382.540381, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786034982.8646894, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786035080.3699362, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786035177.9113278, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786035279.1688938, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786035438.0213888, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786035886.6583889, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786035976.2733486, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786036097.6787724, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786036747.9516609, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786037974.113117, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786038095.9000566, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786038289.788393, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786039731.003643, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786041136.3313768, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786041244.8630462, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786041351.5661964, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786041488.6883948, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786041615.6233401, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786041708.1903663, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786042375.1808333, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786043813.7553892, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786044055.6143878, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786044260.833211, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786045608.1193943, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786045729.9744112, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786045997.3719893, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786046326.524198, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786046362.065402, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786048414.7854433, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786048538.2823303, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786048696.64439, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786051145.7146678, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786052937.224337, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786053041.2376454, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786053170.3443544, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786055086.6833694, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786055789.0248132, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786056197.638614, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786057847.3662007, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786057965.445167, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786058202.3463519, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786058432.7361772, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786058686.2842834, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786058819.9387856, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786059138.9135718, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786059408.7283459, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786059519.1223788, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786059772.3313587, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786059885.0247798, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786060118.3031373, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786060355.1103508, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786060801.0846715, "ticker": "", "action": "day_roll", "reason": "2026-08-07", "sig": null}
+{"ts": 1786061147.305358, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786061272.2103522, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786062184.135243, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786063156.994399, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786063714.9893615, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786063821.1793926, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786064269.6247678, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786064718.8101633, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786064792.6303906, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786065136.9394546, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786066399.2093601, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786066678.8198552, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786069084.142443, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786070009.9194117, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786070146.1988657, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786070241.6282828, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786070327.7693536, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786070795.6210449, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786070912.1807902, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786071307.8868594, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786071417.9194367, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786072054.8953717, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786072173.9063957, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786072434.7163804, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786073184.2723393, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786073323.5954015, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786073611.5721674, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786074004.6617684, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786074108.631298, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786074218.8123908, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786074442.5231402, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786074590.198465, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786075888.9023871, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786076017.8313878, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786076234.7783942, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786076780.2624547, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786076904.2235768, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786076999.9614425, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786077126.1512957, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786077244.895335, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786077494.1073632, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786077614.0438008, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786077666.7474203, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786077767.7084863, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786077825.520834, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078027.6654613, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078123.7624369, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078157.8243165, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078263.0067558, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078298.7443647, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078469.1642616, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078574.888633, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078746.1393573, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786078935.4556012, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786079065.1763365, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786079109.1574981, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786079459.8243902, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786079717.510469, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786079835.147443, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786079930.2713099, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786080161.0182896, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786080290.6898127, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786080407.4051154, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786080537.2089093, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786081322.1253657, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786081445.8153806, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786081735.0755358, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786083283.4441924, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786083470.0134451, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786083584.3365133, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786083687.6562908, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786084041.6063824, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786084095.3854663, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786084546.9274297, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786085003.7592394, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786085889.3232725, "ticker": "", "action": "feed_down", "reason": "3 consecutive fetch failures", "sig": null}
+{"ts": 1786095371.457514, "ticker": "KXBTC15M-26AUG070545-45", "action": "skip", "reason": "thin_edge: 1.9c net at win target < 4.0c floor", "sig": {"price": 0.914, "yes_ask": 0.915, "no_ask": 0.086, "mins_left": 8.8, "whale_trend": 4.0, "momentum": 8.76, "buy_pressure": -94636, "ts": 1786095371.4514813}}
+{"ts": 1786097080.7317421, "ticker": "KXBTC15M-26AUG070615-15", "action": "place", "reason": "YES x15 limit @ 0.380 (patient)", "sig": {"price": 0.38, "yes_ask": 0.39, "no_ask": 0.62, "mins_left": 10.3, "whale_trend": 2.1, "momentum": 6.14, "buy_pressure": -66257, "ts": 1786097080.7252595}}
+{"ts": 1786097111.640694, "ticker": "KXBTC15M-26AUG070615-15", "action": "cancel", "reason": "maker_only: limit timed out, not chasing", "sig": {"price": 0.6, "yes_ask": 0.61, "no_ask": 0.4, "mins_left": 9.8, "whale_trend": -1.3, "momentum": 1.86, "buy_pressure": -53027, "ts": 1786097111.6400456}}
+{"ts": 1786097881.74135, "ticker": "KXBTC15M-26AUG070630-30", "action": "place", "reason": "YES x12 limit @ 0.470 (patient)", "sig": {"price": 0.48, "yes_ask": 0.48, "no_ask": 0.53, "mins_left": 12.0, "whale_trend": 13.6, "momentum": 6.38, "buy_pressure": -3418, "ts": 1786097881.7348762}}
+{"ts": 1786097913.2174706, "ticker": "KXBTC15M-26AUG070630-30", "action": "cancel", "reason": "maker_only: limit timed out, not chasing", "sig": {"price": 0.51, "yes_ask": 0.51, "no_ask": 0.5, "mins_left": 11.4, "whale_trend": -3.9, "momentum": 8.49, "buy_pressure": 3259, "ts": 1786097913.216776}}
+{"ts": 1786098077.6621552, "ticker": "KXBTC15M-26AUG070630-30", "action": "place", "reason": "YES x9 limit @ 0.610 (aggressive)", "sig": {"price": 0.61, "yes_ask": 0.62, "no_ask": 0.39, "mins_left": 8.7, "whale_trend": 5.3, "momentum": 0.82, "buy_pressure": -21111, "ts": 1786098077.653894}}
+{"ts": 1786098113.6386638, "ticker": "KXBTC15M-26AUG070630-30", "action": "cancel", "reason": "maker_only: limit timed out, not chasing", "sig": {"price": 0.66, "yes_ask": 0.67, "no_ask": 0.34, "mins_left": 8.1, "whale_trend": 5.2, "momentum": 12.76, "buy_pressure": -4666, "ts": 1786098113.6159327}}
+{"ts": 1786098732.441476, "ticker": "KXBTC15M-26AUG070645-45", "action": "skip", "reason": "ev_gate: bucket YES|mid|11m+|strong|weekday_night net avg -1.68 over 15 trades", "sig": {"price": 0.51, "yes_ask": 0.52, "no_ask": 0.49, "mins_left": 12.8, "whale_trend": 5.4, "momentum": 24.04, "buy_pressure": -14960, "ts": 1786098732.4340808}}
+{"ts": 1786098772.657435, "ticker": "KXBTC15M-26AUG070645-45", "action": "skip", "reason": "ev_gate: bucket NO|mid|11m+|weak|weekday_night net avg -0.99 over 18 trades", "sig": {"price": 0.58, "yes_ask": 0.58, "no_ask": 0.43, "mins_left": 12.1, "whale_trend": -3.4, "momentum": -0.12, "buy_pressure": -20148, "ts": 1786098772.6516323}}
+{"ts": 1786101273.5908804, "ticker": "KXBTC15M-26AUG070715-15", "action": "skip", "reason": "decided price=0.999; mins_left 0.4 < 4.0; ask 100.0c above buy range 96.9-95.0c; thin_edge: -4.0c net at win target < 4.0c floor", "sig": {"price": 0.999, "yes_ask": 1.0, "no_ask": 0.001, "mins_left": 0.4, "whale_trend": 2.4, "momentum": 1.77, "buy_pressure": 0, "ts": 1786101273.5833955}}
+{"ts": 1786104772.380943, "ticker": "KXBTC15M-26AUG070815-15", "action": "skip", "reason": "decided price=0.998; mins_left 2.1 < 4.0; ask 0.3c below buy range 1.0-2.2c", "sig": {"price": 0.998, "yes_ask": 0.998, "no_ask": 0.003, "mins_left": 2.1, "whale_trend": -2.5, "momentum": -0.67, "buy_pressure": 0, "ts": 1786104772.3734348}}
+{"ts": 1786107034.9816432, "ticker": "KXBTC15M-26AUG070900-00", "action": "skip", "reason": "thin_edge: -1.0c net at win target < 4.0c floor", "sig": {"price": 0.78, "yes_ask": 0.79, "no_ask": 0.22, "mins_left": 9.4, "whale_trend": 3.9, "momentum": 14.7, "buy_pressure": -178552, "ts": 1786107034.9756608}}
+{"ts": 1786107291.3972385, "ticker": "KXBTC15M-26AUG070900-00", "action": "skip", "reason": "decided price=0.987; thin_edge: 2.0c net at win target < 4.0c floor", "sig": {"price": 0.987, "yes_ask": 0.988, "no_ask": 0.013, "mins_left": 5.1, "whale_trend": -2.0, "momentum": -3.86, "buy_pressure": -274199, "ts": 1786107291.390553}}
+{"ts": 1786107950.7165189, "ticker": "KXBTC15M-26AUG070915-15", "action": "skip", "reason": "thin_edge: -1.0c net at win target < 4.0c floor; ev_gate: bucket NO|mid|7-11m|weak|weekday_day net avg -1.00 over 14 trades", "sig": {"price": 0.48, "yes_ask": 0.48, "no_ask": 0.53, "mins_left": 9.2, "whale_trend": -8.3, "momentum": -2.3, "buy_pressure": 101075, "ts": 1786107950.7104676}}
+{"ts": 1786108674.0575728, "ticker": "KXBTC15M-26AUG070930-30", "action": "skip", "reason": "thin_edge: 2.5c net at win target < 4.0c floor; ev_gate: bucket YES|mid|11m+|strong|weekday_day net avg -0.50 over 13 trades", "sig": {"price": 0.41, "yes_ask": 0.41, "no_ask": 0.6, "mins_left": 12.1, "whale_trend": 2.4, "momentum": 11.56, "buy_pressure": 45337, "ts": 1786108674.050182}}
