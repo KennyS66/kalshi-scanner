@@ -34,6 +34,24 @@ def write_alert(path: Path, msg: str):
     path.write_text(msg)
     print(f"  🚨 ALERT [{path.name}]: {msg}", flush=True)
 
+def _num(sig: dict, key: str, default):
+    """Signal value, or `default` when it is missing OR present-but-None.
+
+    dict.get(key, default) only fires its default when the key is ABSENT.
+    The scanner emits the key with a None value whenever its source is
+    unavailable -- e.g. `distance` is None while the spot poller is failing
+    DNS -- so the default never applied and the next numeric comparison
+    raised TypeError. That killed this daemon on 2026-08-08 at
+    `distance <= 30`, and it had been silently dead for hours.
+
+    Written as an explicit None check rather than `sig.get(key) or default`
+    because a legitimate 0.0 (mins_left at expiry, distance at the strike)
+    is falsy and would wrongly take the default.
+    """
+    v = sig.get(key)
+    return default if v is None else v
+
+
 def main():
     print("Signal watcher started — polling every 5s", flush=True)
     EXIT_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -54,15 +72,15 @@ def main():
             continue
 
         ticker        = sig.get("ticker")
-        whale_trend   = sig.get("whale_trend", 0)
-        flush_score   = sig.get("flush_score", 0)
-        sig_whale     = sig.get("sig_whale", 0)
-        sig_combined  = sig.get("sig_combined", 0)
-        buy_pressure  = sig.get("buy_pressure", 0)
-        price         = sig.get("price", 0)
-        mins_left     = sig.get("mins_left", 99)
-        distance      = sig.get("distance", 0)
-        whale_count   = sig.get("whale_count", 0)
+        whale_trend   = _num(sig, "whale_trend", 0)
+        flush_score   = _num(sig, "flush_score", 0)
+        sig_whale     = _num(sig, "sig_whale", 0)
+        sig_combined  = _num(sig, "sig_combined", 0)
+        buy_pressure  = _num(sig, "buy_pressure", 0)
+        price         = _num(sig, "price", 0)
+        mins_left     = _num(sig, "mins_left", 99)
+        distance      = _num(sig, "distance", 0)
+        whale_count   = _num(sig, "whale_count", 0)
 
         # ── Reset state on new cycle ──────────────────────────────────────────
         if ticker != prev_ticker:
