@@ -163,8 +163,38 @@ class Scanner:
 
         return new_whales, new_trade_count
 
+    def prune_closed(self, grace_s: float = 900.0) -> int:
+        """Forget markets that closed more than `grace_s` ago. Returns the count.
+
+        Without this both `market_snapshots` and `_ticker_stats` grow forever.
+        That is not merely a memory leak: `enrich_markets` derives its fetch
+        list from `_ticker_stats`, and its `priority` set (every "15M" ticker)
+        is UNCAPPED -- so every 15-minute market ever seen, across the whole
+        strike ladder, was re-fetched from the Kalshi API on every 5s cycle.
+
+        Measured on 2026-08-09, same box, same code: a freshly started process
+        sat at 134MB / 11% of a core, while one 5 days old was at 2462MB / 102%.
+        The saturated GIL starved uvicorn's event loop in this same process and
+        pushed /api/crypto/signal's p90 to 4.22s against the 4s timeout in
+        swing_bot.fetch_signal -- roughly 100 silent feed_down events a day.
+
+        `grace_s` defaults to 15 minutes, comfortably past the 120s window
+        /api/crypto/signal allows for just-expired markets, so pruning can
+        never race that lookup. Snapshots whose close_ts is unknown (built by
+        the batch-fetch fallback path) are always kept; they get a real
+        close_ts on the next successful scan.
+        """
+        now = time.time()
+        dead = [t for t, snap in self.market_snapshots.items()
+                if snap.close_ts is not None and now - snap.close_ts > grace_s]
+        for t in dead:
+            self.market_snapshots.pop(t, None)
+            self._ticker_stats.pop(t, None)
+        return len(dead)
+
     def enrich_markets(self):
         """Fetch market metadata for tickers we've seen in trades."""
+        self.prune_closed()
         all_tickers = list(self._ticker_stats.keys())
         # Always include crypto 15m tickers so whale data loads immediately at market open
         priority = {t for t in all_tickers if "15M" in t and t.startswith("KX")}
