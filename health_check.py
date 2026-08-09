@@ -26,6 +26,7 @@ Usage:  python3 health_check.py [--json]
 """
 import argparse
 import json
+import os
 import subprocess
 import time
 import urllib.request
@@ -36,6 +37,15 @@ SIGNAL_URL = "http://localhost:9050/api/crypto/signal"
 FETCH_TIMEOUT = 4.0        # must match swing_bot.fetch_signal's timeout
 LATENCY_SAMPLES = 8
 LATENCY_TAIL_TOLERANCE = 0.10   # fraction of samples allowed over timeout
+
+# Leading indicators for the 2026-08-09 leak. Latency is the LAGGING symptom:
+# the scanner's footprint climbs for days before the event loop starves enough
+# to breach the 4s timeout. These thresholds are set at "unambiguously broken",
+# not at a guessed steady state -- a fresh process is ~134MB/11%, the 5-day-old
+# one that caused the outage was 2462MB/102%. The numbers are logged every run
+# either way, so the trend is visible long before the alarm.
+RSS_LIMIT_MB = 1500
+CPU_LIMIT_PCT = 80
 
 # name -> pgrep pattern. Bracket-quoted so the check never matches itself.
 COLLECTORS = {
@@ -87,6 +97,23 @@ def check_latency(samples, timeout, tolerance=LATENCY_TAIL_TOLERANCE):
                       f"(p50 {s[len(s)//2]:.2f}s, max {s[-1]:.2f}s)"}
 
 
+def check_footprint(rss_mb, cpu_pct, rss_limit=RSS_LIMIT_MB,
+                    cpu_limit=CPU_LIMIT_PCT):
+    """Scanner process size and CPU — the leading indicator of the GIL
+    starvation that breaks /api/crypto/signal.
+
+    Returns ok when the process is absent: the process check already reports
+    that, and double-reporting one fault as two obscures the real cause.
+    """
+    if rss_mb is None or cpu_pct is None:
+        return {"name": "footprint:scanner", "ok": True,
+                "detail": "unknown (process not sampled)"}
+    ok = rss_mb <= rss_limit and cpu_pct <= cpu_limit
+    return {"name": "footprint:scanner", "ok": ok,
+            "detail": f"{rss_mb:.0f}MB / {cpu_pct:.0f}% of a core "
+                      f"(limits {rss_limit}MB / {cpu_limit}%)"}
+
+
 def overall(checks):
     return all(c["ok"] for c in checks)
 
@@ -127,6 +154,33 @@ def _sample_latency(n=LATENCY_SAMPLES):
     return out
 
 
+def _scanner_footprint():
+    """(rss_mb, cpu_pct) for the scanner process, or (None, None).
+
+    CPU is the process's LIFETIME average, not an instantaneous sample. A
+    short sample aliases badly against the scanner's 5-second duty cycle --
+    measured 33% and 76% moments apart on an identical process, which would
+    give both false alarms and false passes. The lifetime average is stable
+    between runs and is the right signal for a slow leak anyway: it only
+    climbs if the work per cycle is genuinely growing.
+    """
+    try:
+        pid = subprocess.run(["pgrep", "-f", r"python.*[m]ain\.py"],
+                             capture_output=True, text=True, timeout=10)
+        pid = (pid.stdout or "").split()[0]
+        rss = int([l for l in Path(f"/proc/{pid}/status").read_text().splitlines()
+                   if l.startswith("VmRSS")][0].split()[1]) / 1024
+        hz = os.sysconf("SC_CLK_TCK")
+        f = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
+        cpu_s = (int(f[11]) + int(f[12])) / hz          # utime + stime
+        start_s = int(f[19]) / hz                       # starttime since boot
+        boot_uptime = float(Path("/proc/uptime").read_text().split()[0])
+        age_s = max(boot_uptime - start_s, 1.0)
+        return rss, 100.0 * cpu_s / age_s
+    except Exception:
+        return None, None
+
+
 def collect():
     checks = [check_process(n, _count(p)) for n, p in COLLECTORS.items()]
     checks.append(check_age("swing_bot_heartbeat",
@@ -136,6 +190,7 @@ def collect():
                             _age_of(BASE / "data/whales/signal_feature_log.jsonl"),
                             limit=600))
     checks.append(check_latency(_sample_latency(), FETCH_TIMEOUT))
+    checks.append(check_footprint(*_scanner_footprint()))
     return checks
 
 

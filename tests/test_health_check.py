@@ -42,3 +42,32 @@ def test_overall_is_false_if_any_check_fails():
           {"ok": True, "name": "b", "detail": ""}]
     assert overall(ok) is True
     assert overall(ok + [{"ok": False, "name": "c", "detail": "x"}]) is False
+
+
+def test_footprint_passes_at_normal_size():
+    from health_check import check_footprint
+    r = check_footprint(rss_mb=259, cpu_pct=33)
+    assert r["ok"] is True and "259" in r["detail"]
+
+
+def test_footprint_fails_at_the_pathological_size_we_actually_saw():
+    """2026-08-09: a 5-day-old scanner sat at 2462MB / 102% of a core with an
+    unbounded market_snapshots, starving uvicorn's event loop via the GIL."""
+    from health_check import check_footprint
+    r = check_footprint(rss_mb=2462, cpu_pct=102)
+    assert r["ok"] is False
+    assert "2462" in r["detail"] and "102" in r["detail"]
+
+
+def test_footprint_flags_either_dimension_alone():
+    from health_check import check_footprint
+    assert check_footprint(rss_mb=2000, cpu_pct=20)["ok"] is False
+    assert check_footprint(rss_mb=200, cpu_pct=95)["ok"] is False
+
+
+def test_footprint_reports_unknown_without_failing_the_stack():
+    """If the process is gone the process check already fails; the footprint
+    check must not double-report it as a second unrelated failure."""
+    from health_check import check_footprint
+    r = check_footprint(rss_mb=None, cpu_pct=None)
+    assert r["ok"] is True and "unknown" in r["detail"].lower()
