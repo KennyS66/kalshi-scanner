@@ -77,10 +77,14 @@ class Scanner:
         self.last_trade_ts = None
         self._seen_trade_ids: dict[str, float] = {}  # trade_id → epoch when first seen
         # Aggregated from all trades we've seen
+        # `last_ts` is when we last saw a TRADE for this ticker. It exists so
+        # prune_closed can expire stats entries that never had a snapshot --
+        # without it they are unreachable and immortal (see prune_closed).
         self._ticker_stats: dict[str, dict] = defaultdict(lambda: {
             "count": 0, "volume": 0.0, "notional": 0.0,
             "yes_vol": 0.0, "no_vol": 0.0,
             "whale_count": 0, "whale_volume": 0.0,
+            "last_ts": 0.0,
         })
 
     def scan_trades(self):
@@ -114,6 +118,7 @@ class Scanner:
 
                 # Aggregate per-ticker stats
                 stats = self._ticker_stats[ticker]
+                stats["last_ts"] = now_ts
                 stats["count"] += 1
                 stats["volume"] += contracts
                 stats["notional"] += contracts * yes_price
@@ -163,8 +168,10 @@ class Scanner:
 
         return new_whales, new_trade_count
 
-    def prune_closed(self, grace_s: float = 900.0) -> int:
-        """Forget markets that closed more than `grace_s` ago. Returns the count.
+    def prune_closed(self, grace_s: float = 900.0,
+                     stats_ttl_s: float = 7200.0) -> int:
+        """Forget markets that closed more than `grace_s` ago, and trade stats
+        for tickers not seen in `stats_ttl_s`. Returns the count forgotten.
 
         Without this both `market_snapshots` and `_ticker_stats` grow forever.
         That is not merely a memory leak: `enrich_markets` derives its fetch
@@ -190,7 +197,22 @@ class Scanner:
         for t in dead:
             self.market_snapshots.pop(t, None)
             self._ticker_stats.pop(t, None)
-        return len(dead)
+
+        # Stats entries that never had a snapshot. scan_trades creates one for
+        # EVERY ticker that prints a trade (defaultdict), so the loop above --
+        # which can only see tickers that have a snapshot -- never reaches
+        # them. They were immortal: 2669 stats against 288 snapshots on
+        # 2026-08-10, each one an uncapped API fetch every 5s cycle.
+        #
+        # A live snapshot always wins over trade staleness: a market that is
+        # open but quiet must not be forgotten just because nobody traded it.
+        stale = [t for t, st in self._ticker_stats.items()
+                 if t not in self.market_snapshots
+                 and now - st.get("last_ts", 0.0) > stats_ttl_s]
+        for t in stale:
+            self._ticker_stats.pop(t, None)
+
+        return len(dead) + len(stale)
 
     def enrich_markets(self):
         """Fetch market metadata for tickers we've seen in trades."""

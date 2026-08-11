@@ -58,6 +58,57 @@ def test_also_forgets_the_tickers_trade_stats():
     assert "OLD" not in s._ticker_stats
 
 
+def _add_stats_only(s, ticker, last_seen_offset_s):
+    """A ticker seen in a TRADE but with no market snapshot.
+
+    scan_trades does `self._ticker_stats[ticker]` on a defaultdict, so every
+    ticker that ever prints a trade gets an entry whether or not a snapshot
+    is ever built for it.
+    """
+    s._ticker_stats[ticker]["count"] = 1
+    s._ticker_stats[ticker]["last_ts"] = time.time() + last_seen_offset_s
+
+
+def test_forgets_stats_for_tickers_that_never_had_a_snapshot():
+    """The half of the 2026-08-09 leak the first fix missed.
+
+    prune_closed derived its dead list from market_snapshots alone, so a
+    _ticker_stats entry with no snapshot was unreachable and immortal. Live
+    counts on 2026-08-10 showed 2669 stats against 288 snapshots. Those
+    entries are not just memory: enrich_markets turns every one of them
+    into an uncapped Kalshi fetch on every 5s cycle.
+    """
+    s = _scanner()
+    _add_stats_only(s, "KXBTC15M-GHOST", -7 * 3600)
+    s.prune_closed(grace_s=900, stats_ttl_s=3600)
+    assert "KXBTC15M-GHOST" not in s._ticker_stats
+
+
+def test_keeps_stats_for_recently_traded_tickers():
+    """A live market that simply has no snapshot yet must survive, or the
+    scanner would forget the market it is about to enrich."""
+    s = _scanner()
+    _add_stats_only(s, "KXBTC15M-FRESH", -60)
+    s.prune_closed(grace_s=900, stats_ttl_s=3600)
+    assert "KXBTC15M-FRESH" in s._ticker_stats
+
+
+def test_keeps_stats_for_an_open_market_that_has_gone_quiet():
+    """No trades for hours is not death when the snapshot says it is open.
+    Never let the trade-staleness rule override a live snapshot."""
+    s = _scanner()
+    _add(s, "QUIET", +600)                       # open, closes in 10 minutes
+    s._ticker_stats["QUIET"]["last_ts"] = time.time() - 7 * 3600
+    s.prune_closed(grace_s=900, stats_ttl_s=3600)
+    assert "QUIET" in s._ticker_stats
+
+
+def test_stats_entries_carry_a_last_seen_timestamp_by_default():
+    """Pruning by age needs the field to exist on every entry."""
+    s = _scanner()
+    assert "last_ts" in s._ticker_stats["ANY"]
+
+
 def test_prunes_many_and_reports_the_count():
     s = _scanner()
     for i in range(50):
