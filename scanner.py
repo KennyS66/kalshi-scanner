@@ -47,6 +47,14 @@ class MarketSnapshot:
     close_ts: float | None = None  # epoch seconds when market closes
 
 
+# Fetch-list bounds, per 5s enrich cycle. PRIORITY_CAP is ~10x the measured
+# live count of 15M tickers (14 on 2026-08-10) so it never binds in normal
+# operation; it exists to stop an unbounded fetch list if that assumption
+# ever breaks. REST_CAP is the long-standing top-by-volume limit.
+PRIORITY_CAP = 150
+REST_CAP = 200
+
+
 def _fp(val):
     """Parse a string fixed-point value like '129.45' to float."""
     try:
@@ -225,18 +233,62 @@ class Scanner:
 
         return len(dead) + len(stale)
 
+    def fetch_list(self, priority_cap: int = PRIORITY_CAP,
+                   rest_cap: int = REST_CAP) -> list[str]:
+        """Tickers to enrich this cycle: 15M markets first, then top volume.
+
+        `rest` was always capped. `priority` -- every "KX*15M*" ticker -- was
+        not, so it grew with the number of distinct 15M tickers ever seen.
+        Measured 2026-08-10: ~14 live at any moment across 8 series, rolling
+        every 15 minutes, so a 31h process accumulated on the order of a
+        thousand and issued ~12 batch fetches per 5s cycle instead of 2.
+
+        The cap is a safety net, not a routine limiter -- at 14 live it does
+        not bind. What it must never do is drop a market that is still open:
+        /api/crypto/signal reads those and losing one is a feed_down for the
+        swing bot. So open markets are exempt and the cap bounds only the
+        stale remainder, which means the returned list can exceed
+        `priority_cap` when genuinely many markets are open. That is correct;
+        an arbitrary limit must not silently blind the scanner.
+        """
+        now = time.time()
+        all_tickers = list(self._ticker_stats.keys())
+        candidates = [t for t in all_tickers if "15M" in t and t.startswith("KX")]
+        priority = candidates
+
+        if len(priority) > priority_cap:
+            def _open(t):
+                snap = self.market_snapshots.get(t)
+                # close_ts None means the batch-fetch fallback built this
+                # snapshot and we do not know yet -- prune_closed refuses to
+                # guess those dead, so neither does the cap.
+                return snap is not None and (snap.close_ts is None
+                                             or snap.close_ts > now)
+
+            open_now = [t for t in priority if _open(t)]
+            # An open market trades continuously and a rolled one stops, so
+            # recency of the last trade ranks what still matters.
+            rest_pri = sorted((t for t in priority if not _open(t)),
+                              key=lambda t: self._ticker_stats[t]["last_ts"],
+                              reverse=True)
+            priority = open_now + rest_pri[:max(0, priority_cap - len(open_now))]
+
+        # Exclude every 15M CANDIDATE from `rest`, not just the ones kept.
+        # Excluding only the kept set would let capped-out tickers fall
+        # straight back in through the volume ranking, and the cap would
+        # bound nothing.
+        excluded = set(candidates)
+        rest = sorted(
+            [t for t in all_tickers if t not in excluded],
+            key=lambda t: self._ticker_stats[t]["volume"],
+            reverse=True,
+        )[:rest_cap]
+        return priority + rest
+
     def enrich_markets(self):
         """Fetch market metadata for tickers we've seen in trades."""
         self.prune_closed()
-        all_tickers = list(self._ticker_stats.keys())
-        # Always include crypto 15m tickers so whale data loads immediately at market open
-        priority = {t for t in all_tickers if "15M" in t and t.startswith("KX")}
-        rest = sorted(
-            [t for t in all_tickers if t not in priority],
-            key=lambda t: self._ticker_stats[t]["volume"],
-            reverse=True,
-        )[:200]
-        active_tickers = list(priority) + rest
+        active_tickers = self.fetch_list()
 
         # Batch fetch in groups of 100 (API limit for tickers param)
         for i in range(0, len(active_tickers), 100):
