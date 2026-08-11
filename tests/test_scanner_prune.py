@@ -84,6 +84,20 @@ def test_forgets_stats_for_tickers_that_never_had_a_snapshot():
     assert "KXBTC15M-GHOST" not in s._ticker_stats
 
 
+def test_default_call_signature_expires_stale_stats():
+    """enrich_markets calls `self.prune_closed()` with NO arguments.
+
+    Every other test here passes stats_ttl_s explicitly, so all of them
+    would keep passing if the default were changed back to infinity or the
+    stats branch were made opt-in — while production leaked again. This is
+    the only test that exercises the call production actually makes.
+    """
+    s = _scanner()
+    _add_stats_only(s, "KXNOSNAP-STALE", -7200)      # 2h since its last trade
+    s.prune_closed()
+    assert "KXNOSNAP-STALE" not in s._ticker_stats
+
+
 def test_keeps_stats_for_recently_traded_tickers():
     """A live market that simply has no snapshot yet must survive, or the
     scanner would forget the market it is about to enrich."""
