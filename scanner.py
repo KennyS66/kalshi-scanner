@@ -169,7 +169,7 @@ class Scanner:
         return new_whales, new_trade_count
 
     def prune_closed(self, grace_s: float = 900.0,
-                     stats_ttl_s: float = 7200.0) -> int:
+                     stats_ttl_s: float = 3600.0) -> int:
         """Forget markets that closed more than `grace_s` ago, and trade stats
         for tickers not seen in `stats_ttl_s`. Returns the count forgotten.
 
@@ -203,6 +203,17 @@ class Scanner:
         # which can only see tickers that have a snapshot -- never reaches
         # them. They were immortal: 2669 stats against 288 snapshots on
         # 2026-08-10, each one an uncapped API fetch every 5s cycle.
+        #
+        # Measured arrival rate on 2026-08-10: ~42,600 new stats entries per
+        # HOUR, because every Kalshi market that prints a trade lands here
+        # while only crypto 15M tickers and the top 200 by volume ever get
+        # enriched into a snapshot. Over the 31h run that reached 1858MB that
+        # is ~1.3M immortal dicts. stats_ttl_s bounds it to roughly one hour's
+        # arrivals, and bounds `priority` in enrich_markets with it.
+        #
+        # Note this makes the "top 200 by volume" ranking a rolling 1h window
+        # rather than a lifetime accumulation -- fresher, and the only
+        # behaviour change here.
         #
         # A live snapshot always wins over trade staleness: a market that is
         # open but quiet must not be forgotten just because nobody traded it.
