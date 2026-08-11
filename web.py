@@ -512,6 +512,32 @@ def _whale_rows(limit: int = 200) -> list[dict]:
 async def api_debug_strike() -> JSONResponse:
     return JSONResponse({"_market_floor_strike": {k: v for k, v in _market_floor_strike.items()}, "inflight": list(_market_floor_strike_inflight)})
 
+@app.get("/api/debug/memory")
+async def api_debug_memory(trim: int = 0, top: int = 25) -> JSONResponse:
+    """Memory report for the scanner process. See memdiag.py for why.
+
+    `?trim=1` runs malloc_trim(0) and reports RSS either side of it — the
+    retention-vs-ratchet discriminator. It is off by default because it is
+    the one part of this endpoint that MUTATES process state (it hands free
+    heap back to the OS), and because a monitor polling it would destroy the
+    growth curve we are trying to measure.
+    """
+    import sys as _sys
+
+    import memdiag
+    ns = {"web": vars(_sys.modules[__name__])}
+    if _scanner is not None:
+        try:                                           # vars() raises on __slots__
+            ns["scanner"] = vars(_scanner)             # instance attributes
+            ns["scanner_module"] = vars(_sys.modules[type(_scanner).__module__])
+        except TypeError:
+            pass
+    report = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: memdiag.snapshot(ns, trim=bool(trim), top=top))
+    report["threads"] = threading.active_count()
+    return JSONResponse(report)
+
+
 @app.get("/api/crypto/spot")
 async def api_crypto_spot() -> JSONResponse:
     # Serve from the in-memory cache maintained by the background poller (runs every 5s).
