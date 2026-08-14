@@ -46,3 +46,65 @@ def test_empty_groups_do_not_raise():
     r = fill_quality(filled=[], unfilled=[])
     assert r["filled"]["n"] == 0 and r["unfilled"]["n"] == 0
     assert r["difference"] is None and r["adverse"] is False
+
+
+# ── swing-bot journal loader ──────────────────────────────────────────────
+
+import json as _json
+
+from fill_quality import _load_swing_events
+
+
+def _events(tmp_path, rows):
+    (tmp_path / "bot_events.jsonl").write_text(
+        "\n".join(_json.dumps(r) for r in rows))
+    return tmp_path
+
+
+def test_swing_loader_parses_the_place_reason_format(tmp_path):
+    d = _events(tmp_path, [{"ts": 1, "ticker": "T1", "action": "place",
+                            "reason": "YES x36 limit @ 0.160 (patient)"}])
+    placed, filled = _load_swing_events(d)
+    assert placed["T1"]["side"] == "YES"
+    assert placed["T1"]["limit"] == 0.160
+    assert filled == set()
+
+
+def test_swing_loader_marks_a_placement_filled_when_enter_follows(tmp_path):
+    d = _events(tmp_path, [
+        {"ts": 1, "ticker": "T1", "action": "place",
+         "reason": "NO x20 limit @ 0.470 (aggressive)"},
+        {"ts": 2, "ticker": "T1", "action": "enter", "reason": "NO x20 @ 0.47"},
+    ])
+    _, filled = _load_swing_events(d)
+    assert filled == {"T1"}
+
+
+def test_swing_loader_ignores_an_enter_that_predates_the_placement(tmp_path):
+    """A ticker can be placed, cancelled and placed again. Crediting the
+    earlier entry to the later placement would manufacture a fill."""
+    d = _events(tmp_path, [
+        {"ts": 1, "ticker": "T1", "action": "enter", "reason": "NO x20 @ 0.47"},
+        {"ts": 9, "ticker": "T1", "action": "place",
+         "reason": "NO x20 limit @ 0.470 (patient)"},
+    ])
+    _, filled = _load_swing_events(d)
+    assert filled == set()
+
+
+def test_swing_loader_honours_since_ts(tmp_path):
+    d = _events(tmp_path, [
+        {"ts": 10, "ticker": "OLD", "action": "place",
+         "reason": "YES x1 limit @ 0.100 (patient)"},
+        {"ts": 99, "ticker": "NEW", "action": "place",
+         "reason": "YES x1 limit @ 0.200 (patient)"},
+    ])
+    placed, _ = _load_swing_events(d, since_ts=50)
+    assert set(placed) == {"NEW"}
+
+
+def test_swing_loader_skips_unparseable_reasons(tmp_path):
+    d = _events(tmp_path, [{"ts": 1, "ticker": "T1", "action": "place",
+                            "reason": "flatten all"}])
+    placed, _ = _load_swing_events(d)
+    assert placed == {}

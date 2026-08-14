@@ -98,6 +98,45 @@ def _load_events(bot_dir):
     return placed, filled
 
 
+SWING_PLACE_RE = re.compile(r"(YES|NO) x\d+ limit @ ([\d.]+)")
+
+
+def _load_swing_events(bot_dir, since_ts=None):
+    """(placed, filled) from the swing bot's bot_events.jsonl.
+
+    Same question as the settle_bot loader, different journal. The swing bot
+    writes `place` when it rests a limit order and `enter` when one fills,
+    with a different reason format ("YES x36 limit @ 0.160 (patient)").
+
+    A fill only counts if its `enter` comes AFTER the `place`: the same
+    ticker can be placed, cancelled, and placed again, and crediting an
+    earlier entry to a later placement would manufacture fills.
+    """
+    placed, entered = {}, {}
+    path = Path(bot_dir) / "bot_events.jsonl"
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if since_ts is not None and e.get("ts", 0) < since_ts:
+            continue
+        t, action = e.get("ticker"), e.get("action")
+        if action == "place":
+            m = SWING_PLACE_RE.match(e.get("reason", ""))
+            if m:
+                placed[t] = {"ticker": t, "side": m.group(1),
+                             "limit": float(m.group(2)), "ts": e.get("ts", 0)}
+        elif action == "enter":
+            entered[t] = e.get("ts", 0)
+
+    filled = {t for t, p in placed.items()
+              if t in entered and entered[t] >= p["ts"]}
+    return placed, filled
+
+
 def _settlement(tickers):
     """Which side settled, from the sign of `distance` at each market's last
     observed tick -- the same basis trade_grader uses (99.5% agreement)."""
