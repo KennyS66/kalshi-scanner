@@ -1,0 +1,18 @@
+[Unit]
+Description=Kalshi websocket measurement rig (capture only, no trading)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kenny/bots/kalshi-scanner
+EnvironmentFile=%h/.kalshi/trading.env
+ExecStart=/home/kenny/bots/kalshi-scanner/.venv/bin/python -m wsrig.main --dir data/wsrig
+Restart=always
+RestartSec=15
+StandardOutput=append:/home/kenny/bots/kalshi-scanner/logs/wsrig.log
+StandardError=append:/home/kenny/bots/kalshi-scanner/logs/wsrig.log
+
+[Install]
+WantedBy=default.target

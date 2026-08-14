@@ -79,6 +79,20 @@ def check_age(name, age_s, limit):
             "detail": f"{age_s:.0f}s old (limit {limit:.0f}s)"}
 
 
+def check_tape_age(age_s, limit):
+    """Freshness of the wsrig capture tape.
+
+    A capture that dies mid-run leaves a partial tape that still analyses
+    cleanly and yields a confident, wrong number. Absent counts as failure.
+    """
+    if age_s is None:
+        return {"name": "age:wsrig_tape", "ok": False,
+                "detail": "no tape written"}
+    ok = age_s <= limit
+    return {"name": "age:wsrig_tape", "ok": ok,
+            "detail": f"{age_s:.0f}s old (limit {limit:.0f}s)"}
+
+
 def check_latency(samples, timeout, tolerance=LATENCY_TAIL_TOLERANCE):
     """Tail latency against the timeout its CONSUMER actually uses.
 
@@ -189,6 +203,14 @@ def collect():
     checks.append(check_age("signal_feature_log",
                             _age_of(BASE / "data/whales/signal_feature_log.jsonl"),
                             limit=600))
+    # --- ADDED: only checked once the rig is actually capturing, so this
+    # --- stays silent on boxes where wsrig was never installed.
+    tape_dir = BASE / "data/wsrig"
+    tapes = sorted(tape_dir.glob("tape-*.jsonl.gz")) if tape_dir.exists() else []
+    if tapes:
+        checks.append(check_tape_age(time.time() - tapes[-1].stat().st_mtime,
+                                     limit=600))
+    # --- END ADDED
     checks.append(check_latency(_sample_latency(), FETCH_TIMEOUT))
     checks.append(check_footprint(*_scanner_footprint()))
     return checks

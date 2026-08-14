@@ -71,3 +71,19 @@ def test_footprint_reports_unknown_without_failing_the_stack():
     from health_check import check_footprint
     r = check_footprint(rss_mb=None, cpu_pct=None)
     assert r["ok"] is True and "unknown" in r["detail"].lower()
+
+
+def test_tape_age_fails_when_the_rig_stops_writing():
+    """A dead rig mid-capture yields a partial tape nobody notices for days."""
+    from health_check import check_tape_age
+    assert check_tape_age(4000.0, limit=600.0)["ok"] is False
+
+
+def test_tape_age_passes_when_fresh():
+    from health_check import check_tape_age
+    assert check_tape_age(30.0, limit=600.0)["ok"] is True
+
+
+def test_tape_age_absent_is_a_failure_not_a_pass():
+    from health_check import check_tape_age
+    assert check_tape_age(None, limit=600.0)["ok"] is False
