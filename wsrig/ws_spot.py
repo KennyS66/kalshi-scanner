@@ -13,13 +13,15 @@ import json
 import logging
 
 import websockets
-import websockets.exceptions
+
+from wsrig.tape import safe_write
 
 log = logging.getLogger("wsrig.spot")
 
 URL = "wss://ws-feed.exchange.coinbase.com"
 RECONNECT_DELAY_S = 2.0
 MAX_RECONNECT_DELAY_S = 60.0
+MAX_CONSECUTIVE_FAILURES = 10       # see ws_kalshi: past this, exit for the supervisor
 
 
 def parse_ticker(msg: dict) -> dict | None:
@@ -47,6 +49,7 @@ def parse_ticker(msg: dict) -> dict | None:
 
 async def run_spot_feed(tape, symbols: list[str], stop: asyncio.Event) -> None:
     delay = RECONNECT_DELAY_S
+    failures = 0
     while not stop.is_set():
         try:
             async with websockets.connect(URL, open_timeout=15, ping_interval=20) as ws:
@@ -55,6 +58,7 @@ async def run_spot_feed(tape, symbols: list[str], stop: asyncio.Event) -> None:
                                           "channels": ["ticker"]}))
                 log.info("spot feed connected: %s", symbols)
                 delay = RECONNECT_DELAY_S
+                failures = 0
                 async for raw in ws:
                     if stop.is_set():
                         break
@@ -67,10 +71,22 @@ async def run_spot_feed(tape, symbols: list[str], stop: asyncio.Event) -> None:
                         tape.write(rec)
         except asyncio.CancelledError:
             break
-        except (websockets.exceptions.WebSocketException, OSError, asyncio.TimeoutError) as exc:
+        except Exception as exc:              # noqa: BLE001 — deliberate catch-all
+            # An unanticipated exception type (EOFError from the socket layer, a
+            # parse bug) must not end the capture silently; back off and redial.
             if stop.is_set():
                 break
-            log.warning("spot feed dropped: %s — reconnect in %.1fs", exc, delay)
-            tape.write({"k": "feed_drop", "src": "spot", "err": str(exc)[:200]})
+            failures += 1
+            log.warning("spot feed error #%d (%s): %s — reconnect in %.1fs",
+                        failures, type(exc).__name__, exc, delay)
+            safe_write(tape, {"k": "feed_drop", "src": "spot",
+                              "etype": type(exc).__name__, "err": str(exc)[:200]})
+            if failures >= MAX_CONSECUTIVE_FAILURES:
+                log.error("spot feed failed %d times running (%s: %s) — exiting so "
+                          "the supervisor can recycle the process",
+                          failures, type(exc).__name__, exc)
+                safe_write(tape, {"k": "feed_error", "src": "spot", "fatal": True,
+                                  "etype": type(exc).__name__, "err": str(exc)[:200]})
+                return
             await asyncio.sleep(delay)
             delay = min(delay * 2, MAX_RECONNECT_DELAY_S)

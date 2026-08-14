@@ -14,11 +14,28 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import time
 from collections.abc import Iterator
 from pathlib import Path
 
+log = logging.getLogger("wsrig.tape")
+
 FLUSH_EVERY = 200          # records; bounds loss on a hard kill
+
+
+def safe_write(tape, rec: dict) -> None:
+    """Write a record from inside an error handler, without raising a new error.
+
+    A tape write fails (disk full, bad fd) exactly when a feed is already in
+    trouble — and an OSError raised from inside an `except` block escapes the
+    handler and kills the feed task outright. Losing one diagnostic record is
+    always cheaper than losing the feed.
+    """
+    try:
+        tape.write(rec)
+    except Exception:                      # noqa: BLE001 — nothing may escape here
+        log.exception("tape write failed for a %r record", rec.get("k"))
 
 
 class Tape:
