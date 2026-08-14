@@ -47,8 +47,8 @@ async def run_tracker(api, on_change, stop: asyncio.Event,
             tickers = active_btc15m(data.get("markets", []), time.time())
             if tickers != current:
                 log.info("active markets: %s -> %s", current, tickers)
-                current = tickers
                 await on_change(tickers)
+                current = tickers
         except Exception as exc:                      # never kill the capture
             log.warning("tracker poll failed: %s", exc)
         try:
