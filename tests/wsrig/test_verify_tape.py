@@ -36,6 +36,15 @@ def test_detects_a_spot_feed_silence_gap():
     assert _named(verify(recs), "spot_continuity")["ok"] is False
 
 
+def test_detects_degraded_spot_feed_rate():
+    """A feed can degrade without hitting a 120s gap. Verify() must catch the rate shortfall."""
+    # 100 ticks spaced 10 seconds apart = span of 990s, rate ≈ 0.101/s
+    # This is well below expected 1.0/s, but has no individual gap > 120s
+    recs = [_spot(t * 10) for t in range(0, 100)]
+    c = _named(verify(recs, expected_spot_rate_hz=1.0), "spot_continuity")
+    assert c["ok"] is False and "RATE SHORTFALL" in c["detail"]
+
+
 def test_reports_sequence_gap_records():
     recs = [_spot(0), {"k": "gap", "tm": 1.0, "sid": 1, "expected": 5, "got": 9}, _spot(2)]
     c = _named(verify(recs), "sequence_gaps")

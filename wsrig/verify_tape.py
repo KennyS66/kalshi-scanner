@@ -52,10 +52,20 @@ def verify(records: list[dict], expected_spot_rate_hz: float = 1.0) -> dict:
         gaps = [(b - a) for a, b in zip(spot, spot[1:]) if b - a > MAX_SPOT_SILENCE_S]
         span_h = (spot[-1] - spot[0]) / 3600.0
         rate = len(spot) / max(spot[-1] - spot[0], 1e-9)
-        checks.append(_check("spot_continuity", not gaps,
-                             f"{len(gaps)} silences >{MAX_SPOT_SILENCE_S:.0f}s "
-                             f"over {span_h:.1f}h; rate {rate:.2f}/s "
-                             f"(expected ~{expected_spot_rate_hz:.2f}/s)"))
+
+        # Check both gap condition and rate condition
+        min_acceptable_rate = expected_spot_rate_hz * 0.9  # 10% tolerance
+        rate_ok = rate >= min_acceptable_rate
+        gaps_ok = not gaps
+        ok = rate_ok and gaps_ok
+
+        detail = (f"{len(gaps)} silences >{MAX_SPOT_SILENCE_S:.0f}s "
+                  f"over {span_h:.1f}h; rate {rate:.2f}/s "
+                  f"(expected ~{expected_spot_rate_hz:.2f}/s)")
+        if not rate_ok:
+            detail += f"; RATE SHORTFALL: {rate:.3f}/s < {min_acceptable_rate:.3f}/s threshold"
+
+        checks.append(_check("spot_continuity", ok, detail))
 
     gapsr = [r for r in records if r.get("k") == "gap"]
     by_sid = defaultdict(int)
