@@ -54,6 +54,15 @@ class MarketSnapshot:
 PRIORITY_CAP = 150
 REST_CAP = 200
 
+# whale_alerts bounds. The 4h window is long-standing; the count cap is the
+# backstop it never had -- it reached 665,889 alerts on 2026-08-11, 90% of
+# all live objects in the process. 150k holds ~54min at the observed burst
+# rate (~166k/hour), which is >5 half-lives of the 10-minute EWMA that
+# consumes it, so the decayed signals are unaffected. Worst case ~60MB on a
+# 31GB box. A quiet evening sits near 18k, so it does not bind normally.
+WHALE_WINDOW_S = 4 * 3600
+MAX_WHALE_ALERTS = 150_000
+
 
 def _fp(val):
     """Parse a string fixed-point value like '129.45' to float."""
@@ -160,12 +169,7 @@ class Scanner:
                 break
 
         self.last_trade_ts = scan_start_ts
-        # Merge new alerts and prune anything older than 4 hours
-        _whale_cutoff = time.time() - 4 * 3600
-        self.whale_alerts = [
-            a for a in (new_whales + self.whale_alerts)
-            if a.timestamp and a.timestamp.timestamp() >= _whale_cutoff
-        ]
+        self.whale_alerts = self._merge_whale_alerts(new_whales)
 
         # Prune seen IDs older than 24 hours
         _id_cutoff = now_ts - 86400
@@ -175,6 +179,32 @@ class Scanner:
         }
 
         return new_whales, new_trade_count
+
+    def _merge_whale_alerts(self, new_whales, now: float | None = None,
+                            window_s: float = WHALE_WINDOW_S,
+                            max_alerts: int | None = None):
+        """Newest-first, aged out past `window_s`, then capped by count.
+
+        The count cap is the part that was missing. A 4-hour window alone
+        let this reach 665,889 alerts on 2026-08-11 -- 90% of every live
+        Python object in the process, at RSS 1553MB against a fresh 86MB.
+        It is also rescanned in full, per ticker, per cycle, by
+        `_ewma_whale_flow` (alpha.py) and the flow block in web.py.
+
+        Order matters as much as the bound: `new_whales` goes first, so the
+        list stays newest-first, and the cap therefore drops the OLDEST.
+        Every consumer takes the head (`rows[:80]`, `[:200]`, `[:50]`,
+        `[:limit]`) and every analytical one decays at a 8-10 minute half
+        life, so capping the other end would satisfy the bound while
+        quietly destroying the signals.
+        """
+        now = time.time() if now is None else now
+        if max_alerts is None:
+            max_alerts = MAX_WHALE_ALERTS
+        cutoff = now - window_s
+        merged = [a for a in (list(new_whales) + self.whale_alerts)
+                  if a.timestamp and a.timestamp.timestamp() >= cutoff]
+        return merged[:max_alerts]
 
     def prune_closed(self, grace_s: float = 900.0,
                      stats_ttl_s: float = 3600.0) -> int:
