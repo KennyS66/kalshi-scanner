@@ -213,11 +213,108 @@ def read_tape(dir: Path) -> Iterator[dict]:
 Run: `.venv/bin/python -m pytest tests/wsrig/test_tape.py -v`
 Expected: 7 passed
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Add credential resolution**
+
+`wsrig/ws_kalshi.py` and `wsrig/main.py` both need Kalshi credentials. The
+variable in `~/.kalshi/trading.env` is `KALSHI_API_KEY_ID`, NOT
+`KALSHI_API_KEY` — `start.sh:31` accepts either. Getting this wrong yields
+empty auth headers and a WS that fails to connect, which would be discovered
+only after a wasted capture.
+
+```python
+# wsrig/creds.py
+"""Kalshi credentials, resolved the same way start.sh does.
+
+start.sh:31 reads `${KALSHI_API_KEY:-${KALSHI_API_KEY_ID:-}}`. The name in
+~/.kalshi/trading.env is KALSHI_API_KEY_ID; reading only KALSHI_API_KEY finds
+nothing and signs with empty headers.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+ENV_FILE = Path.home() / ".kalshi" / "trading.env"
+
+
+def _from_env_file() -> dict:
+    out = {}
+    if not ENV_FILE.exists():
+        return out
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def load_creds() -> tuple[str | None, str | None]:
+    """(api_key_id, private_key_path). Process env wins over the file."""
+    f = _from_env_file()
+    key_id = (os.environ.get("KALSHI_API_KEY")
+              or os.environ.get("KALSHI_API_KEY_ID")
+              or f.get("KALSHI_API_KEY") or f.get("KALSHI_API_KEY_ID"))
+    key_path = (os.environ.get("KALSHI_PRIVATE_KEY_PATH")
+                or f.get("KALSHI_PRIVATE_KEY_PATH"))
+    return key_id or None, key_path or None
+```
+
+Add to `tests/wsrig/test_tape.py` a companion file `tests/wsrig/test_creds.py`:
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+import wsrig.creds as creds
+
+
+def test_prefers_the_id_suffixed_name_from_the_env_file(tmp_path, monkeypatch):
+    f = tmp_path / "trading.env"
+    f.write_text("KALSHI_API_KEY_ID=abc123\nKALSHI_PRIVATE_KEY_PATH=/k.pem\n")
+    monkeypatch.setattr(creds, "ENV_FILE", f)
+    monkeypatch.delenv("KALSHI_API_KEY", raising=False)
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    assert creds.load_creds() == ("abc123", "/k.pem")
+
+
+def test_process_env_wins_over_the_file(tmp_path, monkeypatch):
+    f = tmp_path / "trading.env"
+    f.write_text("KALSHI_API_KEY_ID=fromfile\n")
+    monkeypatch.setattr(creds, "ENV_FILE", f)
+    monkeypatch.setenv("KALSHI_API_KEY", "fromenv")
+    assert creds.load_creds()[0] == "fromenv"
+
+
+def test_missing_file_yields_none_not_empty_string(tmp_path, monkeypatch):
+    """Empty string would sign a request with a blank key and fail obscurely."""
+    monkeypatch.setattr(creds, "ENV_FILE", tmp_path / "nope.env")
+    monkeypatch.delenv("KALSHI_API_KEY", raising=False)
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    assert creds.load_creds() == (None, None)
+
+
+def test_strips_quotes_and_comments(tmp_path, monkeypatch):
+    f = tmp_path / "trading.env"
+    f.write_text('# comment\nKALSHI_API_KEY_ID="quoted"\n\n')
+    monkeypatch.setattr(creds, "ENV_FILE", f)
+    monkeypatch.delenv("KALSHI_API_KEY", raising=False)
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    assert creds.load_creds()[0] == "quoted"
+```
+
+Run: `.venv/bin/python -m pytest tests/wsrig/test_creds.py -v` — expected 4 passed.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add wsrig/__init__.py wsrig/tape.py tests/wsrig/test_tape.py
-git commit -m "wsrig: hourly-rotated gzipped tape with three clocks per record"
+git add wsrig/__init__.py wsrig/tape.py wsrig/creds.py tests/wsrig/test_tape.py tests/wsrig/test_creds.py
+git commit -m "wsrig: hourly-rotated gzipped tape with three clocks, plus credential resolution"
 ```
 
 ---
@@ -744,9 +841,15 @@ SILENCE_MAX_S = 30.0        # Kalshi is quiet between trades; watchdog only on h
 
 def _auth_headers() -> dict:
     """Same RSA-PSS scheme as the REST client — reuse it rather than re-derive."""
-    api = KalshiAPI(api_key=os.environ.get("KALSHI_API_KEY"),
-                    private_key_path=os.environ.get("KALSHI_PRIVATE_KEY_PATH"))
-    return api._sign_request("GET", WS_PATH)
+    from wsrig.creds import load_creds
+    key_id, key_path = load_creds()
+    api = KalshiAPI(api_key=key_id, private_key_path=key_path)
+    headers = api._sign_request("GET", WS_PATH)
+    if not headers:
+        raise RuntimeError(
+            "Kalshi WS auth headers are empty — check ~/.kalshi/trading.env. "
+            "Connecting unauthenticated would fail silently and cost the capture.")
+    return headers
 
 
 async def run_kalshi_feed(tape, subscribe_q: asyncio.Queue, stop: asyncio.Event) -> None:
@@ -1200,8 +1303,9 @@ async def amain(dir: str) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
 
-    api = KalshiAPI(api_key=os.environ.get("KALSHI_API_KEY"),
-                    private_key_path=os.environ.get("KALSHI_PRIVATE_KEY_PATH"))
+    from wsrig.creds import load_creds
+    key_id, key_path = load_creds()
+    api = KalshiAPI(api_key=key_id, private_key_path=key_path)
     active: set[str] = set()
     pending: set[str] = set()
     subscribe_q: asyncio.Queue = asyncio.Queue(maxsize=64)
@@ -1296,6 +1400,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=/home/kenny/bots/kalshi-scanner
+EnvironmentFile=%h/.kalshi/trading.env
 ExecStart=/home/kenny/bots/kalshi-scanner/.venv/bin/python -m wsrig.main --dir data/wsrig
 Restart=always
 RestartSec=15
