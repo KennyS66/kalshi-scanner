@@ -131,6 +131,11 @@ def parse_book(msg: dict) -> dict | None:
     meant ~685 orderbook deltas per second were taped as quotes with None
     prices, which would have made verify_tape's book_coverage and
     settlement_coverage meaningless. Each type now keeps its own record kind.
+
+    `book` records also carry `lpx` (last trade price) and `ybsz`/`yasz` (size
+    resting at the top-of-book yes bid/ask) — see the comment above their
+    assignment for why they're taped and what they do and don't imply about
+    the no side.
     """
     mtype = msg.get("type")
     if mtype not in BOOK_TYPES:
@@ -174,7 +179,28 @@ def parse_book(msg: dict) -> dict | None:
         # a derived number must never be mistaken for an observed quote.
         nb, na = _complement(ya), _complement(yb)
         derived = nb is not None or na is not None
+
+    # `price_dollars` (last trade) and the two top-of-book sizes are free on
+    # every ticker message and become permanently unrecoverable the moment a
+    # week-long capture runs without them: the rig's acceptance bar is stated
+    # for 1-contract sizing, and `yasz` is exactly the evidence that a
+    # 1-contract fill was actually available at `ya`. `_num` (not `_price`) is
+    # correct here — the sizes are contract quantities, never dollars, so
+    # routing them through the cents/100 path would corrupt them; `lpx` is
+    # dollar-denominated like the other prices and gets the same conversion
+    # they do.
+    #
+    # There is no `no_bid_size`/`no_ask_size` field on this channel. By the
+    # same resting-order identity used for nb/na above, the size resting at
+    # the NO ask equals `ybsz` and the size resting at the NO bid equals
+    # `yasz` (same orders, opposite side) — but that is not stored as a
+    # separate field: a manufactured "no-side size" could be misread as
+    # independently observed when it is the same number already in ybsz/yasz.
+    lpx = _num(body.get("price_dollars"))
+    ybsz = _num(body.get("yes_bid_size_fp"))
+    yasz = _num(body.get("yes_ask_size_fp"))
     return {**base, "k": "book", "yb": yb, "ya": ya, "nb": nb, "na": na,
+            "lpx": lpx, "ybsz": ybsz, "yasz": yasz,
             "schema": _schema(body), "no_side_derived": derived}
 
 

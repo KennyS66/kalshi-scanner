@@ -127,6 +127,37 @@ def test_a_malformed_price_string_yields_none_instead_of_killing_the_feed():
     assert r["schema"] == "dollars"
 
 
+def test_top_of_book_size_and_last_trade_price_are_preserved():
+    """`yes_bid_size_fp`/`yes_ask_size_fp` are exactly the evidence that a
+    1-contract fill was available at the quoted ask -- the rig's whole
+    acceptance bar is stated for 1-contract sizing. Free in every ticker
+    message and permanently unrecoverable once a week-long capture runs
+    without them, so parse_book must not discard them."""
+    r = parse_book(REAL_TICKER)
+    assert r["lpx"] == 0.9030
+    assert r["ybsz"] == 19.39
+    assert r["yasz"] == 45.01
+
+
+def test_top_of_book_sizes_are_quantities_not_dollars_and_get_no_conversion():
+    """`*_size_fp` are contract counts, not a dollar-denominated field --
+    running them through the /100 cents path would silently corrupt them."""
+    r = parse_book({"type": "ticker", "sid": 1,
+                    "msg": {"market_ticker": "KXBTC15M-A",
+                            "yes_bid_size_fp": "1234.56",
+                            "yes_ask_size_fp": "7.00"}})
+    assert r["ybsz"] == 1234.56
+    assert r["yasz"] == 7.0
+
+
+def test_a_malformed_size_or_last_price_yields_none_instead_of_killing_the_feed():
+    r = parse_book({"type": "ticker", "sid": 1,
+                    "msg": {"market_ticker": "KXBTC15M-A",
+                            "price_dollars": "n/a", "yes_bid_size_fp": "",
+                            "yes_ask_size_fp": "also-bad"}})
+    assert r["lpx"] is None and r["ybsz"] is None and r["yasz"] is None
+
+
 # ------------------------------------------------------------- exchange clock
 
 def test_the_exchange_timestamp_comes_from_ts_ms_in_epoch_seconds():
