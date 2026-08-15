@@ -64,13 +64,30 @@ class KalshiAPI:
 
     # ── Public endpoints ──────────────────────────────────────────────
 
-    def get_markets(self, status="open", limit=200, cursor=None, event_ticker=None):
-        """Fetch markets with optional filters."""
+    def get_markets(self, status="open", limit=200, cursor=None, event_ticker=None,
+                    series_ticker=None, min_close_ts=None, max_close_ts=None):
+        """Fetch markets with optional filters.
+
+        The trailing three are additive and off by default; existing callers are
+        unaffected. They exist because some series (KXBTC15M) never appear in the
+        unfiltered listing at all, and because that listing is close_time
+        DESCENDING — narrowing server-side beats paging to find "now".
+
+        Passing `status=None` sends no status filter, which is the only way to
+        see not-yet-open markets alongside the trading one: `status="open"`
+        matches only the latter, and the API refuses more than one status value.
+        """
         params = {"limit": limit, "status": status}
         if cursor:
             params["cursor"] = cursor
         if event_ticker:
             params["event_ticker"] = event_ticker
+        if series_ticker:
+            params["series_ticker"] = series_ticker
+        if min_close_ts is not None:            # 0 is a valid epoch bound
+            params["min_close_ts"] = min_close_ts
+        if max_close_ts is not None:
+            params["max_close_ts"] = max_close_ts
         return self._get("/markets", params=params)
 
     def get_all_open_markets(self, max_pages=10):
