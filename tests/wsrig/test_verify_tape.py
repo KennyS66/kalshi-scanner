@@ -48,6 +48,30 @@ def test_detects_degraded_spot_feed_rate():
     assert c["ok"] is False and "RATE SHORTFALL" in c["detail"]
 
 
+# The Coinbase BTC-USD ticker channel was measured at 1.58 msg/s over a 45s
+# live capture on 2026-08-15, during a quiet stretch.
+MEASURED_SPOT_RATE_HZ = 1.58
+
+
+def test_the_real_measured_spot_rate_passes_with_the_shipped_default():
+    """The default used to be 2.0/s with a 0.9 tolerance — an effective floor of
+    1.8/s, above the rate the feed actually runs at. Every verify() on a
+    perfectly healthy tape would have reported NOT TRUSTWORTHY, which is worse
+    than no check at all: it teaches you to ignore the one alarm that matters."""
+    step = 1.0 / MEASURED_SPOT_RATE_HZ
+    recs = [_spot(i * step) for i in range(int(3600 * MEASURED_SPOT_RATE_HZ))]
+    c = _named(verify(recs), "spot_continuity")
+    assert c["ok"] is True, c["detail"]
+
+
+def test_the_default_rate_floor_still_catches_a_catastrophically_dead_feed():
+    """The floor exists for "the feed died or is 10x down", not to police the
+    normal variation that tracks BTC trading activity."""
+    recs = [_spot(i * 20.0) for i in range(180)]        # 0.05/s, no >120s gap
+    c = _named(verify(recs), "spot_continuity")
+    assert c["ok"] is False and "RATE SHORTFALL" in c["detail"]
+
+
 def test_reports_sequence_gap_records():
     recs = [_spot(0), {"k": "gap", "tm": 1.0, "sid": 1, "expected": 5, "got": 9}, _spot(2)]
     c = _named(verify(recs), "sequence_gaps")
@@ -145,7 +169,10 @@ def test_the_cli_passes_the_expected_rate_through(monkeypatch):
     assert seen["rate"] == 7.5
 
 
-def test_the_cli_default_rate_is_not_the_placeholder_one_per_second(monkeypatch):
+def test_the_cli_passes_the_module_default_rate_through(monkeypatch):
+    """The rate check was inert once because the CLI never forwarded the value.
+    (This assertion used to also require the default be >1.0/s, which encoded
+    the guess that got the floor set above the feed's real rate.)"""
     seen = {}
 
     def fake_verify(records, expected_spot_rate_hz=None):
@@ -157,4 +184,10 @@ def test_the_cli_default_rate_is_not_the_placeholder_one_per_second(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["verify_tape"])
     with pytest.raises(SystemExit):
         vt.main()
-    assert seen["rate"] == vt.DEFAULT_SPOT_RATE_HZ > 1.0
+    assert seen["rate"] == vt.DEFAULT_SPOT_RATE_HZ
+
+
+def test_the_default_floor_sits_below_the_rate_the_feed_was_measured_at():
+    """Pins the relationship, not the number: whatever the floor is retuned to,
+    it must stay under the observed 1.58/s or verify() false-alarms again."""
+    assert vt.DEFAULT_SPOT_RATE_HZ * 0.9 < MEASURED_SPOT_RATE_HZ

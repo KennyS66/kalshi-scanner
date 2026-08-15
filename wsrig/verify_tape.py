@@ -16,10 +16,17 @@ from wsrig.tape import read_tape
 MAX_SPOT_SILENCE_S = 120.0     # BTC never goes 2 minutes without a trade
 MAX_CLOCK_DRIFT_S = 2.0        # |Δwall − Δmono| tolerated across the capture
 
-# Placeholder. Coinbase's ticker channel prints on every match, which for BTC-USD
-# is comfortably more than 1/s — 1.0 was low enough to pass a badly degraded
-# feed. Retune this to the rate Task 8's smoke capture actually measures.
-DEFAULT_SPOT_RATE_HZ = 2.0
+# A catastrophic-failure floor, NOT a target rate. Coinbase's BTC-USD ticker
+# channel was measured at 1.58 msg/s over a live 45s capture on 2026-08-15,
+# during a quiet stretch — the previous 2.0 default, with the 10% tolerance
+# below, put the floor at 1.8/s and so failed a perfectly healthy feed on every
+# single run. A check that cries wolf every time is worse than no check.
+#
+# The tick rate tracks BTC trading activity, so normal variation is large. This
+# is set well under the measured rate deliberately: it should fire when the feed
+# is dead or an order of magnitude down, and never for ordinary quiet. Re-derive
+# it from the first real multi-day capture.
+DEFAULT_SPOT_RATE_HZ = 0.5
 
 # Records the rig writes when a feed is in trouble. They exist to be counted
 # here; a tape full of reconnects is not a tape to draw a conclusion from.
