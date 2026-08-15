@@ -190,3 +190,139 @@ passive collection.
 2. Actual message rate per market, to size rotation.
 3. Does the WS spot price series match the REST `price` field the original
    study used, or is it a different field (last trade vs mid)?
+
+## Phase 0 results — 2026-08-15 ~04:05-04:12 UTC
+
+Answered by two read-only probes (a REST schema probe and a 75-second
+authenticated WS capture on `KXBTC15M-26AUG150015-15`), *before* any long
+capture was committed. This is the outcome Phase 0 was designed to produce:
+**every live-API assumption baked into the plan's reference code was wrong**,
+and the tests could not have caught any of them — the suite was 464/464 green
+while four separate components would have silently captured nothing.
+
+### The four broken assumptions (REST, all verified live)
+
+| Assumed | Actual | Consequence if unfixed |
+|---|---|---|
+| `market["close_ts"]` (epoch int) | field does not exist; it is **`close_time`**, ISO8601 (`"2026-08-15T07:30:00Z"`) | `active_btc15m` returns `[]` forever — tracker completely dead |
+| settled state is `status == "settled"` | it is **`"finalized"`** (`result: "yes"`, plus `expiration_value` as the settlement price; no `settled_time`) | `settle_record` never matches — zero settlements captured, `pending` grows forever |
+| `get_markets(status="open", limit=200)` finds the series | **never returns KXBTC15M** — 0 hits across ~12,000 open markets, 12 pages. Requires the **`series_ticker`** parameter | tracker subscribes to nothing |
+| prices are cent-denominated ints (`yes_bid`) | **`yes_bid_dollars` etc., dollar-denominated STRINGS** (`"0.9030"`) | `parse_book` yields `None` for every price; the `/100` would also be 100x wrong |
+
+Also note the status vocabulary is **two vocabularies**: the query parameter
+`status=open` is a filter keyword, while the returned object's own `status`
+field reads `"active"`. Future markets are `"initialized"`; settled ones are
+`"finalized"`. Do not compare a query keyword against an object field.
+
+### Q1 — does `ticker` carry both asks? **NO. The gate fails.**
+
+The `ticker` channel body carries **only the yes side**:
+`price_dollars, yes_bid_dollars, yes_ask_dollars, yes_bid_size_fp,
+yes_ask_size_fp, volume_fp, open_interest_fp, dollar_volume,
+dollar_open_interest, last_trade_size_fp, ts, ts_ms, time, market_ticker,
+market_id`. There is no `no_bid`/`no_ask` field of any spelling.
+
+The plan's gate said: *"if both asks present is under 100%, the `ticker`
+channel is insufficient and `orderbook_delta` must be reconstructed into
+top-of-book."* It is 0%. **However, full book reconstruction is probably not
+required**, because for a Kalshi binary the two sides are one book:
+
+    no_ask = 1 - yes_bid        no_bid = 1 - yes_ask
+
+(a resting YES bid at 0.90 *is* a NO offer at 0.10). Sample check:
+yes_bid 0.9030 / yes_ask 0.9060 → no_bid 0.0940 / no_ask 0.0970, spread
+preserved. Derived prices must be **labelled as derived**, never presented as
+observed quotes. `orderbook_snapshot` carries genuine two-sided depth
+(`yes_dollars_fp` and `no_dollars_fp`, each a list of `[price, size]`) and can
+validate the identity at analysis time.
+
+### Q2 — message rate: **~15x the spec's estimate, and 99.85% of it is depth**
+
+Measured on one market, 4 minutes before its close (likely near peak activity):
+
+| | rate | 7-day projection |
+|---|---|---|
+| all channels | **685.8 msg/s** | ~415M records, **~15 GB gzipped** |
+| `orderbook_delta` alone | 684.7 msg/s (99.85%) | — |
+| `ticker` alone | **0.99 msg/s** | ~0.6M records, **~27 MB gzipped** |
+
+The spec's "roughly 1 GB/week" and "depth is cheap at 1-2 markets" are both
+falsified — depth is the entire cost. Disk is not the binding constraint
+(834 GB free), but 415M records materialised in memory is: `verify_tape` and
+the Task 10 analysis both load the tape, and a 15 GB tape is not loadable that
+way on this box (the scanner has an RSS-ratchet history on the same machine).
+
+**Open design decision — must be settled before the long capture:**
+1. *ticker-only* (~27 MB/week): sufficient for Arm A via the identity above,
+   and the acceptance bar is explicitly 1-contract sizing only, which needs no
+   depth. Cheapest and safest.
+2. *ticker + periodic `orderbook_snapshot`*: adds occasional real depth for a
+   possible Phase 2 without the delta firehose.
+3. *everything* (~15 GB/week): only justified if Phase 2 depth modelling is
+   already committed — and it is not; Phase 2 requires this measurement to
+   pass first.
+
+### Other WS facts confirmed
+
+- Host `wss://api.elections.kalshi.com/trade-api/ws/v2` **works**; the plan's
+  URL and the RSA-PSS `_auth_headers` signing path are both correct.
+- One `subscribe` naming two channels allocates **two sids** (ticker→1,
+  orderbook_delta→2), each with its own `seq` run. Per-sid `SeqTracker` is
+  correct. A gap record's `sid` therefore identifies a *channel*, not a market.
+- **`ts` has different types on different channels**: int epoch *seconds* on
+  `ticker` (`1786767099`), but an ISO8601 *string* on `orderbook_delta`
+  (`"2026-08-15T04:11:38.535397Z"`). Writing `body["ts"]` straight to the tape
+  mixes int and str in one column. **`ts_ms` is a consistent int-millis on
+  both** and is the field to use.
+- `orderbook_delta` carries no bid/ask at all — it is a per-level
+  `(price_dollars, side, delta_fp)` mutation, meaningless without book state.
+
+### Q3 — Coinbase WS vs REST spot series: **YES, they are the same series**
+
+Probed 2026-08-15 ~04:16 UTC, 45s WS capture against REST before and after:
+
+    REST /products/BTC-USD/ticker  price = 63035.04
+    WS   ticker channel            price = 63035.04     |diff| = 0.00
+
+The WS `ticker` message carries `price` plus `best_bid`/`best_ask` separately,
+and its `price` field tracks REST `price` exactly — both are **last trade**
+(the sample shows `price == best_bid` with `"side":"sell"`, i.e. a sell that
+hit the bid). The momentum study's series is therefore reproducible from the
+WS feed with no transformation. Caveat: at the observed $0.01 spread, last and
+mid are indistinguishable, so this sample cannot separate *those* two — it
+does not need to, since WS and REST agree exactly.
+
+**Measured spot feed characteristics** (these feed directly into the decay
+analysis, which is a latency measurement):
+
+| | measured |
+|---|---|
+| ticker rate | **1.58 msg/s** (~0.95M records / 7 days) |
+| feed lag `local_recv - exchange_ts` | **p50 39 ms, p95 409 ms** |
+
+The p50 lag of 39 ms is comfortably inside the δ=1s primary endpoint. The p95
+of 409 ms is not negligible relative to the δ=250 ms and δ=500 ms descriptive
+points — those two columns will be partly measuring Coinbase's own delivery
+jitter rather than action latency, and should be read with that in mind.
+
+**This measurement invalidates a default in the current code:** `verify_tape`'s
+`DEFAULT_SPOT_RATE_HZ` was set to 2.0 with a 0.9 tolerance, i.e. a floor of
+1.8/s — but the real rate is **1.58/s**, so a perfectly healthy tape would be
+reported NOT TRUSTWORTHY. The rate check exists to catch catastrophic
+degradation (a dead or 10x-degraded feed), not to police normal variation, so
+the floor belongs well below the observed rate — on the order of 0.5/s — and
+the observed rate should be re-derived from the first real capture rather than
+guessed.
+
+Combined ticker-only volume (Kalshi ~0.6M + spot ~0.95M ≈ **1.5M records /
+week**) confirms option 1 in the Q2 decision is essentially free.
+
+### Lookahead (tracker) — the parked Task 5 risk, now resolved
+
+`series_ticker=KXBTC15M&status=open` returns **exactly one** market (confirming
+the spec's "median 1 open"). Future markets exist but carry status
+`"initialized"` and are **excluded by the `status=open` filter**, so the
+lookahead as designed could never have fired. Seeing them requires querying the
+series without the restrictive status filter and bounding by `close_time`
+locally — note that unfiltered series query returns ~24h of future markets, so
+the lookahead bound becomes load-bearing.
