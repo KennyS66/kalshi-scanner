@@ -353,3 +353,61 @@ lookahead as designed could never have fired. Seeing them requires querying the
 series without the restrictive status filter and bounding by `close_time`
 locally — note that unfiltered series query returns ~24h of future markets, so
 the lookahead bound becomes load-bearing.
+
+## Phase 0 smoke capture — 2026-08-15 05:32-06:32 UTC, ticker-only, 1 hour
+
+Ran the full rig end-to-end (`python -m wsrig.main --dir data/wsrig-smoke`).
+Clean SIGTERM shutdown, `wsrig stopped (exit 0)`. **21,769 records / 60 min in
+480 KB**, projecting to **~80 MB/week** — well under even the ticker-only
+estimate's order of magnitude, and 190x below the all-channels design.
+
+### What the capture proves works, on live data
+
+| | evidence |
+|---|---|
+| tracker selects real markets | 9 roll transitions; pre-fix this was `[]` forever |
+| **lookahead genuinely fires** | the next market enters the active set ~10.5 min before the current one closes, e.g. `['…0215-15'] -> ['…0215-15','…0230-30']`, then the old one drops. This is the parked Task 5 finding, proven fixed |
+| **settlement works** | 3 `settle` records with real outcomes (no / yes / no) — the `finalized` fix confirmed against live settlements |
+| full market lifecycle | every complete market quoted from `mins_left` 15.0 → -0.0 |
+| **trigger window covered** | 360 in-window (`mins_left` 5-11) quotes per market, ~1/s |
+| both WS feeds stable | zero `feed_drop` / `feed_stall` across the hour; the 120s watchdog (raised from 30s for ticker-only) was correct |
+| price provenance | every book record carries `schema="dollars"`, `txsrc="ts_ms"`, `no_side_derived=true`; identity `1-yb == na` exact on live data |
+| clocks | `tx` epoch-seconds on both feeds; lag p50 86 ms Kalshi / 26 ms spot |
+
+Rates: spot 5.05/s (18,182 recs), book 1.00/s (3,575 recs). Note spot varied
+1.58/s → 6.23/s across the day, which is why the rate floor belongs at 0.5/s.
+
+Sample size: 4 complete markets/hour → **~672 markets over 7 days**, far above
+the bar's n≥30 per window across 3 windows.
+
+### Vacuity audit — three of verify_tape's eight PASSes were not real
+
+`TAPE: USABLE`, but a check that cannot fail is worse than no check:
+
+1. **`sequence_gaps` — VACUOUS, and permanently so in ticker-only mode.**
+   `seq` is present on `orderbook_delta`/`orderbook_snapshot` but **absent from
+   every `ticker` message** (0/3575). `SeqTracker` can never fire; no `gap`
+   record can ever be written. The spec called gap detection "the part that
+   matters most here". Mitigating: within one WS connection TCP guarantees
+   ordered delivery, so silent mid-stream loss is not a real failure mode —
+   real loss arrives as a disconnect, which *is* recorded and *is* counted by
+   `feed_health`. **Action: report NOT APPLICABLE rather than PASS**, and
+   consider a book-continuity check (suspicious wall-clock gaps between
+   consecutive quotes on an active market) as the ticker-mode substitute.
+2. **`settlement_coverage` — VACUOUS on a 1-hour tape by construction**: its
+   grace is 1h, so nothing can be >1h stale. It will be real on a 7-day
+   capture. Not a defect, but it proves nothing here.
+3. **`book_coverage` — REAL** (3 settlements existed and all had quotes).
+
+### Two capture-boundary artifacts, not defects
+
+- One market (`…0230-30`) is `finalized` at Kalshi but has no `settle` record:
+  it closed 2 min before the capture ended and the settlement poller runs every
+  300s. On a long capture this affects only the final market.
+- The last market (`…0245-45`) shows no in-window quotes because its 5-11 min
+  window fell after the capture ended.
+
+### Verdict
+
+The rig captures usable data end-to-end. Remaining work before a 7-day run is
+verifier honesty (item 1 above), not capture capability.
