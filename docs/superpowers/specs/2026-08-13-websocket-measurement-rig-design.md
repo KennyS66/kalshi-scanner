@@ -1,8 +1,16 @@
 # Websocket Measurement Rig — design
 
 **Date:** 2026-08-13
-**Status:** approved for implementation
+**Status:** implemented; Phase 0 complete
 **Scope:** measurement only. No order path, no live money, no changes to the running scanner.
+
+> ⚠️ **Sections above `## Phase 0 results` record what was *believed* at design
+> time, 2026-08-13. Several of those beliefs were falsified by the live probes
+> on 2026-08-15** — notably the Kalshi field names, the claim that depth is
+> cheap, the ~1 GB/week volume estimate, and the usefulness of sequence-gap
+> detection. Inline ⚠️ markers flag the specific ones. **`## Phase 0 results`
+> and `## Phase 0 smoke capture` at the bottom are authoritative** where they
+> conflict with anything earlier.
 
 ## Purpose
 
@@ -80,11 +88,22 @@ invalidate the measurement.
 - **gap**: sequence-gap events, recorded explicitly so corrupted windows are excluded rather than averaged in
 - **settlement**: `ticker`, `result`, from REST after expiry
 
+> ⚠️ **Falsified.** The real field names are `yes_bid_dollars` /
+> `yes_ask_dollars` (dollar *strings*); there is no `no_bid`/`no_ask` on the
+> ticker channel at all, and **no `seq` either** — `seq` exists only on
+> `orderbook_delta`, so gap detection is permanently inert in the chosen
+> ticker-only mode. See `## Phase 0 results`.
+
 `orderbook_delta` is captured, not just top-of-book: depth is cheap at 1-2
 markets and Phase 2 would need it.
 
 Volume is small — median **1** KXBTC15M market open at a time (p95 1, max 2) —
 roughly 1 GB/week gzipped against 834 GB free.
+
+> ⚠️ **Falsified, and it inverted the design.** Depth is not cheap: it is
+> **99.85% of all traffic** (685.8 msg/s vs 0.99 msg/s for ticker alone), i.e.
+> ~15 GB/week rather than ~1 GB. Ticker-only was chosen instead and measured at
+> **~80 MB/week**. The "median 1 market open" part held up exactly.
 
 ## Analysis — two arms
 
@@ -138,6 +157,12 @@ n by roughly 15× — 491 trigger-ticks/day against 33.5 distinct markets/day.
 
 Result is valid **for 1-contract sizing only**. Deeper size needs the depth
 data the tape carries but this bar does not test.
+
+> ⚠️ **The tape no longer carries depth** — ticker-only was chosen (see the Q2
+> decision). The 1-contract claim is *better* supported than planned, though:
+> the ticker channel's `yes_bid_size_fp`/`yes_ask_size_fp` are now taped as
+> `ybsz`/`yasz`, giving direct evidence a 1-contract fill was available at the
+> quoted ask. Deeper sizing would require re-capturing with `orderbook_delta`.
 
 ### Kill criterion
 
