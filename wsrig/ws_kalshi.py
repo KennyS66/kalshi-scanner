@@ -6,7 +6,11 @@ there: a silent gap would remove quotes from the middle of a trigger window
 and quietly bias the decay curve, so every gap is written to the tape and the
 affected window is excluded at analysis time.
 
-Kalshi quotes in CENTS; the tape stores dollars to match the rest of the repo.
+Kalshi quotes in DOLLARS, as strings ("0.9030"), in `*_dollars` fields — the
+"cents ints" this file used to assume was wrong on both counts. The tape stores
+dollars as floats to match the rest of the repo, and records which schema each
+message actually used so a future change shows up in the data instead of
+silently blanking every price.
 """
 from __future__ import annotations
 
@@ -171,7 +175,7 @@ def parse_book(msg: dict) -> dict | None:
         nb, na = _complement(ya), _complement(yb)
         derived = nb is not None or na is not None
     return {**base, "k": "book", "yb": yb, "ya": ya, "nb": nb, "na": na,
-            "schema": _schema(body), "noderiv": derived}
+            "schema": _schema(body), "no_side_derived": derived}
 
 
 import asyncio

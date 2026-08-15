@@ -96,7 +96,7 @@ def test_the_no_side_is_derived_from_the_yes_side_and_flagged_as_derived():
     must never mistake a derived number for an observed quote."""
     r = parse_book(REAL_TICKER)
     assert r["nb"] == 0.0940 and r["na"] == 0.0970
-    assert r["noderiv"] is True
+    assert r["no_side_derived"] is True
 
 
 def test_a_quoted_no_side_is_used_directly_and_not_flagged_as_derived():
@@ -105,7 +105,7 @@ def test_a_quoted_no_side_is_used_directly_and_not_flagged_as_derived():
                             "yes_bid_dollars": "0.9030", "yes_ask_dollars": "0.9060",
                             "no_bid_dollars": "0.0900", "no_ask_dollars": "0.1000"}})
     assert r["nb"] == 0.09 and r["na"] == 0.10
-    assert r["noderiv"] is False
+    assert r["no_side_derived"] is False
 
 
 def test_parse_book_still_reads_the_legacy_cents_schema():
@@ -116,7 +116,7 @@ def test_parse_book_still_reads_the_legacy_cents_schema():
                             "yes_ask": 41, "no_bid": 59, "no_ask": 62,
                             "ts": 1786000000}})
     assert r["ya"] == 0.41 and r["na"] == 0.62      # cents -> dollars
-    assert r["schema"] == "cents" and r["noderiv"] is False
+    assert r["schema"] == "cents" and r["no_side_derived"] is False
 
 
 def test_a_malformed_price_string_yields_none_instead_of_killing_the_feed():
