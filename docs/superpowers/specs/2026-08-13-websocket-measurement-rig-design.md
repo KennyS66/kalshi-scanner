@@ -233,8 +233,10 @@ required**, because for a Kalshi binary the two sides are one book:
 yes_bid 0.9030 / yes_ask 0.9060 → no_bid 0.0940 / no_ask 0.0970, spread
 preserved. Derived prices must be **labelled as derived**, never presented as
 observed quotes. `orderbook_snapshot` carries genuine two-sided depth
-(`yes_dollars_fp` and `no_dollars_fp`, each a list of `[price, size]`) and can
-validate the identity at analysis time.
+(`yes_dollars_fp` and `no_dollars_fp`, each a list of `[price, size]`) and
+could validate the identity at analysis time — but only if the capture design
+subscribes to `orderbook_delta`, since the snapshot is that subscription's
+init frame and cannot be requested on its own (see the Q2 decision below).
 
 ### Q2 — message rate: **~15x the spec's estimate, and 99.85% of it is depth**
 
@@ -252,15 +254,40 @@ falsified — depth is the entire cost. Disk is not the binding constraint
 the Task 10 analysis both load the tape, and a 15 GB tape is not loadable that
 way on this box (the scanner has an RSS-ratchet history on the same machine).
 
+**`orderbook_snapshot` is NOT independently subscribable** — probed
+2026-08-15 ~04:47 UTC: subscribing to `["orderbook_snapshot"]` alone is
+rejected with `{"code": 8, "msg": "Unknown channel name"}`. It arrives only as
+the `seq: 1` initialisation frame of an `orderbook_delta` subscription (same
+sid). A `["ticker"]`-only subscription delivers 1 msg/s and no book data at
+all. So "snapshots without the firehose" is not a thing the API offers
+directly.
+
 **Open design decision — must be settled before the long capture:**
-1. *ticker-only* (~27 MB/week): sufficient for Arm A via the identity above,
-   and the acceptance bar is explicitly 1-contract sizing only, which needs no
-   depth. Cheapest and safest.
-2. *ticker + periodic `orderbook_snapshot`*: adds occasional real depth for a
-   possible Phase 2 without the delta firehose.
-3. *everything* (~15 GB/week): only justified if Phase 2 depth modelling is
-   already committed — and it is not; Phase 2 requires this measurement to
-   pass first.
+1. *ticker-only* (~27 MB/week). Sufficient for the acceptance bar as written:
+   the bar is explicitly 1-contract sizing, and the `ticker` body already
+   carries `yes_bid_size_fp`/`yes_ask_size_fp`, which is exactly what proves a
+   1-contract fill was available at the quoted ask. Cheapest and safest.
+   Cost: the `no_ask = 1 - yes_bid` identity is never validated against
+   observed two-sided depth (it is an exact property of Kalshi binaries, not
+   an empirical guess, so this is a small cost).
+2. *ticker + duty-cycled `orderbook_delta`*. Because the snapshot is the
+   subscribe-time init frame, subscribing to `orderbook_delta`, taking the
+   snapshot, and immediately unsubscribing yields a full two-sided depth
+   snapshot for a brief burst of deltas. Repeat at whatever cadence is wanted
+   (e.g. once per market roll) to get periodic real depth *and* an
+   independent check on the identity, at a small fraction of the firehose.
+   This is the achievable version of what "ticker + periodic snapshots" was
+   meant to be; it costs some subscribe/unsubscribe machinery.
+3. *everything* (~15 GB/week, 686 msg/s sustained). Only justified if Phase 2
+   depth modelling is already committed — and it is not; Phase 2 is gated on
+   this measurement passing first. Note this also cannot be trimmed by
+   discarding deltas client-side: that saves disk but not network, parse, or
+   CPU, and CPU contention on this box is a known hazard.
+
+Recommendation: **option 1**, with option 2 if an independent check on the
+identity is wanted cheaply. Whichever is chosen, the `ticker` body's
+`yes_bid_size_fp`, `yes_ask_size_fp`, and `price_dollars` must be written to
+the tape — they are free, and they are unrecoverable once the capture is over.
 
 ### Other WS facts confirmed
 
