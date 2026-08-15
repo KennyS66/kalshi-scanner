@@ -43,17 +43,156 @@ def test_a_replayed_sequence_is_not_a_gap():
     assert t.check(1, 100) is None
 
 
-def test_parse_book_extracts_both_sides():
+# ------------------------------------------------------------------ parse_book
+#
+# The three bodies below are real, captured from a live subscribe on
+# 2026-08-15T04:11Z. Every one of them contradicts what the code originally
+# assumed (cent-denominated ints named yes_bid/yes_ask/no_bid/no_ask), which
+# would have parsed to None on every field of every message.
+
+REAL_TICKER = {
+    "type": "ticker", "sid": 1, "seq": 7,
+    "msg": {"market_ticker": "KXBTC15M-26AUG150015-15", "market_id": "abc",
+            "price_dollars": "0.9030", "yes_bid_dollars": "0.9030",
+            "yes_ask_dollars": "0.9060", "yes_bid_size_fp": "19.39",
+            "yes_ask_size_fp": "45.01", "volume_fp": "1234.00",
+            "ts": 1786767099, "ts_ms": 1786767099123},
+}
+
+REAL_DELTA = {
+    "type": "orderbook_delta", "sid": 2, "seq": 941,
+    "msg": {"market_ticker": "KXBTC15M-26AUG150015-15", "market_id": "abc",
+            "price_dollars": "0.0910", "delta_fp": "-92.00", "side": "no",
+            "ts": "2026-08-15T04:11:38.535397Z", "ts_ms": 1786767098535},
+}
+
+REAL_SNAPSHOT = {
+    "type": "orderbook_snapshot", "sid": 2, "seq": 1,
+    "msg": {"market_ticker": "KXBTC15M-26AUG150015-15", "market_id": "abc",
+            "yes_dollars_fp": [["0.0010", "437236.00"], ["0.0020", "4232.00"]],
+            "no_dollars_fp": [["0.0910", "92.00"]]},
+}
+
+
+def test_parse_book_reads_the_real_dollar_string_schema():
+    """Prices arrive as dollar STRINGS in `*_dollars` keys. The old code read
+    `yes_bid` and divided by 100 — wrong name AND wrong scale."""
+    r = parse_book(REAL_TICKER)
+    assert r["k"] == "book" and r["t"] == "KXBTC15M-26AUG150015-15"
+    assert r["yb"] == 0.9030 and r["ya"] == 0.9060
+    assert r["seq"] == 7 and r["sid"] == 1
+
+
+def test_the_schema_actually_used_is_recorded_on_the_record():
+    """The first real capture has to prove which schema the wire uses rather
+    than us re-guessing after the fact."""
+    assert parse_book(REAL_TICKER)["schema"] == "dollars"
+
+
+def test_the_no_side_is_derived_from_the_yes_side_and_flagged_as_derived():
+    """The ticker channel carries no no-side fields at all. Kalshi binaries are
+    complementary — a resting YES bid at 0.9030 IS a NO offer at 0.0970 — so the
+    identity is exact, not an estimate. It is still flagged, because analysis
+    must never mistake a derived number for an observed quote."""
+    r = parse_book(REAL_TICKER)
+    assert r["nb"] == 0.0940 and r["na"] == 0.0970
+    assert r["noderiv"] is True
+
+
+def test_a_quoted_no_side_is_used_directly_and_not_flagged_as_derived():
+    r = parse_book({"type": "ticker", "sid": 1, "seq": 7,
+                    "msg": {"market_ticker": "KXBTC15M-A",
+                            "yes_bid_dollars": "0.9030", "yes_ask_dollars": "0.9060",
+                            "no_bid_dollars": "0.0900", "no_ask_dollars": "0.1000"}})
+    assert r["nb"] == 0.09 and r["na"] == 0.10
+    assert r["noderiv"] is False
+
+
+def test_parse_book_still_reads_the_legacy_cents_schema():
+    """Defensive fallback. The dollars form is the confirmed-live one; this
+    branch exists so a schema change cannot blank the feed a second time."""
     r = parse_book({"type": "ticker", "sid": 1, "seq": 7,
                     "msg": {"market_ticker": "KXBTC15M-A", "yes_bid": 38,
-                            "yes_ask": 41, "no_bid": 59, "no_ask": 62, "ts": 1786000000}})
-    assert r["k"] == "book" and r["t"] == "KXBTC15M-A"
+                            "yes_ask": 41, "no_bid": 59, "no_ask": 62,
+                            "ts": 1786000000}})
     assert r["ya"] == 0.41 and r["na"] == 0.62      # cents -> dollars
-    assert r["seq"] == 7 and r["sid"] == 1
+    assert r["schema"] == "cents" and r["noderiv"] is False
+
+
+def test_a_malformed_price_string_yields_none_instead_of_killing_the_feed():
+    r = parse_book({"type": "ticker", "sid": 1,
+                    "msg": {"market_ticker": "KXBTC15M-A",
+                            "yes_bid_dollars": "", "yes_ask_dollars": "n/a"}})
+    assert r["yb"] is None and r["ya"] is None
+    assert r["schema"] == "dollars"
+
+
+# ------------------------------------------------------------- exchange clock
+
+def test_the_exchange_timestamp_comes_from_ts_ms_in_epoch_seconds():
+    r = parse_book(REAL_TICKER)
+    assert r["tx"] == 1786767099.123 and r["txsrc"] == "ts_ms"
+
+
+def test_ts_ms_is_preferred_because_ts_changes_type_between_channels():
+    """`ts` is an int on the ticker channel but an ISO8601 string on
+    orderbook_delta. Taping it raw put two types in one column."""
+    r = parse_book(REAL_DELTA)
+    assert r["tx"] == 1786767098.535 and r["txsrc"] == "ts_ms"
+
+
+def test_a_numeric_ts_is_the_fallback_when_ts_ms_is_absent():
+    r = parse_book({"type": "ticker", "sid": 1,
+                    "msg": {"market_ticker": "KXBTC15M-A", "ts": 1786000000}})
+    assert r["tx"] == 1786000000.0 and r["txsrc"] == "ts"
+
+
+def test_a_missing_exchange_timestamp_is_none_and_never_the_local_clock():
+    """Substituting local time would be indistinguishable from a real exchange
+    timestamp in the tape and would silently corrupt every latency measurement
+    the rig exists to make."""
+    r = parse_book({"type": "ticker", "sid": 1,
+                    "msg": {"market_ticker": "KXBTC15M-A", "yes_bid_dollars": "0.5"}})
+    assert r["tx"] is None and r["txsrc"] is None
+
+
+def test_an_unparseable_ts_is_none_rather_than_a_guess():
+    r = parse_book({"type": "ticker", "sid": 1,
+                    "msg": {"market_ticker": "KXBTC15M-A",
+                            "ts": "2026-08-15T04:11:38.535397Z"}})
+    assert r["tx"] is None
+
+
+# --------------------------------------------------- non-quote message shapes
+
+def test_an_orderbook_delta_is_not_taped_as_a_quote():
+    """A delta is a per-level (price, side, delta) mutation carrying no bid/ask
+    at all. Emitting it as a `book` record with None prices would let analysis
+    count 685 non-quotes per second as quotes."""
+    r = parse_book(REAL_DELTA)
+    assert r["k"] == "delta"
+    assert r["px"] == 0.0910 and r["side"] == "no" and r["dsz"] == -92.0
+    assert "yb" not in r and "ya" not in r
+
+
+def test_an_orderbook_snapshot_keeps_its_levels_instead_of_faking_a_quote():
+    r = parse_book(REAL_SNAPSHOT)
+    assert r["k"] == "snap"
+    assert r["yes"] == [["0.0010", "437236.00"], ["0.0020", "4232.00"]]
+    assert r["no"] == [["0.0910", "92.00"]]
+
+
+def test_only_ticker_messages_become_book_records():
+    """verify_tape derives book_coverage and settlement_coverage from `book`
+    records; a delta counted as a quote would make both meaningless."""
+    kinds = {parse_book(m)["k"] for m in (REAL_TICKER, REAL_DELTA, REAL_SNAPSHOT)}
+    assert kinds == {"book", "delta", "snap"}
 
 
 def test_parse_book_ignores_unrelated_message_types():
     assert parse_book({"type": "subscribed", "sid": 1}) is None
+    assert parse_book({"type": "subscribed", "sid": 1,
+                       "msg": {"channel": "ticker", "sid": 1}}) is None
 
 
 # ---------------------------------------------------------------- control frames
@@ -135,9 +274,12 @@ def _fast(monkeypatch, silence=0.02, backoff=0.001):
 
 
 def _ticker(seq=1):
+    """The real wire shape, so the loop tests exercise what actually arrives."""
     return json.dumps({"type": "ticker", "sid": 1, "seq": seq,
-                       "msg": {"market_ticker": "KXBTC15M-A", "yes_bid": 38,
-                               "yes_ask": 41, "no_bid": 59, "no_ask": 62}})
+                       "msg": {"market_ticker": "KXBTC15M-26AUG150015-15",
+                               "yes_bid_dollars": "0.9030",
+                               "yes_ask_dollars": "0.9060",
+                               "ts_ms": 1786767099123}})
 
 
 # ------------------------------------------------------------ resilience of the loop

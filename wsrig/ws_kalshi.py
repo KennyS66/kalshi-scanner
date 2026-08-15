@@ -34,8 +34,71 @@ class SeqTracker:
         return {"k": "gap", "sid": sid, "expected": last + 1, "got": seq}
 
 
-def _cents(v):
-    return None if v is None else round(float(v) / 100.0, 4)
+def _num(v, divisor=1.0):
+    """Any wire number -> float, or None. Never raises.
+
+    Kalshi sends prices as dollar strings ("0.9030"). A malformed one must cost
+    a field, not the connection.
+    """
+    if v is None:
+        return None
+    try:
+        return round(float(v) / divisor, 4)
+    except (TypeError, ValueError):
+        return None
+
+
+DOLLAR_KEYS = ("yes_bid_dollars", "yes_ask_dollars", "no_bid_dollars", "no_ask_dollars")
+CENT_KEYS = ("yes_bid", "yes_ask", "no_bid", "no_ask")
+NO_SIDE_KEYS = ("no_bid_dollars", "no_ask_dollars", "no_bid", "no_ask")
+
+
+def _schema(body: dict, dollar_keys=DOLLAR_KEYS, cent_keys=CENT_KEYS) -> str:
+    """Which price encoding this message actually used.
+
+    Taped on every record so the capture itself settles the question instead of
+    us inferring it again later. `dollars` is the confirmed-live form; `cents`
+    is a defensive fallback for the pre-`_dollars` shape.
+    """
+    if any(k in body for k in dollar_keys):
+        return "dollars"
+    if any(k in body for k in cent_keys):
+        return "cents"
+    return "unknown"
+
+
+def _price(body: dict, dollar_key: str, cent_key: str):
+    if dollar_key in body:
+        return _num(body[dollar_key])
+    if cent_key in body:
+        return _num(body[cent_key], 100.0)
+    return None
+
+
+def _complement(v):
+    return None if v is None else round(1.0 - v, 4)
+
+
+def _exchange_ts(body: dict):
+    """(epoch seconds, source field name). Never the local clock.
+
+    `ts_ms` is int-millis on every channel and is therefore the primary. `ts` is
+    NOT usable as one: it is int epoch seconds on the ticker channel but an
+    ISO8601 string on orderbook_delta, so taping it raw put two types in a
+    single tape column. It is accepted only when numeric.
+
+    A fabricated timestamp would be indistinguishable from a real one in the
+    tape and would silently corrupt the latency measurements this rig exists to
+    make, so an unusable value yields None and says so via the source field.
+    """
+    if body.get("ts_ms") is not None:
+        v = _num(body["ts_ms"], 1000.0)
+        if v is not None:
+            return v, "ts_ms"
+    ts = body.get("ts")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        return _num(ts), "ts"
+    return None, None
 
 
 BOOK_TYPES = ("ticker", "orderbook_snapshot", "orderbook_delta")
@@ -57,25 +120,58 @@ def control_record(msg: dict) -> dict:
 
 
 def parse_book(msg: dict) -> dict | None:
-    """Kalshi ticker/orderbook message -> tape record, or None."""
-    if msg.get("type") not in BOOK_TYPES:
+    """Kalshi book-channel message -> tape record, or None.
+
+    Three channels, three genuinely different payloads — and only one of them
+    carries a quote. Collapsing all three into a `book` record (as this did)
+    meant ~685 orderbook deltas per second were taped as quotes with None
+    prices, which would have made verify_tape's book_coverage and
+    settlement_coverage meaningless. Each type now keeps its own record kind.
+    """
+    mtype = msg.get("type")
+    if mtype not in BOOK_TYPES:
         return None
     body = msg.get("msg") or {}
     ticker = body.get("market_ticker")
     if not ticker:
         return None
-    return {
-        "k": "book",
-        "t": ticker,
-        "yb": _cents(body.get("yes_bid")),
-        "ya": _cents(body.get("yes_ask")),
-        "nb": _cents(body.get("no_bid")),
-        "na": _cents(body.get("no_ask")),
-        "sid": msg.get("sid"),
-        "seq": msg.get("seq"),
-        "tx": body.get("ts"),
-        "mtype": msg.get("type"),
-    }
+    tx, txsrc = _exchange_ts(body)
+    base = {"t": ticker, "sid": msg.get("sid"), "seq": msg.get("seq"),
+            "tx": tx, "txsrc": txsrc, "mtype": mtype}
+
+    if mtype == "orderbook_delta":
+        # A per-level (price, side, delta) mutation. Top-of-book is not in here
+        # and cannot be had without carrying book state, so don't pretend.
+        return {**base, "k": "delta",
+                "px": _price(body, "price_dollars", "price"),
+                "side": body.get("side"),
+                "dsz": _num(body.get("delta_fp", body.get("delta"))),
+                "schema": _schema(body, ("price_dollars", "delta_fp"),
+                                  ("price", "delta"))}
+
+    if mtype == "orderbook_snapshot":
+        # Full depth, once per subscribe. Kept raw and lossless rather than
+        # reduced to a top-of-book here.
+        return {**base, "k": "snap",
+                "yes": body.get("yes_dollars_fp", body.get("yes")),
+                "no": body.get("no_dollars_fp", body.get("no")),
+                "schema": _schema(body, ("yes_dollars_fp", "no_dollars_fp"),
+                                  ("yes", "no"))}
+
+    yb = _price(body, "yes_bid_dollars", "yes_bid")
+    ya = _price(body, "yes_ask_dollars", "yes_ask")
+    nb = _price(body, "no_bid_dollars", "no_bid")
+    na = _price(body, "no_ask_dollars", "no_ask")
+    derived = False
+    if not any(k in body for k in NO_SIDE_KEYS):
+        # The ticker channel carries only the yes side. Kalshi binaries are
+        # complementary — a resting YES bid at 0.9030 IS a NO offer at 0.0970 —
+        # so this is an exact identity, not an estimate. It is flagged anyway:
+        # a derived number must never be mistaken for an observed quote.
+        nb, na = _complement(ya), _complement(yb)
+        derived = nb is not None or na is not None
+    return {**base, "k": "book", "yb": yb, "ya": ya, "nb": nb, "na": na,
+            "schema": _schema(body), "noderiv": derived}
 
 
 import asyncio
