@@ -455,6 +455,59 @@ def test_substate_never_blocks_and_keeps_only_the_latest():
     assert s.get() == ["B"]           # callers cannot mutate the shared state
 
 
+def test_subscribe_frame_carries_only_the_ticker_channel(monkeypatch):
+    """Phase 0 measured 685.8 msg/s on one market, 99.85% of it
+    `orderbook_delta`; `ticker` alone is 0.99 msg/s. The rig's acceptance bar
+    is 1-contract sizing, which `ticker`'s `yes_bid_size_fp`/`yes_ask_size_fp`
+    already proves, so the capture subscribes to `ticker` only."""
+    _fast(monkeypatch, silence=5.0)
+    ws = FakeWS([HANG])
+    monkeypatch.setattr(wsk.websockets, "connect", lambda *a, **k: FakeConnect(ws))
+
+    async def go():
+        stop = asyncio.Event()
+        subs = SubState()
+        subs.set(["KXBTC15M-A"])
+        task = asyncio.create_task(run_kalshi_feed(FakeTape(), subs, stop))
+        await asyncio.sleep(0.05)
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert ws.sent[0]["params"]["channels"] == ["ticker"]
+        assert ws.sent[0]["params"]["channels"] == list(wsk.CHANNELS)
+
+    asyncio.run(go())
+
+
+def test_the_subscribed_channels_are_driven_by_the_module_constant(monkeypatch):
+    """A regression that hardcodes the channel list inline would still pass
+    the ticker-only test above but ignore an override here — this pins the
+    module constant, not a literal, as the source of truth."""
+    _fast(monkeypatch, silence=5.0)
+    monkeypatch.setattr(wsk, "CHANNELS", ("ticker", "orderbook_delta"))
+    ws = FakeWS([HANG])
+    monkeypatch.setattr(wsk.websockets, "connect", lambda *a, **k: FakeConnect(ws))
+
+    async def go():
+        stop = asyncio.Event()
+        subs = SubState()
+        subs.set(["KXBTC15M-A"])
+        task = asyncio.create_task(run_kalshi_feed(FakeTape(), subs, stop))
+        await asyncio.sleep(0.05)
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert ws.sent[0]["params"]["channels"] == ["ticker", "orderbook_delta"]
+
+    asyncio.run(go())
+
+
 def test_reconnect_subscribes_once_to_the_current_markets(monkeypatch):
     """Rolls that happen while disconnected must collapse into one subscribe for
     the markets that are live now — not one per queued roll."""

@@ -215,7 +215,32 @@ from wsrig.tape import safe_write
 
 BACKOFF_BASE_S = 1.0
 BACKOFF_MAX_S = 60.0
-SILENCE_MAX_S = 30.0        # Kalshi is quiet between trades; watchdog only on hard stalls
+
+# Phase 0 (see docs/superpowers/specs/2026-08-13-websocket-measurement-rig-
+# design.md, "## Phase 0 results") measured 685.8 msg/s on one live market, of
+# which 99.85% was `orderbook_delta`; `ticker` alone was 0.99 msg/s. Over a
+# 7-day capture that is ~15 GB vs ~27 MB, and the extra 15 GB is depth this
+# rig doesn't need: the acceptance bar is stated for 1-contract sizing, and
+# the `ticker` body's `yes_bid_size_fp`/`yes_ask_size_fp` (taped as
+# `ybsz`/`yasz`) already proves a 1-contract fill was available.
+# `orderbook_snapshot` is not independently subscribable — it only arrives as
+# the init frame of an `orderbook_delta` subscription — so there is no cheap
+# middle option; see the design doc for the duty-cycled-delta alternative if
+# real two-sided depth is ever wanted. `parse_book`'s handling of
+# `orderbook_delta`/`orderbook_snapshot` is left in place so flipping this
+# constant back is a one-line change that still works.
+CHANNELS = ("ticker",)
+
+# With the firehose gone, the socket is only ~1 msg/s busy, so a genuinely
+# quiet market (between rolls, or overnight) can plausibly exceed the old 30s
+# threshold and trigger a spurious reconnect — churning the connection and
+# writing junk feed_stall records for the whole week-long capture. 120s gives
+# that headroom. This is a backstop for a *half-open* socket, not the primary
+# liveness mechanism: `websockets`' own ping_interval=20 (passed below) plus
+# its ping_timeout=20 default (not overridden here) force-close a genuinely
+# dead connection in ~40s and surface it as a normal connection error through
+# the backoff path already. Don't read this number as a liveness SLA.
+SILENCE_MAX_S = 120.0
 # ~5 minutes of capped backoff. Past this the fault is not transient (bad
 # credentials, DNS, a moved endpoint) and retrying in-process forever would
 # mean a live-looking rig capturing no Kalshi data at all. Exit instead and let
@@ -283,7 +308,7 @@ async def run_kalshi_feed(tape, subs: SubState, stop: asyncio.Event) -> None:
                     cmd_id += 1
                     await ws.send(json.dumps({
                         "id": cmd_id, "cmd": "subscribe",
-                        "params": {"channels": ["ticker", "orderbook_delta"],
+                        "params": {"channels": list(CHANNELS),
                                    "market_tickers": ts}}))
 
                 # Clear before reading, always read the CURRENT set: a roll that
