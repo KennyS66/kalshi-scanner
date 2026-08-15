@@ -12,11 +12,23 @@ import logging
 log = logging.getLogger("wsrig.settle")
 
 VALID = ("yes", "no")
+# The venue's own word for a resolved market is "finalized" -- "settled" is a
+# query-parameter keyword that never appears as an object's own status, so
+# requiring it matched nothing and left every market in `pending` forever with
+# no settlement record ever reaching the tape. "settled" stays accepted because
+# the two vocabularies already differ once, so they may differ again by
+# endpoint or change back.
+#
+# This stays an explicit allowlist rather than being dropped in favour of
+# trusting `result`: a market can carry a populated result before it is final,
+# and recording one early is the same invented-outcome failure this module
+# exists to avoid.
+SETTLED_STATUSES = ("finalized", "settled")
 POLL_INTERVAL_S = 300.0
 
 
 def settle_record(market: dict) -> dict | None:
-    if market.get("status") != "settled":
+    if market.get("status") not in SETTLED_STATUSES:
         return None
     result = (market.get("result") or "").lower()
     if result not in VALID:
