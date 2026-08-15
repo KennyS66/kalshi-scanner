@@ -1479,10 +1479,16 @@ print(f"span {span/60:.1f} min, {len(recs)} records")
 print(f"Q2 message rate: spot {len(spot)/span:.2f}/s, book {len(book)/span:.2f}/s")
 print(f"   projected 7-day tape: {len(recs)/span*86400*7/1e6:.1f}M records")
 
-both = sum(1 for r in book if r["ya"] is not None and r["na"] is not None)
-print(f"Q1 book records carrying BOTH asks: {both}/{len(book)} "
-      f"({100*both/max(len(book),1):.1f}%)")
-print(f"   message types seen: {collections.Counter(r['mtype'] for r in book)}")
+observed = sum(1 for r in book if r["na"] is not None and not r["no_side_derived"])
+derived = sum(1 for r in book if r["na"] is not None and r["no_side_derived"])
+print(f"Q1 book records with a GENUINELY OBSERVED no-side ask: "
+      f"{observed}/{len(book)} ({100*observed/max(len(book),1):.1f}%)  "
+      f"-- derived via no_ask = 1 - yes_bid: {derived}/{len(book)}")
+# `na` is not a "both asks present" check on its own: the parser back-fills it
+# from yes_bid whenever the no side is absent, so na is not None is true on
+# nearly every book record regardless of what the wire actually sent. Only
+# `no_side_derived is False` tells you the no ask was genuinely on the wire.
+print(f"   record kinds seen: {collections.Counter(r['k'] for r in recs)}")
 
 lags = [r["tw"] - r["tx"] for r in spot if r.get("tx")]
 lags.sort()
@@ -1529,9 +1535,14 @@ git add docs/superpowers/specs/2026-08-13-websocket-measurement-rig-design.md
 git commit -m "wsrig: Phase 0 smoke results — feed rates, payload shape, spot-series match"
 ```
 
-**Gate:** if `both asks present` is under 100%, the `ticker` channel is
-insufficient and `orderbook_delta` must be reconstructed into top-of-book
-before Task 10 can price anything. Resolve that here, not after the capture.
+**Gate:** if the GENUINELY OBSERVED no-side-ask percentage is under 100%, the
+`ticker` channel is insufficient and `orderbook_delta` must be reconstructed
+into top-of-book before Task 10 can price anything. Resolve that here, not
+after the capture. (Live-verified in Phase 0: it is 0% — the `ticker` channel
+never carries the no side at all, and the `no_ask = 1 - yes_bid` identity is
+used instead. See `## Phase 0 results` in the design doc for why that identity
+is sufficient for the 1-contract acceptance bar without full book
+reconstruction.)
 
 ---
 
@@ -1746,7 +1757,20 @@ def run(records: list[dict], deltas=DELTAS) -> dict:
         if fired is None:
             continue
         t0, side = fired
-        row = {"ticker": ticker, "t0": t0, "side": side, "result": result}
+        # ask_at() returns only a price, not which quote it came from, so
+        # provenance has to be recovered from the ticker's own book records
+        # rather than threaded through ask_at's signature. The yes side is
+        # never derived (the parser always takes `ya` straight off the wire);
+        # the no side is derived (na = 1 - yes_bid) whenever this ticker's
+        # quotes carry `no_side_derived` — which Phase 0 found is EVERY
+        # record, since the `ticker` channel carries no no-side fields at
+        # all. The identity is exact, so the edge numbers below are correct
+        # either way, but a NO-side event's numbers come from a derived
+        # price and the table must say so rather than passing it through
+        # silently.
+        no_side_derived = side == "NO" and any(q.get("no_side_derived") for q in quotes)
+        row = {"ticker": ticker, "t0": t0, "side": side, "result": result,
+               "no_side_derived": no_side_derived}
         for d in deltas:
             ask = ask_at(quotes, ticker, t0 + d, side)
             row[f"d{d}"] = (None if ask is None
@@ -1755,14 +1779,20 @@ def run(records: list[dict], deltas=DELTAS) -> dict:
 
     out = {"n": len(events), "events": events, "by_delta": {}}
     for d in deltas:
-        vals = [e[f"d{d}"] for e in events if e.get(f"d{d}") is not None]
+        rows = [e for e in events if e.get(f"d{d}") is not None]
+        vals = [e[f"d{d}"] for e in rows]
         if vals:
             m = sum(vals) / len(vals)
             var = sum((v - m) ** 2 for v in vals) / len(vals)
             se = (var / len(vals)) ** 0.5
             out["by_delta"][d] = {"n": len(vals), "mean": round(m, 5),
                                   "se": round(se, 5),
-                                  "t": round(m / se, 2) if se else None}
+                                  "t": round(m / se, 2) if se else None,
+                                  # so the headline table can flag a delta
+                                  # whose sample leans on derived no-side asks
+                                  # instead of presenting every number as
+                                  # equally observed
+                                  "n_derived": sum(1 for e in rows if e["no_side_derived"])}
     return out
 ```
 
