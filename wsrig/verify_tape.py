@@ -39,9 +39,30 @@ MAX_OUTAGES_PER_HOUR = 6.0
 # Kalshi is slow — and pending/ never shrinking is invisible in the tape itself.
 SETTLE_GRACE_S = 3600.0
 
+# `seq` lives only on orderbook_delta/orderbook_snapshot messages, never on
+# `ticker` — and the shipped rig captures ticker-only (orderbook_delta is
+# 685 msg/s, 99.85% of traffic, against 1 msg/s for ticker; the acceptance bar
+# only needs 1-contract sizing). So SeqTracker never fires on a real tape and
+# `sequence_gaps` is a check that is structurally incapable of failing: it
+# would report PASS forever. book_continuity is the ticker-mode substitute —
+# a wall-clock hole in one market's own quote stream, since there is no seq
+# to watch instead.
+#
+# Threshold reasoning: the Phase 0 smoke capture (1h live, 3575 book records,
+# 5 markets) measured quotes at ~1.00/s per active market with a worst
+# within-market gap of 4.0s. 90s gives >20x headroom over that — enough to
+# never fire on ordinary jitter (a false alarm here trains people to ignore
+# the check, the same failure mode as the old 2.0/s spot-rate floor), while
+# still being far tighter than a market's own ~15min life, so a genuine stall
+# gets caught well before the market closes on its own. This is one hour of
+# one day (05:32-06:32 UTC); the spec's spot rate varied 1.58/s -> 6.23/s
+# across the day, so re-derive against a multi-day capture once one exists.
+BOOK_CONTINUITY_GAP_S = 90.0
 
-def _check(name, ok, detail):
-    return {"name": name, "ok": bool(ok), "detail": detail}
+
+def _check(name, ok, detail, applicable=True):
+    return {"name": name, "ok": bool(ok), "applicable": bool(applicable),
+            "detail": detail}
 
 
 def verify(records: list[dict],
@@ -95,9 +116,48 @@ def verify(records: list[dict],
     by_sid = defaultdict(int)
     for g in gapsr:
         by_sid[g.get("sid")] += 1
-    checks.append(_check("sequence_gaps", not gapsr,
-                         f"{len(gapsr)} sequence gaps"
-                         + (f" on sids {sorted(by_sid)}" if by_sid else "")))
+
+    # seq_present: was any record actually carrying a seq number? A gap
+    # record is also proof tracking was live even if no seq-bearing record
+    # happens to be in this slice (e.g. only orderbook_delta produces seq,
+    # but a synthetically-injected gap record still means the check ran).
+    seq_present = any(r.get("seq") is not None for r in records)
+    seq_applicable = seq_present or bool(gapsr)
+    if seq_applicable:
+        checks.append(_check("sequence_gaps", not gapsr,
+                             f"{len(gapsr)} sequence gaps"
+                             + (f" on sids {sorted(by_sid)}" if by_sid else "")))
+    else:
+        checks.append(_check(
+            "sequence_gaps", True,
+            "not applicable: no record carries a seq — the ticker channel "
+            "does not carry sequence numbers (only orderbook_delta/"
+            "orderbook_snapshot do), so gap detection cannot run in this "
+            "capture mode. See book_continuity for the ticker-mode substitute.",
+            applicable=False))
+
+    books_by_t: dict[str, list[float]] = defaultdict(list)
+    for r in records:
+        if r.get("k") == "book" and r.get("t") and "tw" in r:
+            books_by_t[r["t"]].append(r["tw"])
+
+    worst_gap = 0.0
+    worst_market = None
+    n_gaps = 0
+    for t, times in books_by_t.items():
+        times.sort()
+        for a, b in zip(times, times[1:]):
+            gap = b - a
+            if gap > worst_gap:
+                worst_gap = gap
+                worst_market = t
+            if gap > BOOK_CONTINUITY_GAP_S:
+                n_gaps += 1
+    checks.append(_check(
+        "book_continuity", n_gaps == 0,
+        f"{n_gaps} gaps >{BOOK_CONTINUITY_GAP_S:.0f}s within a market's own "
+        f"quote stream across {len(books_by_t)} markets; worst gap "
+        f"{worst_gap:.1f}s" + (f" ({worst_market})" if worst_market else "")))
 
     quoted = {r.get("t") for r in records if r.get("k") == "book"}
     settled = {r.get("t") for r in records if r.get("k") == "settle"}
@@ -152,7 +212,11 @@ def main():
     res = verify(list(read_tape(Path(args.dir))),
                  expected_spot_rate_hz=args.expected_spot_rate_hz)
     for c in res["checks"]:
-        print(f"  {'PASS' if c['ok'] else 'FAIL'}  {c['name']:20} {c['detail']}")
+        if not c.get("applicable", True):
+            label = "N/A "
+        else:
+            label = "PASS" if c["ok"] else "FAIL"
+        print(f"  {label}  {c['name']:20} {c['detail']}")
     print(f"\n  TAPE: {'USABLE' if res['ok'] else 'NOT TRUSTWORTHY'}")
     raise SystemExit(0 if res["ok"] else 1)
 
