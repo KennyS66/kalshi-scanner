@@ -41,3 +41,10 @@ data/prewarn_alert.txt
 
 # Live account mirror (personal trading data, not the bot's record)
 data/manual/
+
+# wsrig capture tapes: derived, reproducible, and large (~41 MB per 7-day run,
+# growing ~6 MB/day as hourly gzip files). auto_commit_cron.sh runs `git add -A`
+# and pushes, so without this the daily snapshot would commit the live capture
+# to GitHub and bloat history with data that is regenerable by re-running the rig.
+data/wsrig/
+data/wsrig-smoke/
