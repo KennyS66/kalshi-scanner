@@ -63,6 +63,38 @@ REST_CAP = 200
 WHALE_WINDOW_S = 4 * 3600
 MAX_WHALE_ALERTS = 150_000
 
+# `_seen_trade_ids` retention floor. That dict maps trade_id -> epoch first
+# seen and exists for exactly one purpose: skip trades a previous scan already
+# processed. It therefore only has to cover the furthest back scan_trades can
+# ever re-fetch, and that is bounded by
+# `min_ts = self.last_trade_ts or (now - lookback_minutes*60)` -- the API is
+# never asked for trades older than `lookback_minutes` (60 by default), and
+# normally only back to the previous scan's start, ~5s ago.
+#
+# It was pruned with a hardcoded 86400 (24h), ~24x beyond anything reachable.
+# Measured on the live scanner 2026-08-14, pid 10068 (steady state, confirmed
+# twice 45s apart): 9,013,616 ids at 159 bytes each = 1,373 MB, which is 84%
+# of the process's entire 1,631 MB RSS. health_check.py had been reporting
+# DEGRADED on footprint:scanner against its 1500 MB limit.
+#
+# The same dict caused the CPU, not a second bug: rebuilding one that size
+# costs ~2.9s and the rebuild below runs every scan cycle (nominal 5s), i.e.
+# ~58% of a core against 61% observed.
+#
+# Do NOT restore 86400 believing it was safety margin -- it buys nothing
+# scan_trades can reach. It hid for so long because gc_objects sat flat at
+# ~225k across the whole growth curve: gc.get_objects() only tracks
+# containers, so nine million str keys are invisible to it and every
+# object-counting diagnostic showed a healthy process.
+#
+# The floor keeps a small `--lookback` from shrinking the window to something
+# fragile: at 15 minutes the scan loop can stall for 180 nominal cycles and
+# dedup still holds. Should a gap ever exceed the retention anyway, the
+# failure is re-processing (duplicate whale alerts, double-counted ticker
+# stats), not corruption -- and the old 24h value had the identical failure
+# mode, just at a 24h threshold.
+SEEN_ID_RETENTION_FLOOR_S = 15 * 60
+
 
 def _fp(val):
     """Parse a string fixed-point value like '129.45' to float."""
@@ -103,6 +135,14 @@ class Scanner:
             "whale_count": 0, "whale_volume": 0.0,
             "last_ts": 0.0,
         })
+
+    def _seen_id_retention_s(self) -> float:
+        """How long a trade_id stays in `_seen_trade_ids`.
+
+        The re-fetch horizon, floored. See SEEN_ID_RETENTION_FLOOR_S for why
+        this tracks `lookback_minutes` rather than the 86400 it replaced.
+        """
+        return max(self.lookback_minutes * 60, SEEN_ID_RETENTION_FLOOR_S)
 
     def scan_trades(self):
         """Fetch recent trades, detect whales, and build per-ticker stats."""
@@ -171,8 +211,8 @@ class Scanner:
         self.last_trade_ts = scan_start_ts
         self.whale_alerts = self._merge_whale_alerts(new_whales)
 
-        # Prune seen IDs older than 24 hours
-        _id_cutoff = now_ts - 86400
+        # Prune seen IDs past the re-fetch horizon (see SEEN_ID_RETENTION_FLOOR_S)
+        _id_cutoff = now_ts - self._seen_id_retention_s()
         self._seen_trade_ids = {
             tid: ts for tid, ts in self._seen_trade_ids.items()
             if ts >= _id_cutoff
