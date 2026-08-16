@@ -1,5 +1,6 @@
 """Whale detection and volume analysis engine."""
 
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -95,6 +96,16 @@ MAX_WHALE_ALERTS = 150_000
 # mode, just at a 24h threshold.
 SEEN_ID_RETENTION_FLOOR_S = 15 * 60
 
+# Trade paging bound: 10 x 1000 = 10,000 trades per scan. At the measured
+# exchange rate (~104 trades/s daily average, ~163/s at the evening peak) that
+# is 61-96 seconds of tape against a nominal 5s cycle, so it is not believed to
+# bind today -- but api.py allows 15s per request across up to 10 pages, so a
+# slow sequence can reach it. When it does, the untaken pages are skipped
+# PERMANENTLY: `last_trade_ts` advances to `scan_start_ts` regardless, so the
+# next scan starts past them. That was entirely silent -- no counter, no log,
+# no alarm. See the for/else in scan_trades for how it is now detected.
+MAX_TRADE_PAGES = 10
+
 
 def _fp(val):
     """Parse a string fixed-point value like '129.45' to float."""
@@ -125,6 +136,9 @@ class Scanner:
         self.market_snapshots: dict[str, MarketSnapshot] = {}
         self.last_trade_ts = None
         self._seen_trade_ids: dict[str, float] = {}  # trade_id → epoch when first seen
+        # Cumulative count of scans that hit MAX_TRADE_PAGES with a cursor
+        # still outstanding, i.e. cycles that dropped trades for good.
+        self.truncated_scans = 0
         # Aggregated from all trades we've seen
         # `last_ts` is when we last saw a TRADE for this ticker. It exists so
         # prune_closed can expire stats entries that never had a snapshot --
@@ -155,7 +169,9 @@ class Scanner:
         cursor = None
         new_trade_count = 0
 
-        for _ in range(10):  # max pages
+        truncated = False
+
+        for _ in range(MAX_TRADE_PAGES):
             data = self.api.get_trades(limit=1000, cursor=cursor, min_ts=min_ts)
             trades = data.get("trades", [])
             if not trades:
@@ -207,9 +223,35 @@ class Scanner:
             cursor = data.get("cursor", "")
             if not cursor:
                 break
+        else:
+            # for/else runs only when the loop finished every page WITHOUT
+            # breaking -- i.e. page MAX_TRADE_PAGES came back with trades AND
+            # still handed us a cursor. That is exactly the case where more
+            # trades existed and we stopped anyway.
+            #
+            # Note this deliberately never inspects `cursor` after the loop,
+            # which is how it avoids the false positive: when a page comes back
+            # empty the loop breaks with `cursor` still holding the PREVIOUS
+            # page's non-empty value, so an `if pages == MAX and cursor` test
+            # would cry wolf every time the tape ended exactly on the cap.
+            truncated = True
 
         self.last_trade_ts = scan_start_ts
         self.whale_alerts = self._merge_whale_alerts(new_whales)
+
+        if truncated:
+            # Observability only -- the cap and the fetch behaviour are
+            # unchanged. last_trade_ts has just advanced past the trades we
+            # never fetched, so this loss is not recoverable on a later scan.
+            self.truncated_scans += 1
+            print(f"scanner WARNING: trade page cap hit -- fetched "
+                  f"{MAX_TRADE_PAGES} pages x 1000 and the API still had more "
+                  f"(cursor outstanding). Trades this cycle were SKIPPED and "
+                  f"are irrecoverable: last_trade_ts advanced to "
+                  f"{scan_start_ts} regardless, so the next scan starts past "
+                  f"them. processed={new_trade_count} min_ts={min_ts} "
+                  f"truncated_scans={self.truncated_scans}",
+                  file=sys.stderr, flush=True)
 
         # Prune seen IDs past the re-fetch horizon (see SEEN_ID_RETENTION_FLOOR_S)
         _id_cutoff = now_ts - self._seen_id_retention_s()
