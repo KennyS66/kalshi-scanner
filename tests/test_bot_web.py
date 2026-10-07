@@ -501,3 +501,39 @@ def test_bot_page_script_block_parses():
         assert r.returncode == 0, f"/bot script block does not parse:\n{r.stderr[:800]}"
     finally:
         os.unlink(path)
+
+
+def test_status_lite_is_state_and_config_only(tmp_path):
+    # /trade and the STOP widget only read state (+config for the confirm
+    # text); the full payload costs ~58ms and 169KB per poll.
+    from web import bot_status_lite
+    _seed(tmp_path)
+    full, lite = bot_status_payload(tmp_path), bot_status_lite(tmp_path)
+    assert set(lite) == {"state", "config"}
+    assert lite["state"] == full["state"] and lite["config"] == full["config"]
+
+
+def test_status_lite_empty_dir_is_safe(tmp_path):
+    from web import bot_status_lite
+    assert bot_status_lite(tmp_path)["state"] == {}
+
+
+def test_api_bot_status_lite_query(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    import web
+    _seed(tmp_path)
+    monkeypatch.setattr(web, "_BOT_DIR", tmp_path)
+    client = TestClient(web.app)
+    lite = client.get("/api/bot/status?lite=1").json()
+    assert set(lite) == {"state", "config"} and lite["state"]["day_pnl"] == 1.5
+    full = client.get("/api/bot/status").json()
+    assert "grades" in full and full["state"]["day_pnl"] == 1.5
+
+
+def test_status_pollers_use_lite():
+    # The 5s STOP poller and /trade's 12s poller must not pull the full payload.
+    import stop_control
+    from web import _TRADE_HTML
+    assert "/api/bot/status?lite=1" in stop_control.STOP_JS
+    assert "fj('/api/bot/status?lite=1'" in _TRADE_HTML
+    assert "fj('/api/bot/status'," not in _TRADE_HTML

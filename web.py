@@ -1408,6 +1408,18 @@ def _grade_summary(grades: list) -> dict:
     }
 
 
+def bot_status_lite(bot_dir=None) -> dict:
+    """state + config only -- everything /trade and the STOP widget read.
+    ~0.1ms vs ~58ms and ~2KB vs ~169KB for bot_status_payload."""
+    d = Path(bot_dir) if bot_dir else _BOT_DIR
+    try:
+        state = json.loads((d / "bot_state.json").read_text())
+    except Exception:
+        state = {}
+    from bot_core import load_config
+    return {"state": state, "config": load_config(d / "config.json")}
+
+
 def bot_status_payload(bot_dir=None) -> dict:
     d = Path(bot_dir) if bot_dir else _BOT_DIR
     try:
@@ -1619,8 +1631,12 @@ async def api_bot_series() -> JSONResponse:
 
 
 @app.get("/api/bot/status")
-async def api_bot_status() -> JSONResponse:
-    return JSONResponse(bot_status_payload())
+async def api_bot_status(lite: int = 0) -> JSONResponse:
+    # The full build is ~58ms of file reads + aggregation; run it off the
+    # event loop or every poll stalls /api/crypto/signal (measured p50 3ms ->
+    # 198ms with a few tabs open).
+    fn = bot_status_lite if lite else bot_status_payload
+    return JSONResponse(await asyncio.to_thread(fn))
 
 
 @app.post("/api/bot/control")
@@ -2427,7 +2443,15 @@ function renderSignalBanner(s, isT1=false){
   const nearKey=keyLevel&&s.spot?Math.abs(s.spot-keyLevel)<350:false;
   const keyLvlStat=keyLevel
     ?`<div class="sig-stat"><span class="k">KEY LVL</span><span class="v ${nearKey?'':'dim'}" style="${nearKey?'color:var(--orange)':''}">${fmt$(keyLevel)}${nearKey?' ⚡':''}</span></div>`:'';
+  // Market-implied price of the called side. Measured Jun-Oct 2026 with
+  // official results: the call's taker P&L is ~0 (+0.06c, t=0.2) whether it
+  // agrees with the market or not -- prices are calibrated, so this is the
+  // probability to weigh the call against, not a warning.
+  const mktAsk=isUp?s.yes_ask:s.no_ask;
+  const mktStat=(s.yes_ask&&s.no_ask&&mktAsk!=null)
+    ?`<div class="sig-stat"><span class="k">MKT</span><span class="v">${buySide} ${(mktAsk*100).toFixed(0)}¢ <span class="dim">${(s.yes_ask>=s.no_ask)===isUp?'agrees':'disagrees'}</span></span></div>`:'';
   $('sig-stats').innerHTML=`
+    ${mktStat}
     <div class="sig-stat"><span class="k">${s.has_whale_data?'Whales':'Flow'}</span><span class="v" style="color:${isUp?'var(--green)':'var(--red)'}">${s.yes_pct}%${trendStr}</span></div>
     <div class="sig-stat"><span class="k">YES/NO</span><span class="v"><span class="pos">${(s.yes_contracts/1000).toFixed(1)}K</span>/<span class="neg">${(s.no_contracts/1000).toFixed(1)}K</span></span></div>
     ${s.momentum!=null?`<div class="sig-stat"><span class="k">Momo</span><span class="v ${s.momentum>=0?'pos':'neg'}">${s.momentum>=0?'+':''}${s.momentum.toFixed(0)}/m</span></div>`:''}
@@ -2685,7 +2709,7 @@ async function pollSlow(){
       fj('/api/crypto/banner_offsets',null),
       fj('/api/crypto/banner_current',null),
       fj('/api/loop_log',{entries:[]}),
-      fj('/api/bot/status',null),
+      fj('/api/bot/status?lite=1',null),
     ]);
     // Prefer fresh spot; fall back to the signal payload's spot (the reliable
     // source) and mark the header when the collector has gone stale.

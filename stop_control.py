@@ -206,7 +206,7 @@ async function stopToggle() {
 async function pollStop() {
   let d = null;
   try {
-    const r = await fetch('/api/bot/status');
+    const r = await fetch('/api/bot/status?lite=1');  // state+config only
     if (r.ok) d = await r.json();
   } catch (e) { /* fall through: renders the offline state */ }
   window._stopLast = d;
