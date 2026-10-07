@@ -53,6 +53,31 @@ _DATA_DIR = Path("data/whales")
 # dashboard polling doesn't bloat the file; one row every few seconds is plenty.
 _SIGNAL_FEATURE_LOG = _DATA_DIR / "signal_feature_log.jsonl"
 _feature_log_lock = threading.Lock()
+def _vol_1m(hist, now):
+    """Mean |1-minute BTC move| from (ts, price) spot history.
+
+    Logged alongside btc_vol_per_min, never fed into the signal. The live
+    estimator averages |move|/dt over consecutive ~5s samples, so it scales
+    with 1/sqrt(poll interval): it read a median $56/min on Sep 1-11 2026
+    where 1-minute Coinbase candles give $17/min. This one is cadence-invariant
+    so replays can compare across poller changes and against backfilled rows.
+    The deque holds ~200s, so at most 3 one-minute moves; None below 2."""
+    if not hist:
+        return None
+    pts = []
+    i = len(hist) - 1
+    for k in range(4):
+        target = now - 60 * k
+        while i >= 0 and hist[i][0] > target:
+            i -= 1
+        if i < 0 or target - hist[i][0] > 15:
+            break
+        pts.append(hist[i][1])
+    if len(pts) < 3:
+        return None
+    return sum(abs(a - b) for a, b in zip(pts, pts[1:])) / (len(pts) - 1)
+
+
 _feature_log_last_ts: dict[str, float] = {}
 _FEATURE_LOG_MIN_GAP_S = 4.0
 
@@ -959,6 +984,7 @@ async def api_crypto_signal() -> JSONResponse:
         "floor_strike": round(floor_strike, 2) if floor_strike is not None else None,
         "distance": distance,
         "btc_vol_per_min": round(btc_vol_per_min, 1),
+        "btc_vol_1m": (round(_v1m, 1) if (_v1m := _vol_1m(hist, time.time())) is not None else None),
         # Bid/ask spread + individual asks
         "spread": spread,
         "yes_ask": round(yes_ask, 4),

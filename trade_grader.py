@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from settlement import estimate_side, official_results
+
 BASE = Path(__file__).parent
 BOT_DIR = BASE / "data" / "bot"
 WHALES_DIR = BASE / "data" / "whales"
@@ -29,7 +31,7 @@ REGIME_PATH = WHALES_DIR / "intraday_regime.jsonl"
 ARCHIVE_DIR = WHALES_DIR / "archive"
 
 POLL_SEC = 60
-SETTLE_WINDOW_S = 120   # a tick this close to expiry supports strike-basis settlement
+SETTLE_WINDOW_S = 120   # last-resort strike basis: one tick this close to expiry
 GRADE_DELAY_S = 90      # wait this long past expiry so final ticks are on disk
 PRICE_DECIDED_HI = 0.95
 PRICE_DECIDED_LO = 0.05
@@ -50,10 +52,18 @@ def verdict_for(exit_reason, side, settled):
     return "left_money" if favorable else "good_exit"
 
 
-def infer_settlement(ticks, expiry):
+def infer_settlement(ticks, expiry, official=None):
+    """(side, basis). Kalshi's official result first; then the final-60s
+    spot average (settlement.py measures why one late tick is not enough);
+    then one tick within SETTLE_WINDOW_S; then a decided price."""
+    if official in ("YES", "NO"):
+        return official, "official"
     before = [t for t in ticks if t.get("ts") is not None and t["ts"] <= expiry]
     if not before:
         return "unknown", "none"
+    est = estimate_side(before, expiry)
+    if est:
+        return est, "spot60"
     last = before[-1]
     spot, strike = last.get("spot"), last.get("floor_strike")
     if last["ts"] >= expiry - SETTLE_WINDOW_S and spot is not None and strike is not None:
@@ -126,10 +136,10 @@ def day_context(entry_ts, thesis_rows, regime_rows):
     return ctx
 
 
-def grade_trade(trade, ticks, thesis_rows, regime_rows):
+def grade_trade(trade, ticks, thesis_rows, regime_rows, official=None):
     side, qty = trade["side"], trade["qty"]
     entry, exit_ = trade["entry_price"], trade["exit_price"]
-    settled, basis = infer_settlement(ticks, expiry_of(trade))
+    settled, basis = infer_settlement(ticks, expiry_of(trade), official)
     mfe, mae = hold_path_stats(ticks, side, entry,
                                trade["entry_ts"], trade["exit_ts"])
     if settled == "unknown":
@@ -280,10 +290,13 @@ def run_cycle(idx, now=None):
     idx.refresh(now=now, keep_from=oldest - 3600)
     thesis = read_jsonl(THESIS_PATH)
     regime = read_jsonl(REGIME_PATH)
+    # Network failure degrades to {} and grading falls back to spot60.
+    results = official_results({t["ticker"] for t in pending})
     n = 0
     for t in pending:
         try:
-            row = grade_trade(t, idx.ticks(t["ticker"]), thesis, regime)
+            row = grade_trade(t, idx.ticks(t["ticker"]), thesis, regime,
+                              results.get(t["ticker"]))
             append_jsonl(GRADES_PATH, row)
             n += 1
         except Exception as e:

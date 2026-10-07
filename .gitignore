@@ -48,3 +48,10 @@ data/manual/
 # to GitHub and bloat history with data that is regenerable by re-running the rig.
 data/wsrig/
 data/wsrig-smoke/
+
+# Kalshi history backfill (kalshi_backfill.py) — raw API cache + rebuilt
+# feature rows, ~1GB and regenerable; auto_commit_cron's `git add -A` must not
+# sweep it in.
+data/whales/backfill/
+# Official KXBTC15M results cache (settlement.py) — runtime state, rebuilt on demand
+data/whales/kalshi_results.json

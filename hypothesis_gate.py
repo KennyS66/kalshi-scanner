@@ -42,6 +42,8 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
+from settlement import official_results, outcome
+
 BASE = Path(__file__).parent
 FEATURE_LOG = BASE / "data" / "whales" / "signal_feature_log.jsonl"
 HYP_DIR = BASE / "data" / "hypotheses"
@@ -271,13 +273,14 @@ def load_markets(log_path=FEATURE_LOG):
     return by
 
 
-def sample(h: Hypothesis, markets):
+def sample(h: Hypothesis, markets, results=None):
     """One observation per market: the FIRST tick where the rule fires inside
     the window. Multiple ticks from one market are not independent."""
     lo, hi = h.window
     out = []
     for ticker, rows in markets.items():
-        settled = "YES" if (rows[-1].get("distance") or 0) > 0 else "NO"
+        settled = (outcome(ticker, rows, results) if results is not None
+                   else "YES" if (rows[-1].get("distance") or 0) > 0 else "NO")
         for i, r in enumerate(rows):
             m = r.get("mins_left")
             if m is None or not (lo <= m <= hi):
@@ -312,7 +315,7 @@ def sample(h: Hypothesis, markets):
 
 # ── CLI ───────────────────────────────────────────────────────────────────
 
-def run(h: Hypothesis, markets, registry: Registry, retest=False):
+def run(h: Hypothesis, markets, registry: Registry, retest=False, results=None):
     phash = predicate_hash(h)
     if registry.is_dead(phash) and not retest:
         raise SystemExit(
@@ -320,7 +323,7 @@ def run(h: Hypothesis, markets, registry: Registry, retest=False):
             "Re-deriving disproofs is how time gets wasted here — pass "
             "--retest if you genuinely have new data.")
     comparisons = registry.comparisons() + 1
-    result = assess(sample(h, markets), h.band, comparisons)
+    result = assess(sample(h, markets, results), h.band, comparisons)
     result.update({"name": h.name, "hash": phash, "band": list(h.band),
                    "window": list(h.window), "comparisons": comparisons})
     registry.record(result)
@@ -376,7 +379,11 @@ def main():
     if h is None:
         raise SystemExit(f"no hypothesis named {args.run!r} — try --list")
     markets = load_markets()
-    result = run(h, markets, Registry(), retest=args.retest)
+    # Official Kalshi results; the last-row distance sign was wrong on ~3%.
+    results = official_results(list(markets))
+    print(f"settlement: {len(results)}/{len(markets)} markets official, "
+          f"rest spot60/last-row estimate")
+    result = run(h, markets, Registry(), retest=args.retest, results=results)
     text = report(result)
     print(text)
     HYP_DIR.mkdir(parents=True, exist_ok=True)

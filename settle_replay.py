@@ -21,7 +21,8 @@ import json
 import math
 from collections import defaultdict
 
-from settle_bot import DEFAULT_CONFIG, entry_decision, limit_price, settle_side
+from settle_bot import DEFAULT_CONFIG, entry_decision, limit_price
+from settlement import official_results, outcome
 
 LOG = "data/whales/signal_feature_log.jsonl"
 CUT = dt.datetime(2026, 6, 30, tzinfo=dt.timezone.utc).timestamp()
@@ -46,10 +47,10 @@ def load():
     return by
 
 
-def replay(by, cfg):
+def replay(by, cfg, results=None):
     pnls = []
     for ticker, rs in by.items():
-        settled = settle_side(rs[-1])
+        settled = outcome(ticker, rs, results)
         for r in rs:                       # first qualifying tick wins
             side = entry_decision(r, cfg)
             if not side:
@@ -69,16 +70,18 @@ def replay(by, cfg):
 def main():
     cfg = dict(DEFAULT_CONFIG)
     by = load()
+    results = official_results(list(by))
+    print(f"settlement: {len(results)}/{len(by)} markets official")
     tickers = sorted(by, key=lambda t: by[t][0]["ts"])
     third = len(tickers) // 3
     windows = [("W1", tickers[:third]), ("W2", tickers[third:2 * third]),
                ("W3", tickers[2 * third:])]
     allpos = True
     for name, ts in windows:
-        r = replay({t: by[t] for t in ts}, cfg)
+        r = replay({t: by[t] for t in ts}, cfg, results)
         allpos &= r["edge"] > 0
         print(f"{name}: n={r['n']:4} edge={r['edge']:+.4f}")
-    total = replay(by, cfg)
+    total = replay(by, cfg, results)
     print(f"ALL: n={total['n']:4} edge={total['edge']:+.4f}")
     ok = allpos and 0.02 <= total["edge"] <= 0.05
     print(f"GATE: {'PASS' if ok else 'FAIL'} "

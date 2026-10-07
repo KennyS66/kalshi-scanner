@@ -28,12 +28,33 @@ def test_expiry_from_entry_sig():
     assert expiry_of(t) == 1600.0
 
 
-def test_settlement_strike_basis_yes_and_no():
-    # last tick 30s before expiry -> inside SETTLE_WINDOW_S -> strike basis
+def test_settlement_spot60_basis_yes_and_no():
+    # last tick 30s before expiry -> inside the 60s settlement-average window
     up = [tick(900), tick(970, spot=64000.0, strike=63950.0)]
-    assert infer_settlement(up, expiry=1000.0) == ("YES", "strike")
+    assert infer_settlement(up, expiry=1000.0) == ("YES", "spot60")
     dn = [tick(900), tick(970, spot=63900.0, strike=63950.0)]
-    assert infer_settlement(dn, expiry=1000.0) == ("NO", "strike")
+    assert infer_settlement(dn, expiry=1000.0) == ("NO", "spot60")
+
+
+def test_settlement_spot60_averages_not_last_tick():
+    # Kalshi settles on a final-minute average; one late dip below the strike
+    # must not flip a market that averaged above it.
+    ticks = [tick(945, spot=64020.0, strike=63950.0),
+             tick(970, spot=64010.0, strike=63950.0),
+             tick(998, spot=63940.0, strike=63950.0)]
+    assert infer_settlement(ticks, expiry=1000.0) == ("YES", "spot60")
+
+
+def test_settlement_official_result_wins():
+    up = [tick(970, spot=64000.0, strike=63950.0)]
+    assert infer_settlement(up, expiry=1000.0, official="NO") == ("NO", "official")
+    assert infer_settlement([], expiry=1000.0, official="YES") == ("YES", "official")
+
+
+def test_settlement_strike_basis_when_only_older_late_tick():
+    # 90s before expiry: outside the 60s average, inside SETTLE_WINDOW_S
+    up = [tick(910, spot=64000.0, strike=63950.0)]
+    assert infer_settlement(up, expiry=1000.0) == ("YES", "strike")
 
 
 def test_settlement_price_fallback_when_no_late_tick():
@@ -50,7 +71,7 @@ def test_settlement_price_fallback_when_no_late_tick():
 def test_settlement_ignores_ticks_after_expiry():
     ticks = [tick(970, spot=64000.0, strike=63950.0),
              tick(1050, spot=60000.0, strike=63950.0)]  # next market's data
-    assert infer_settlement(ticks, expiry=1000.0) == ("YES", "strike")
+    assert infer_settlement(ticks, expiry=1000.0) == ("YES", "spot60")
 
 
 def test_hold_path_stats_yes_side():
@@ -121,7 +142,7 @@ def test_grade_trade_whipsaw_stop_full_row():
              tick(exp - 30, spot=64010.0, strike=63950.0, price=0.97)]
     row = grade_trade(trade, ticks, THESIS, REGIMES)
     assert row["verdict"] == "whipsaw_stop"
-    assert row["settled"] == "YES" and row["settle_basis"] == "strike"
+    assert row["settled"] == "YES" and row["settle_basis"] == "spot60"
     assert row["held_pnl_gross"] == pytest.approx(4.0)    # 10*(1-0.60)
     assert row["delta_vs_held"] == pytest.approx(-7.0)    # 10*(0.30-0.60) - 4.0
     assert row["mfe"] == pytest.approx(0.05)
@@ -233,6 +254,9 @@ def test_run_cycle_grades_settled_trades_and_dedups(tmp_path, monkeypatch):
                        ("REGIME_PATH", regime),
                        ("ARCHIVE_DIR", tmp_path / "archive")]:
         monkeypatch.setattr(tg, name, path)
+    asked = []
+    monkeypatch.setattr(tg, "official_results",
+                        lambda tickers: asked.append(sorted(tickers)) or {})
 
     trade = make_trade()                       # expiry = TS_JUL17 + 600
     exp = expiry_of(trade)
@@ -251,6 +275,8 @@ def test_run_cycle_grades_settled_trades_and_dedups(tmp_path, monkeypatch):
     assert tg.run_cycle(idx, now=now) == 1     # only the settled closed trade
     rows = tg.read_jsonl(grades)
     assert len(rows) == 1 and rows[0]["verdict"] == "whipsaw_stop"
+    assert rows[0]["settle_basis"] == "spot60"  # no official result offered
+    assert asked == [[trade["ticker"]]]         # only pending tickers looked up
     assert tg.run_cycle(idx, now=now) == 0     # dedup: nothing regraded
     assert len(tg.read_jsonl(grades)) == 1
 
@@ -329,3 +355,26 @@ def test_grade_trade_marks_recoverable_stop():
     row2 = grade_trade(trade, [t for t in ticks if t["ts"] != TS_JUL17 + 400],
                        THESIS, REGIMES)
     assert row2["recoverable"] is False
+
+
+def test_run_cycle_prefers_official_result(tmp_path, monkeypatch):
+    trades = tmp_path / "bot_trades.jsonl"
+    grades = tmp_path / "bot_trade_grades.jsonl"
+    feat = tmp_path / "signal_feature_log.jsonl"
+    for name, path in [("TRADES_PATH", trades), ("GRADES_PATH", grades),
+                       ("FEATURES_PATH", feat),
+                       ("THESIS_PATH", tmp_path / "t.jsonl"),
+                       ("REGIME_PATH", tmp_path / "r.jsonl"),
+                       ("ARCHIVE_DIR", tmp_path / "archive")]:
+        monkeypatch.setattr(tg, name, path)
+    trade = make_trade()
+    exp = expiry_of(trade)
+    # Spot says YES; Kalshi's official result says NO -- official wins.
+    monkeypatch.setattr(tg, "official_results",
+                        lambda tickers: {trade["ticker"]: "NO"})
+    _write_lines(trades, [trade], mode="w")
+    _write_lines(feat, [tick(exp - 30, spot=64010.0, strike=63950.0)], mode="w")
+    idx = tg.FeatureIndex(feat)
+    assert tg.run_cycle(idx, now=exp + tg.GRADE_DELAY_S + 1) == 1
+    row = tg.read_jsonl(grades)[0]
+    assert (row["settled"], row["settle_basis"]) == ("NO", "official")

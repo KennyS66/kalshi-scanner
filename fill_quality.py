@@ -35,6 +35,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from settlement import official_results
+
 BASE = Path(__file__).parent
 FEATURE_LOG = BASE / "data" / "whales" / "signal_feature_log.jsonl"
 
@@ -138,8 +140,10 @@ def _load_swing_events(bot_dir, since_ts=None):
 
 
 def _settlement(tickers):
-    """Which side settled, from the sign of `distance` at each market's last
-    observed tick -- the same basis trade_grader uses (99.5% agreement)."""
+    """Which side settled: Kalshi's official result where available, else the
+    sign of `distance` at each market's last observed tick (wrong on ~3% of
+    markets -- see settlement.py)."""
+    official = official_results(sorted(tickers))
     last = {}
     with open(FEATURE_LOG) as f:
         for line in f:
@@ -151,8 +155,10 @@ def _settlement(tickers):
             if t in tickers and r.get("distance") is not None:
                 if t not in last or r["ts"] > last[t]["ts"]:
                     last[t] = r
-    return {t: ("YES" if (v.get("distance") or 0) > 0 else "NO")
-            for t, v in last.items()}
+    out = {t: ("YES" if (v.get("distance") or 0) > 0 else "NO")
+           for t, v in last.items()}
+    out.update(official)
+    return out
 
 
 def main():
