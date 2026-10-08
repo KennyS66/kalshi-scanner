@@ -1465,34 +1465,89 @@ def bot_status_lite(bot_dir=None) -> dict:
     return {"state": state, "config": load_config(d / "config.json")}
 
 
+_status_memo: dict = {}
+_status_memo_lock = threading.Lock()
+
+
+def _file_sig(*paths) -> tuple:
+    sig = []
+    for p in paths:
+        try:
+            st = p.stat()
+            sig.append((str(p), st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append((str(p), None))
+    return tuple(sig)
+
+
+def _memo(name, sig, fn):
+    """Recompute fn() only when sig (file mtimes/sizes, + any extra key) moves."""
+    with _status_memo_lock:
+        hit = _status_memo.get(name)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    val = fn()
+    with _status_memo_lock:
+        _status_memo[name] = (sig, val)
+    return val
+
+
 def bot_status_payload(bot_dir=None) -> dict:
+    """Everything /bot renders. bot_state.json is rewritten every ~5s
+    (heartbeat), but trades/grades/tuner change rarely and were ~55 of the
+    ~58ms per call, so each is memoized against its own file signature;
+    state + config are re-read every time (~0.1ms). Memoized values are
+    shared between calls -- callers must not mutate the payload."""
     d = Path(bot_dir) if bot_dir else _BOT_DIR
     try:
         state = json.loads((d / "bot_state.json").read_text())
     except Exception:
         state = {}
-    trades = _read_jsonl_tail(d / "bot_trades.jsonl", 1000)
     from bot_broker import live_capability_ok
     from bot_core import load_config
     cfg = load_config(d / "config.json")
     ok, reason = live_capability_ok(cfg, dict(os.environ))
     from bot_core import bucket_stats, compute_findings, pool_by_date_stats
-    try:
-        tuner = json.loads((d / "tuner_report.json").read_text())
-        tuner.pop("results", None)   # full sweep table is large; GUI shows summary
-    except Exception:
-        tuner = None
-    grades = _read_jsonl_tail(d / "bot_trade_grades.jsonl", 1000)
-    ev_buckets = bucket_stats(trades)
-    return {"state": state, "stats": _trade_stats(trades),
+
+    tf = d / "bot_trades.jsonl"
+    trades = _memo(("trades", str(d)), _file_sig(tf),
+                   lambda: _read_jsonl_tail(tf, 1000))
+
+    def _derived():
+        ev = bucket_stats(trades)
+        return {"stats": _trade_stats(trades), "ev_buckets": ev,
+                "gate": _gate_split(trades), "pool_by_date": pool_by_date_stats(trades)}
+    # _trade_stats has a "today" block, so the UTC day is part of the key.
+    der = _memo(("derived", str(d)), _file_sig(tf) + (_utc_day_str(time.time()),), _derived)
+
+    def _tuner():
+        try:
+            t = json.loads((d / "tuner_report.json").read_text())
+            t.pop("results", None)   # full sweep table is large; GUI shows summary
+            return t
+        except Exception:
+            return None
+    tuner = _memo(("tuner", str(d)), _file_sig(d / "tuner_report.json"), _tuner)
+
+    gf = d / "bot_trade_grades.jsonl"
+
+    def _grades():
+        g = _read_jsonl_tail(gf, 1000)
+        return {"grades": g[-200:], "grade_summary": _grade_summary(g)}
+    gr = _memo(("grades", str(d)), _file_sig(gf), _grades)
+
+    ef = d / "bot_events.jsonl"
+    events = _memo(("events", str(d)), _file_sig(ef), lambda: _read_jsonl_tail(ef, 50))
+
+    return {"state": state, "stats": der["stats"],
             "trades": trades[-50:],
-            "events": _read_jsonl_tail(d / "bot_events.jsonl", 50),
+            "events": events,
             "unlock": {"ok": ok, "reason": reason}, "config": cfg,
-            "ev_buckets": ev_buckets, "tuner": tuner,
-            "grades": grades[-200:], "grade_summary": _grade_summary(grades),
-            "gate": _gate_split(trades),
-            "pool_by_date": pool_by_date_stats(trades),
-            "findings": compute_findings(trades, state, cfg, ev_buckets)}
+            "ev_buckets": der["ev_buckets"], "tuner": tuner,
+            "grades": gr["grades"], "grade_summary": gr["grade_summary"],
+            "gate": der["gate"],
+            "pool_by_date": der["pool_by_date"],
+            "findings": compute_findings(trades, state, cfg, der["ev_buckets"])}
 
 
 def candles_from_log(path, mins: int, hours: int, now: float | None = None) -> list:

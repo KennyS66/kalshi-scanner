@@ -575,3 +575,50 @@ def test_trade_page_has_cost_scorecard_and_your_trades():
                    "· target +"):
         assert needle in _TRADE_HTML, needle
     assert "· edge +" not in _TRADE_HTML     # range arithmetic, not a measured edge
+
+
+def test_status_payload_memo_skips_unchanged_files(tmp_path, monkeypatch):
+    # bot_state.json is rewritten every ~5s (heartbeat) but trades/grades/
+    # tuner rarely: re-parsing them each poll was ~55 of the ~58ms.
+    import web
+    _seed(tmp_path)
+    reads = []
+    real = web._read_jsonl_tail
+    monkeypatch.setattr(web, "_read_jsonl_tail",
+                        lambda p, n: reads.append(p.name) or real(p, n))
+    first = web.bot_status_payload(tmp_path)
+    n_first = len(reads)
+    st = json.loads((tmp_path / "bot_state.json").read_text())
+    st["heartbeat"] = 999.0                       # only state changes
+    (tmp_path / "bot_state.json").write_text(json.dumps(st))
+    second = web.bot_status_payload(tmp_path)
+    assert len(reads) == n_first                  # nothing re-tailed
+    assert second["state"]["heartbeat"] == 999.0  # state always fresh
+    assert second["stats"] == first["stats"] and second["trades"] == first["trades"]
+
+
+def test_status_payload_memo_invalidates_on_trade_append(tmp_path):
+    import web
+    _seed(tmp_path)
+    assert web.bot_status_payload(tmp_path)["stats"]["all_time"]["n"] == 4
+    with open(tmp_path / "bot_trades.jsonl", "a") as f:
+        f.write("\n" + json.dumps({"ticker": "T9", "net_pnl": 1.0, "status": "closed",
+                                   "exit_reason": "flip", "side": "YES", "qty": 1,
+                                   "entry_price": .5, "exit_price": .6, "entry_ts": 9,
+                                   "exit_ts": 10, "fees": 0.0, "mode": "paper"}))
+    assert web.bot_status_payload(tmp_path)["stats"]["all_time"]["n"] == 5
+
+
+def test_status_payload_memo_rolls_today_block_at_utc_midnight(tmp_path, monkeypatch):
+    import web
+    _seed(tmp_path)
+    calls = []
+    real = web._trade_stats
+    monkeypatch.setattr(web, "_trade_stats", lambda t: calls.append(1) or real(t))
+    monkeypatch.setattr(web, "_utc_day_str", lambda ts: "2026-10-08")
+    web.bot_status_payload(tmp_path)
+    web.bot_status_payload(tmp_path)
+    assert len(calls) == 1                        # same day: memo hit
+    monkeypatch.setattr(web, "_utc_day_str", lambda ts: "2026-10-09")
+    web.bot_status_payload(tmp_path)
+    assert len(calls) == 2                        # new UTC day: today recomputed
