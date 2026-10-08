@@ -31,6 +31,7 @@ import gzip
 import json
 import math
 import time
+import urllib.error
 import urllib.parse
 import threading
 import urllib.request
@@ -51,15 +52,22 @@ ROW_STEP_S = 5.0              # live median row gap Sep 1-11 was 5.08s
 
 _last_req = 0.0
 _rate_lock = threading.Lock()
+_pause_until = 0.0
+# The Kalshi rate budget (~10 req/s public) is shared per IP with the LIVE
+# scanner. At ~9 req/s this backfill 429'd the scanner's trade scan for ~3h on
+# 2026-10-07 (whale data zero in every live row). Default to 2 req/s, and on
+# any 429 pause ALL workers so the scanner gets the budget back.
+MIN_GAP_S = 0.5
+PAUSE_ON_429_S = 60.0
 
 
-def _get(url, min_gap=0.11, tries=6):
-    """Rate-limited GET with backoff (global across threads; ~9 req/s,
-    just under the ~10/s where Kalshi starts returning 429). Read-only public endpoints only."""
-    global _last_req
+def _get(url, min_gap=None, tries=6):
+    """Rate-limited GET (global across threads). Read-only public endpoints only."""
+    global _last_req, _pause_until
+    gap = MIN_GAP_S if min_gap is None else min_gap
     for i in range(tries):
         with _rate_lock:
-            wait = min_gap - (time.time() - _last_req)
+            wait = max(gap - (time.time() - _last_req), _pause_until - time.time())
             if wait > 0:
                 time.sleep(wait)
             _last_req = time.time()
@@ -68,7 +76,12 @@ def _get(url, min_gap=0.11, tries=6):
             with urllib.request.urlopen(req, timeout=20) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
-            if e.code == 429 or e.code >= 500:
+            if e.code == 429:
+                with _rate_lock:
+                    _pause_until = max(_pause_until, time.time() + PAUSE_ON_429_S)
+                print(f"429 -> pausing all workers {PAUSE_ON_429_S:.0f}s", flush=True)
+                continue
+            if e.code >= 500:
                 time.sleep(2 ** i)
                 continue
             raise
@@ -169,7 +182,7 @@ def fetch_spot(t0, t1):
         q = {"granularity": 60,
              "start": dt.datetime.fromtimestamp(s, dt.UTC).isoformat(),
              "end": dt.datetime.fromtimestamp(e, dt.UTC).isoformat()}
-        for k in _get(f"{COINBASE}?{urllib.parse.urlencode(q)}", min_gap=0.35):
+        for k in _get(f"{COINBASE}?{urllib.parse.urlencode(q)}", min_gap=0.35):  # Coinbase: separate budget
             rows[int(k[0])] = float(k[4])  # [time, low, high, open, close, vol]
         s = e
     with gzip.open(path, "wt") as f:
@@ -177,6 +190,8 @@ def fetch_spot(t0, t1):
 
 
 def cmd_fetch(a):
+    global MIN_GAP_S
+    MIN_GAP_S = 1.0 / max(a.rate, 0.1)
     RAW.mkdir(parents=True, exist_ok=True)
     t0, t1 = _day_ts(a.start), _day_ts(a.end)
     fetch_spot(t0, t1)
@@ -401,7 +416,9 @@ def main():
         p.add_argument("--start", required=True)
         p.add_argument("--end", required=True)
         if name == "fetch":
-            p.add_argument("--workers", type=int, default=6)
+            p.add_argument("--workers", type=int, default=1)
+            p.add_argument("--rate", type=float, default=1 / MIN_GAP_S,
+                           help="max requests/s across all workers (shared with the live scanner)")
             p.add_argument("--candles-only", action="store_true",
                            help="tier 1: skip the trade tape (1 request/market)")
         if name == "build":

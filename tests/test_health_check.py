@@ -87,3 +87,14 @@ def test_tape_age_passes_when_fresh():
 def test_tape_age_absent_is_a_failure_not_a_pass():
     from health_check import check_tape_age
     assert check_tape_age(None, limit=600.0)["ok"] is False
+
+
+def test_check_scan_fails_when_scanner_holds_no_markets_or_whales():
+    from health_check import check_scan
+    bad = check_scan({"market_snapshots": 0, "whale_alerts": 0, "scan_errors": 41,
+                      "last_scan_error": "HTTPError: 429 Too Many Requests"})
+    assert bad["ok"] is False and "429" in bad["detail"]
+    assert check_scan({"market_snapshots": 280, "whale_alerts": 0})["ok"] is False
+    assert check_scan({"market_snapshots": 280, "whale_alerts": 1902,
+                       "scan_errors": 0})["ok"] is True
+    assert check_scan(None)["ok"] is True          # unknown -> latency check owns it

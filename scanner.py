@@ -139,6 +139,9 @@ class Scanner:
         # Cumulative count of scans that hit MAX_TRADE_PAGES with a cursor
         # still outstanding, i.e. cycles that dropped trades for good.
         self.truncated_scans = 0
+        self.scan_errors = 0
+        self.last_scan_error = None
+        self._last_scan_warn_ts = 0.0
         # Aggregated from all trades we've seen
         # `last_ts` is when we last saw a TRADE for this ticker. It exists so
         # prune_closed can expire stats entries that never had a snapshot --
@@ -171,8 +174,19 @@ class Scanner:
 
         truncated = False
 
+        failed = False
         for _ in range(MAX_TRADE_PAGES):
-            data = self.api.get_trades(limit=1000, cursor=cursor, min_ts=min_ts)
+            try:
+                data = self.api.get_trades(limit=1000, cursor=cursor, min_ts=min_ts)
+            except Exception as e:
+                # A failed page (e.g. 429 after api.py's retries) must not
+                # kill the cycle: keep what was fetched, still merge whales,
+                # and let enrich_markets run. Raising here is what left
+                # market_snapshots at 0 for ~3h on 2026-10-07.
+                failed = True
+                self.scan_errors += 1
+                self.last_scan_error = f"{type(e).__name__}: {e}"[:300]
+                break
             trades = data.get("trades", [])
             if not trades:
                 break
@@ -236,7 +250,18 @@ class Scanner:
             # would cry wolf every time the tape ended exactly on the cap.
             truncated = True
 
-        self.last_trade_ts = scan_start_ts
+        if failed:
+            # Unfetched pages lie between min_ts and what we got: keep the
+            # floor so the next cycle refetches them (_seen_trade_ids dedupes).
+            self.last_trade_ts = min_ts
+            if now_ts - self._last_scan_warn_ts >= 60:
+                self._last_scan_warn_ts = now_ts
+                print(f"scanner WARNING: trade scan page failed "
+                      f"({self.last_scan_error}); kept {new_trade_count} trades, "
+                      f"floor held at min_ts={min_ts}. scan_errors={self.scan_errors}",
+                      file=sys.stderr, flush=True)
+        else:
+            self.last_trade_ts = scan_start_ts
         self.whale_alerts = self._merge_whale_alerts(new_whales)
 
         if truncated:

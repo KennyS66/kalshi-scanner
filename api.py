@@ -55,12 +55,24 @@ class KalshiAPI:
             "KALSHI-ACCESS-SIGNATURE": base64.b64encode(signature).decode(),
         }
 
+    # 429/5xx back-off. The rate budget is shared per IP with anything else
+    # on this box (a bulk backfill 429'd the live scanner for ~3h on
+    # 2026-10-07); two short retries ride out a burst without stalling the
+    # 5s scan cycle for long. Persistent 429 still raises to the caller.
+    RETRY_BACKOFF_S = (0.5, 1.0)
+
     def _get(self, path, params=None, auth=False):
         url = f"{self.base}{path}"
-        headers = self._sign_request("GET", path) if auth else {}
-        resp = self.session.get(url, params=params, headers=headers, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        for i in range(len(self.RETRY_BACKOFF_S) + 1):
+            headers = self._sign_request("GET", path) if auth else {}
+            resp = self.session.get(url, params=params, headers=headers, timeout=15)
+            code = getattr(resp, "status_code", 200)
+            retryable = code == 429 or 500 <= code < 600
+            if retryable and i < len(self.RETRY_BACKOFF_S):
+                time.sleep(self.RETRY_BACKOFF_S[i])
+                continue
+            resp.raise_for_status()
+            return resp.json()
 
     # ── Public endpoints ──────────────────────────────────────────────
 

@@ -592,6 +592,14 @@ async def api_debug_memory(trim: int = 0, top: int = 25) -> JSONResponse:
     report = await asyncio.get_running_loop().run_in_executor(
         None, lambda: memdiag.snapshot(ns, trim=bool(trim), top=top))
     report["threads"] = threading.active_count()
+    if _scanner is not None:
+        # Scan-path health: health_check alerts when these go bad.
+        report["scan"] = {
+            "market_snapshots": len(_scanner.market_snapshots),
+            "whale_alerts": len(_scanner.whale_alerts),
+            "scan_errors": getattr(_scanner, "scan_errors", None),
+            "last_scan_error": getattr(_scanner, "last_scan_error", None),
+            "truncated_scans": getattr(_scanner, "truncated_scans", None)}
     return JSONResponse(report)
 
 
@@ -719,7 +727,13 @@ async def api_crypto_signal() -> JSONResponse:
     _direct_mkt: dict | None = None
     if not active:
         nm = _next_market_cache
-        nm_fresh = nm and time.time() - nm.get("ts", 0) < _NEXT_MARKET_CACHE_TTL
+        nm_fresh = _next_market_cache_usable(nm, time.time())
+        if (nm and not nm_fresh and nm.get("close_ts", 0) <= time.time()
+                and not _nm_refresh_lock.locked()):
+            # Cached market already closed: refresh now instead of waiting up
+            # to 5 min for the poller (that gap read as "between markets" for
+            # the first minutes of every market whenever this fallback ran).
+            asyncio.get_running_loop().run_in_executor(None, _refresh_next_market_cache)
         if nm_fresh:
             _dticker = nm["ticker"]
             _open_ts = nm["open_ts"]
@@ -1171,7 +1185,31 @@ _next_market_cache: dict = {}  # {"ticker", "open_ts", "close_ts", "ts"}
 _NEXT_MARKET_CACHE_TTL = 300.0
 
 
+def _next_market_cache_usable(nm: dict, now: float) -> bool:
+    """Fresh (polled within the TTL) AND its market has not closed yet. TTL
+    alone kept a just-closed market for up to 5 minutes after the roll."""
+    return bool(nm) and now - nm.get("ts", 0) < _NEXT_MARKET_CACHE_TTL \
+        and now < nm.get("close_ts", 0)
+
+
+def _next_poll_sleep(nm: dict, now: float) -> float:
+    """Poller sleep: the usual 5 min, but wake ~3s after the cached market
+    closes so the next one is picked up at the roll."""
+    if nm and nm.get("close_ts"):
+        return max(5.0, min(_NEXT_MARKET_CACHE_TTL, nm["close_ts"] + 3 - now))
+    return _NEXT_MARKET_CACHE_TTL
+
+
+_nm_refresh_lock = threading.Lock()
+
+
 def _refresh_next_market_cache() -> None:
+    """One refresh at a time (signal polls can trigger it); see _refresh_next_market_cache_locked."""
+    with _nm_refresh_lock:
+        _refresh_next_market_cache_locked()
+
+
+def _refresh_next_market_cache_locked() -> None:
     """Fetch the earliest upcoming KXBTC15M market from Kalshi and cache open/close times.
 
     Kalshi's unfiltered /markets listing sorts newest-created first, so an
@@ -1224,7 +1262,7 @@ def _refresh_next_market_cache() -> None:
 def _next_market_poller_loop() -> None:
     while True:
         _refresh_next_market_cache()
-        time.sleep(300)
+        time.sleep(_next_poll_sleep(_next_market_cache, time.time()))
 
 _BANNER_OFFSETS_FILE = _DATA_DIR / "banner_offsets.json"
 _BANNER_TARGETS_FILE = _DATA_DIR / "banner_targets.jsonl"

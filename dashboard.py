@@ -90,6 +90,24 @@ class CryptoSpot:
 BTCPrice = CryptoSpot
 
 
+
+_loop_err_last: dict = {}
+
+
+def _log_loop_error(where: str, e: Exception, every_s: float = 60.0) -> None:
+    """Scan-loop errors to stderr with a traceback, at most once a minute per
+    (where, message) so a 429 storm on a 5s cycle cannot flood the log."""
+    import sys
+    import traceback
+    key = (where, str(e)[:200])
+    now = time.time()
+    if now - _loop_err_last.get(key, 0.0) < every_s:
+        return
+    _loop_err_last[key] = now
+    print(f"scanner ERROR [{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}] "
+          f"{where}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
+
 def format_dollars(n):
     if n >= 1_000_000:
         return f"${n/1_000_000:.1f}M"
@@ -555,9 +573,13 @@ def run_dashboard(scanner, alpha_engine=None, refresh_seconds=30):
                 spots = crypto.prices
                 prev_spots = crypto.prev_prices
 
-                # Scan trades
-                new_whales, new_trades = scanner.scan_trades()
-                total_trades += new_trades
+                # Scan trades. A scan failure must not skip enrich_markets:
+                # that is what emptied market_snapshots for ~3h on 2026-10-07.
+                try:
+                    new_whales, new_trades = scanner.scan_trades()
+                    total_trades += new_trades
+                except Exception as e:
+                    _log_loop_error("scan_trades", e)
 
                 # Enrich markets
                 scanner.enrich_markets()
@@ -623,6 +645,9 @@ def run_dashboard(scanner, alpha_engine=None, refresh_seconds=30):
             except KeyboardInterrupt:
                 break
             except Exception as e:
+                # The Rich panel is invisible under systemd (stdout is a log
+                # file); stderr lands in logs/scanner_supervised.log.
+                _log_loop_error("dashboard cycle", e)
                 live.update(
                     Panel(
                         f"[red]Error: {e}[/]\n\nRetrying in {refresh_seconds}s...",

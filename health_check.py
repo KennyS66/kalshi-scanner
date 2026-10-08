@@ -34,6 +34,7 @@ from pathlib import Path
 
 BASE = Path(__file__).parent
 SIGNAL_URL = "http://localhost:9050/api/crypto/signal"
+DEBUG_URL = SIGNAL_URL.split("/api/")[0] + "/api/debug/memory"
 FETCH_TIMEOUT = 4.0        # must match swing_bot.fetch_signal's timeout
 LATENCY_SAMPLES = 8
 LATENCY_TAIL_TOLERANCE = 0.10   # fraction of samples allowed over timeout
@@ -109,6 +110,34 @@ def check_latency(samples, timeout, tolerance=LATENCY_TAIL_TOLERANCE):
     return {"name": "latency:signal", "ok": ok,
             "detail": f"{len(over)}/{len(samples)} over {timeout:.0f}s "
                       f"(p50 {s[len(s)//2]:.2f}s, max {s[-1]:.2f}s)"}
+
+
+def check_scan(scan):
+    """The scanner's trade scan is actually producing markets and whales.
+
+    2026-10-07: a 429 storm made every scan cycle raise, so market_snapshots
+    and whale_alerts sat at 0 for ~3h while every other check passed -- the
+    process was up, the feature log fresh, /signal fast. Only these two
+    counters showed it. Unknown (endpoint down) is left to the latency check.
+    """
+    if not scan:
+        return {"name": "scan:markets+whales", "ok": True,
+                "detail": "unknown (debug endpoint unavailable)"}
+    snaps, whales = scan.get("market_snapshots", 0), scan.get("whale_alerts", 0)
+    detail = (f"{snaps} markets / {whales} whale alerts / "
+              f"{scan.get('scan_errors')} scan errors")
+    if scan.get("last_scan_error"):
+        detail += f" (last: {scan['last_scan_error'][:80]})"
+    return {"name": "scan:markets+whales", "ok": snaps > 0 and whales > 0,
+            "detail": detail}
+
+
+def _scan_health():
+    try:
+        with urllib.request.urlopen(DEBUG_URL, timeout=20) as r:
+            return json.loads(r.read()).get("scan")
+    except Exception:
+        return None
 
 
 def check_footprint(rss_mb, cpu_pct, rss_limit=RSS_LIMIT_MB,
@@ -213,6 +242,7 @@ def collect():
     # --- END ADDED
     checks.append(check_latency(_sample_latency(), FETCH_TIMEOUT))
     checks.append(check_footprint(*_scanner_footprint()))
+    checks.append(check_scan(_scan_health()))
     return checks
 
 

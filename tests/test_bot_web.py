@@ -622,3 +622,22 @@ def test_status_payload_memo_rolls_today_block_at_utc_midnight(tmp_path, monkeyp
     monkeypatch.setattr(web, "_utc_day_str", lambda ts: "2026-10-09")
     web.bot_status_payload(tmp_path)
     assert len(calls) == 2                        # new UTC day: today recomputed
+
+
+def test_next_market_cache_expires_at_close_not_just_ttl():
+    from web import _next_market_cache_usable
+    nm = {"ticker": "KXBTC15M-X", "open_ts": 1000.0, "close_ts": 1900.0, "ts": 1700.0}
+    assert _next_market_cache_usable(nm, 1800.0) is True
+    # 00:49Z on 2026-10-08: polled 4 min ago (inside TTL) but closed at 00:45
+    assert _next_market_cache_usable(nm, 1949.0) is False
+    assert _next_market_cache_usable({}, 1800.0) is False
+    assert _next_market_cache_usable(nm, 1700.0 + 301) is False   # TTL still applies
+
+
+def test_next_market_poller_wakes_at_the_roll():
+    from web import _next_poll_sleep
+    nm = {"close_ts": 1900.0}
+    assert _next_poll_sleep(nm, 1800.0) == 103.0       # close + 3s
+    assert _next_poll_sleep(nm, 1000.0) == 300.0       # capped at TTL
+    assert _next_poll_sleep(nm, 1950.0) == 5.0         # already past: retry soon
+    assert _next_poll_sleep({}, 1800.0) == 300.0
