@@ -537,3 +537,41 @@ def test_status_pollers_use_lite():
     assert "/api/bot/status?lite=1" in stop_control.STOP_JS
     assert "fj('/api/bot/status?lite=1'" in _TRADE_HTML
     assert "fj('/api/bot/status'," not in _TRADE_HTML
+
+
+def test_scorecard_endpoint_pending_then_cached(monkeypatch):
+    from fastapi.testclient import TestClient
+    import web
+    client = TestClient(web.app)
+    monkeypatch.setattr(web, "_scorecard_cache", {})
+    assert client.get("/api/crypto/scorecard").json() == {"status": "pending"}
+    monkeypatch.setattr(web, "_scorecard_cache", {"windows": {"7d": {"n": 3}}})
+    assert client.get("/api/crypto/scorecard").json()["windows"]["7d"]["n"] == 3
+
+
+def test_manual_summary_endpoint_reads_local_fills(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    import fills_sync
+    import web
+    monkeypatch.setattr(fills_sync, "FILLS_FILE", tmp_path / "f.jsonl")
+    monkeypatch.setattr(fills_sync, "SETTLE_FILE", tmp_path / "s.jsonl")
+    monkeypatch.setattr(fills_sync, "BALANCE_FILE", tmp_path / "b.jsonl")
+    (tmp_path / "f.jsonl").write_text(json.dumps(
+        {"id": "1", "ticker": "T1", "side": "YES", "action": "buy", "qty": 1,
+         "price": 0.6, "ts": __import__("time").time() - 60, "fee": 0.02,
+         "taker": True, "source": "manual"}) + "\n")
+    (tmp_path / "s.jsonl").write_text(json.dumps({"ticker": "T1", "result": "yes"}) + "\n")
+    (tmp_path / "b.jsonl").write_text(json.dumps({"ts": 1, "balance": 5.82}) + "\n")
+    p = TestClient(web.app).get("/api/manual/summary").json()
+    assert p["windows"]["7d"]["markets"] == 1 and p["balance"] == 5.82
+    assert p["synced_ts"] is not None
+
+
+def test_trade_page_has_cost_scorecard_and_your_trades():
+    from web import _TRADE_HTML
+    for needle in ('id="cost-strip"', 'id="yt-body"', "function renderCost(",
+                   "function renderScorecard(", "function renderManual(",
+                   "fj('/api/crypto/scorecard',null)", "fj('/api/manual/summary',null)",
+                   "· target +"):
+        assert needle in _TRADE_HTML, needle
+    assert "· edge +" not in _TRADE_HTML     # range arithmetic, not a measured edge

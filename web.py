@@ -244,6 +244,37 @@ def _pick_writer_loop(interval: int = 30) -> None:
                 write_btc_picks(_scanner, spot_history=hist)
 
 
+_scorecard_cache: dict = {}
+
+
+def _scorecard_loop(interval: int = 3600) -> None:
+    """Hourly: /trade's signal scorecard (cents/contract, official results).
+    ~1.5s per build -- binary-searched log tail + cached results."""
+    global _scorecard_cache
+    import scorecard
+    while True:
+        try:
+            _scorecard_cache = scorecard.build()
+        except Exception as e:
+            print(f"[scorecard] build failed: {type(e).__name__}: {e}", flush=True)
+        time.sleep(interval)
+
+
+def _manual_summary_payload() -> dict:
+    """/trade "Your trades": manual account plays from fills_sync's local
+    files (cron-synced, read-only). No P&L from fills -- see fills_sync."""
+    import fills_sync
+    fills, settle = fills_sync.load_local()
+    out = fills_sync.manual_summary(fills, settle)
+    try:
+        out["synced_ts"] = fills_sync.FILLS_FILE.stat().st_mtime
+    except OSError:
+        out["synced_ts"] = None
+    hist = fills_sync._read_jsonl(fills_sync.BALANCE_FILE)
+    out["balance"] = hist[-1]["balance"] if hist else None
+    return out
+
+
 def _calibration_loop(interval: int = 600) -> None:
     """Every 10 min, refresh outcomes and refit calibration weights from picks_log."""
     while True:
@@ -490,6 +521,7 @@ def start_background(port: int = 9050) -> threading.Thread:
     threading.Thread(target=_btc_spot_poller_loop, daemon=True).start()
     threading.Thread(target=_outcome_checker_loop, daemon=True).start()
     threading.Thread(target=_calibration_loop, daemon=True).start()
+    threading.Thread(target=_scorecard_loop, daemon=True).start()
     threading.Thread(target=_next_market_poller_loop, daemon=True).start()
     threading.Thread(target=_account_poller_loop, daemon=True).start()
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error")
@@ -1014,6 +1046,19 @@ async def api_crypto_signal() -> JSONResponse:
 
     return JSONResponse(payload)
 
+
+
+@app.get("/api/crypto/scorecard")
+async def api_crypto_scorecard() -> JSONResponse:
+    return JSONResponse(_scorecard_cache or {"status": "pending"})
+
+
+@app.get("/api/manual/summary")
+async def api_manual_summary() -> JSONResponse:
+    try:
+        return JSONResponse(await asyncio.to_thread(_manual_summary_payload))
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"})
 
 
 @app.get("/api/crypto/history")
@@ -1995,6 +2040,16 @@ header {
 .bp-pool { font-size:10px; color:var(--mute); }
 .bp-tbl .empty { padding:8px 0; color:var(--mute); font-size:12px; }
 
+/* ── cost strip + scorecard + your trades ── */
+.cost-strip { display:flex; gap:22px; flex-wrap:wrap; padding:8px 14px; font-size:12px;
+     border:1px solid var(--border); border-top:none; background:var(--bg2); }
+.cost-strip:empty { display:none; }
+.cost-strip .k { color:var(--mute); font-family:var(--sans); font-size:10px; font-weight:600;
+     text-transform:uppercase; letter-spacing:.6px; margin-right:6px; }
+.cost-strip .warn { color:var(--yellow); }
+.cost-strip .you { color:var(--fg); }
+.yt-sub { padding:6px 12px; color:var(--mute); font-size:11px; }
+
 
 /* ── BRS history ── */
 .brs-stat-row { display:flex; gap:32px; padding:14px 18px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
@@ -2130,6 +2185,9 @@ header {
   </div>
 </div>
 
+<!-- ── execution cost of the called side (taker vs maker) ── -->
+<div class="cost-strip" id="cost-strip"></div>
+
 <!-- ── position picker + guidance ── -->
 <div class="pos-row">
   <span class="pos-label">I'm long</span>
@@ -2192,6 +2250,15 @@ header {
       <tbody><tr><td colspan="6"><div class="empty">no open plays</div></td></tr></tbody>
     </table>
   </div>
+</div>
+
+<!-- ── your manual trades (account fills, read-only) ── -->
+<div>
+  <div class="panel-hdr">
+    <span>Your Trades</span>
+    <span id="yt-meta" class="dim" style="color:var(--mute);font-weight:400">—</span>
+  </div>
+  <div class="panel-body" id="yt-body"><div class="empty">no account fills synced yet</div></div>
 </div>
 
 <!-- ── round call history ── -->
@@ -2375,8 +2442,9 @@ function renderSignalBanner(s, isT1=false){
   if(!s||s.status!=='ok')return;
   const banner=$('signal-banner');
   const isUp=s.direction==='YES', dirCls=isUp?'up':'down';
-  $('sig-dir').textContent=isUp?'▲':'▼';
-  $('sig-dir').className='sig-direction '+dirCls;
+  const noCall=!s.confidence&&!s.has_whale_data&&s.distance==null&&s.momentum==null;
+  $('sig-dir').textContent=noCall?'—':isUp?'▲':'▼';
+  $('sig-dir').className='sig-direction '+(noCall?'waiting':dirCls);
   // Flash only when the market or direction actually changed — replaying the
   // opacity-dip keyframe on every 4s poll makes the banner blink constantly.
   const flashKey=s.ticker+'|'+s.direction;
@@ -2398,6 +2466,7 @@ function renderSignalBanner(s, isT1=false){
   }
 
   const tradeable=s.price>=.05&&s.price<=.95&&s.mins_left!=null&&s.mins_left>=2;
+  renderCost(tradeable?s:null);
   if(!tradeable){
     banner.classList.add('thesis-mute');
     $('sig-range-buy').textContent='—'; $('sig-range-sell').textContent='—';
@@ -2429,7 +2498,7 @@ function renderSignalBanner(s, isT1=false){
 
   const minsStr=s.mins_left!=null?s.mins_left.toFixed(1)+'m left':'';
   $('sig-label').innerHTML=thesisFlag+
-    `<span class="dim">flow ${flowFairC.toFixed(0)}% ${buySide} · edge +${Math.round(sellLowC-buyHighC)}¢</span>`+
+    `<span class="dim">flow ${flowFairC.toFixed(0)}% ${buySide} · target +${Math.round(sellLowC-buyHighC)}¢</span>`+
     (minsStr?` · <span class="dim">${minsStr}</span>`:'');
 
   const tt=tradeType(s), ttEl=$('sig-trade-type');
@@ -2533,8 +2602,7 @@ function renderHistory(rows){
   const settled=rows.filter(r=>r.outcome!=null).length;
   const pct=settled>0?Math.round(wins/settled*100):0;
   const pCls=pct>=55?'pos':pct<=45?'neg':'';
-  $('score-label').innerHTML=settled>0
-    ?`<span class="score-pill ${pCls}">${wins}/${settled} &nbsp;<span style="font-size:14px;font-weight:900">${pct}%</span></span>`:'';
+  // score-label is owned by renderScorecard (cents/contract, not hit rate).
 
   const reversed=rows.slice().reverse();
 
@@ -2634,6 +2702,62 @@ function playAlert(isUp){
   }catch(e){}
 }
 
+// ── execution cost, scorecard, your trades ──────────────────────────────────
+let _manual=null;
+// Kalshi taker fee per contract: 0.07*p*(1-p) rounded up to the cent.
+function takerFeeC(p){return Math.ceil(Math.round(7*p*(1-p)*1e6)/1e6);}
+function yourBand(pC){
+  if(!_manual||!_manual.bands)return null;
+  const lbl=pC<30?'<30c':pC<50?'30-50c':pC<70?'50-70c':'70c+';
+  return _manual.bands.find(b=>b.band===lbl)||null;
+}
+function renderCost(s){
+  const el=$('cost-strip');
+  if(!s||s.status!=='ok'||!s.yes_ask||!s.no_ask){el.innerHTML='';return;}
+  const isUp=s.direction==='YES', side=isUp?'YES':'NO';
+  const askC=Math.round((isUp?s.yes_ask:s.no_ask)*100);
+  const bidC=Math.round((1-(isUp?s.no_ask:s.yes_ask))*100);   // binary identity
+  const feeC=takerFeeC(askC/100), beC=askC+feeC;
+  let you='';
+  const b=yourBand(askC);
+  if(b&&b.markets>=10){
+    const cls=b.read_minus_price_c<0?'warn':'you';
+    you=`<span><span class="k">Your ${b.band} reads</span><span class="${cls}">${b.right_pct}% right vs ${b.avg_price_c}¢ paid `+
+        `(${b.read_minus_price_c>0?'+':''}${b.read_minus_price_c} pts, n=${b.markets})</span></span>`;
+  }
+  el.innerHTML=
+    `<span><span class="k">Take ${side} ask</span>${askC}¢ + fee ${feeC}¢ = <b>${beC}¢</b> → needs ${beC}% to break even</span>`+
+    `<span><span class="k">Rest at bid</span>${bidC}¢, no fee <span class="warn">· fills mostly when price moves against you</span></span>`+
+    you;
+}
+function renderScorecard(sc){
+  const el=$('score-label');
+  if(!sc||!sc.windows){el.innerHTML='<span class="dim" style="font-size:11px">scorecard pending…</span>';return;}
+  const f=(w,name)=>w&&w.n?`${name} <b class="${w.cents>0?'pos':w.cents<0?'neg':''}">${w.cents>0?'+':''}${w.cents.toFixed(1)}¢</b>`+
+     `<span class="dim"> t=${w.t==null?'—':w.t.toFixed(1)} n=${w.n}</span>`:`${name} <span class="dim">n=0</span>`;
+  el.innerHTML=`<span class="score-pill" title="Signal's call taken at the ask at ~${sc.decision_mins}m left, `+
+    `net of taker fee, scored on Kalshi's official results. ~0 = no edge either way.">`+
+    `signal per contract (taker, @${sc.decision_mins}m): ${f(sc.windows['7d'],'7d')} · ${f(sc.windows['30d'],'30d')}</span>`;
+}
+function renderManual(m){
+  const body=$('yt-body');
+  if(m.error){body.innerHTML=`<div class="empty">${esc(m.error)}</div>`;return;}
+  const ago=m.synced_ts?Math.round((Date.now()/1000-m.synced_ts)/60):null;
+  $('yt-meta').textContent=(ago!=null?`synced ${ago}m ago`:'never synced')+
+    (m.balance!=null?` · balance $${m.balance.toFixed(2)}`:'')+(m.open&&m.open.length?` · ${m.open.length} open`:'');
+  const sign=v=>v==null?'—':(v>0?'+':'')+v;
+  const rows=Object.entries(m.windows||{}).map(([k,w])=>`<tr><td>${k}</td><td>${w.markets}</td>`+
+    `<td>${w.right_pct==null?'—':w.right_pct+'%'}</td><td>${w.avg_price==null?'—':Math.round(w.avg_price*100)+'¢'}</td>`+
+    `<td class="${(w.read_minus_price_c||0)<0?'neg':(w.read_minus_price_c||0)>0?'pos':''}">${sign(w.read_minus_price_c)}</td>`+
+    `<td>$${(w.fees||0).toFixed(2)}</td><td>${w.taker_share==null?'—':Math.round(w.taker_share*100)+'%'}</td></tr>`).join('');
+  const bands=(m.bands||[]).map(b=>`<tr><td>${b.band}</td><td>${b.markets}</td><td>${b.right_pct}%</td>`+
+    `<td>${b.avg_price_c}¢</td><td class="${b.read_minus_price_c<0?'neg':'pos'}">${sign(b.read_minus_price_c)}</td><td></td><td></td></tr>`).join('');
+  body.innerHTML=`<table class="bp-tbl"><thead><tr><th>Window</th><th>Markets</th><th>Read right</th>`+
+    `<th>Avg paid</th><th>Right − paid (pts)</th><th>Fees</th><th>Taker</th></tr></thead><tbody>${rows}`+
+    (bands?`<tr><th colspan="7">All-time by price paid</th></tr>${bands}`:'')+`</tbody></table>`+
+    `<div class="yt-sub">Directional read vs the price paid for it — not P&L (fills can't be reconciled to P&L; balance is the truth).</div>`;
+}
+
 // ── signal poll (high frequency) ─────────────────────────────────────────────
 let _sigBusy=false;
 async function pollSignal(){
@@ -2669,7 +2793,7 @@ async function pollSignal(){
       $('sig-stats').innerHTML=tickerShort?`<div class="sig-stat"><span class="k">Next</span><span class="v dim">${tickerShort}</span></div>`:'';
       $('sig-ticker').textContent=''; $('sig-badge').style.display='none'; $('sig-trade-type').style.display='none';
       $('sig-conf-pct').textContent='—'; $('conf-bar').style.width='0%';
-      renderFlush(null); renderGuidance(null);
+      renderFlush(null); renderGuidance(null); renderCost(null);
       return;
     }
     if(s.status!=='ok'){return;}
@@ -2702,7 +2826,7 @@ async function pollSlow(){
   if((document.hidden&&_firstLoadDone)||_slowBusy)return;
   _slowBusy=true;
   try{
-    const [spotR, histR, brsR, brsOff, brsCur, logR, botR]=await Promise.all([
+    const [spotR, histR, brsR, brsOff, brsCur, logR, botR, scR, ytR]=await Promise.all([
       fj('/api/crypto/spot',{}),
       fj('/api/crypto/history',{rows:[]}),
       fj('/api/crypto/banner_history?limit=60',{rows:[],stats:{}}),
@@ -2710,6 +2834,8 @@ async function pollSlow(){
       fj('/api/crypto/banner_current',null),
       fj('/api/loop_log',{entries:[]}),
       fj('/api/bot/status?lite=1',null),
+      fj('/api/crypto/scorecard',null),
+      fj('/api/manual/summary',null),
     ]);
     // Prefer fresh spot; fall back to the signal payload's spot (the reliable
     // source) and mark the header when the collector has gone stale.
@@ -2726,6 +2852,13 @@ async function pollSlow(){
     renderBRS(brsR.rows, brsOff, brsCur, brsR.stats);
     if(logR.entries)renderLog(logR.entries);
     if(botR)renderBotPlays(botR);
+    if(scR)renderScorecard(scR);
+    if(ytR){
+      _manual=ytR;renderManual(ytR);
+      // first banner render races this poll; redo it so the cost strip
+      // picks up "your reads at this price" without waiting a signal tick
+      if(_lastSignal&&_lastSignal.status==='ok')renderSignalBanner(_lastSignal,false);
+    }
     _firstLoadDone=true;
   }catch(e){console.error('pollSlow',e);}
   finally{_slowBusy=false;}

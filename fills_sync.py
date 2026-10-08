@@ -120,14 +120,18 @@ def grade_markets(fills: list, settlements: dict) -> list:
         g = by.setdefault(f["ticker"], {
             "ticker": f["ticker"], "source": f["source"], "entry_ts": f["ts"],
             "cost": 0.0, "proceeds": 0.0, "fees": 0.0, "buy_cost": 0.0,
-            "bought": 0.0, "sold": 0.0,
-            "buy_by_side": {"YES": 0.0, "NO": 0.0}})
+            "bought": 0.0, "sold": 0.0, "fills": 0, "taker_fills": 0,
+            "buy_by_side": {"YES": 0.0, "NO": 0.0},
+            "qty_by_side": {"YES": 0.0, "NO": 0.0}})
+        g["fills"] += 1
+        g["taker_fills"] += 1 if f.get("taker") else 0
         g["fees"] += f.get("fee") or 0.0
         if f["action"] == "buy":
             g["cost"] += f["price"] * f["qty"]
             g["buy_cost"] += f["price"] * f["qty"]
             g["bought"] += f["qty"]
             g["buy_by_side"][f["side"]] += f["price"] * f["qty"]
+            g["qty_by_side"][f["side"]] += f["qty"]
         else:
             g["proceeds"] += f["price"] * f["qty"]
             g["sold"] += f["qty"]
@@ -139,6 +143,10 @@ def grade_markets(fills: list, settlements: dict) -> list:
             g[k] = round(g[k], 4)
         g["lean"] = max(g["buy_by_side"], key=g["buy_by_side"].get) \
             if any(g["buy_by_side"].values()) else None
+        lq = g["qty_by_side"].get(g["lean"]) if g["lean"] else None
+        # Average price paid for the read itself: the implied probability
+        # the read has to beat to be worth anything.
+        g["lean_price"] = round(g["buy_by_side"][g["lean"]] / lq, 4) if lq else None
         if s is None:
             g["result"], g["revenue"], g["won"] = None, None, None
         else:
@@ -167,6 +175,56 @@ def session_report(graded: list) -> dict:
         b["wins"] += 1 if g["won"] else 0
         b["fees"] = round(b["fees"] + (g["fees"] or 0.0), 4)
     return rep
+
+
+def manual_summary(fills: list, settlements: dict, now: float | None = None,
+                   windows=(("7d", 7), ("30d", 30))) -> dict:
+    """The /trade "Your trades" panel: manual plays only, per window.
+
+    Same honesty rule as grade_markets -- no P&L from fills. The score is
+    read-right rate minus the average price paid for the read
+    (`read_minus_price_c`, in points/cents): a 60% read bought at 60c is
+    worth nothing, a 45% read bought at 35c is."""
+    now = time.time() if now is None else now
+    graded = [g for g in grade_markets(fills, settlements) if g["source"] == "manual"]
+    out = {"windows": {},
+           "open": [g["ticker"] for g in graded if g["won"] is None and g["lean"]]}
+    for name, days in windows:
+        rows = [g for g in graded if g["won"] is not None and g["lean_price"] is not None
+                and g["entry_ts"] >= now - days * 86400]
+        n = len(rows)
+        fills_n = sum(g["fills"] for g in rows)
+        right = sum(1 for g in rows if g["won"])
+        avg_price = round(sum(g["lean_price"] for g in rows) / n, 4) if n else None
+        out["windows"][name] = {
+            "markets": n, "right": right,
+            "right_pct": round(100 * right / n, 1) if n else None,
+            "avg_price": avg_price,
+            "read_minus_price_c": round(100 * (right / n - avg_price), 1) if n else None,
+            "fees": round(sum(g["fees"] for g in rows), 4),
+            "taker_share": round(sum(g["taker_fills"] for g in rows) / fills_n, 2)
+            if fills_n else None}
+    # All-time by price paid: where the reads beat (or lose to) their price.
+    settled = [g for g in graded if g["won"] is not None and g["lean_price"] is not None]
+    out["bands"] = []
+    for lo, hi, label in ((0.0, 0.3, "<30c"), (0.3, 0.5, "30-50c"),
+                          (0.5, 0.7, "50-70c"), (0.7, 1.01, "70c+")):
+        rows = [g for g in settled if lo <= g["lean_price"] < hi]
+        if rows:
+            right = sum(1 for g in rows if g["won"])
+            avg = sum(g["lean_price"] for g in rows) / len(rows)
+            out["bands"].append({
+                "band": label, "markets": len(rows),
+                "right_pct": round(100 * right / len(rows), 1),
+                "avg_price_c": round(100 * avg, 1),
+                "read_minus_price_c": round(100 * (right / len(rows) - avg), 1)})
+    return out
+
+
+def load_local() -> tuple[list, dict]:
+    """Fills + {ticker: settlement row} from disk, no API calls."""
+    return (_read_jsonl(FILLS_FILE),
+            {s["ticker"]: s for s in _read_jsonl(SETTLE_FILE) if s.get("result")})
 
 
 # ── I/O + API (thin) ──────────────────────────────────────────────────
@@ -303,9 +361,7 @@ def report(fills: list, settlements: dict) -> str:
 
 if __name__ == "__main__":
     if "--report" in sys.argv:
-        fills = _read_jsonl(FILLS_FILE)
-        settle = {s["ticker"]: s["result"]
-                  for s in _read_jsonl(SETTLE_FILE) if s.get("result")}
+        fills, settle = load_local()
     else:
         fills, settle = sync()
     print(report(fills, settle))

@@ -110,3 +110,58 @@ def test_session_report_buckets_by_source_and_session():
     man = rep["manual"]["weekday_night"]
     assert man["n"] == 1 and man["wins"] == 1 and man["fees"] == 0.25
     assert rep["bot"]["weekday_night"]["n"] == 1
+
+
+def test_load_local_settlements_are_dicts(tmp_path, monkeypatch):
+    # --report used to hand grade_markets bare result strings -> AttributeError.
+    import fills_sync as fs
+    monkeypatch.setattr(fs, "FILLS_FILE", tmp_path / "f.jsonl")
+    monkeypatch.setattr(fs, "SETTLE_FILE", tmp_path / "s.jsonl")
+    (tmp_path / "f.jsonl").write_text(json.dumps(
+        _f("1", "T1", "YES", "buy", 1, 0.40, 1000.0, fee=0.02)) + "\n")
+    (tmp_path / "s.jsonl").write_text(json.dumps(
+        {"ticker": "T1", "result": "yes", "revenue": 1.0}) + "\n"
+        + json.dumps({"ticker": "T2", "result": None}) + "\n")
+    fills, settle = fs.load_local()
+    assert settle == {"T1": {"ticker": "T1", "result": "yes", "revenue": 1.0}}
+    assert "read-right" in fs.report(fills, settle)       # no crash
+
+
+def test_manual_summary_windows_and_price_adjusted_read():
+    from fills_sync import manual_summary
+    now = 100 * 86400.0
+    fills = [
+        # bought YES at 30c, settled YES: read right at a 30c price
+        _f("1", "A", "YES", "buy", 2, 0.30, now - 1 * 86400, fee=0.03),
+        # bought NO at 60c, settled YES: read wrong
+        _f("2", "B", "NO", "buy", 1, 0.60, now - 2 * 86400, fee=0.02),
+        # 20 days old: only in the 30d window; maker fill
+        _f("3", "C", "YES", "buy", 1, 0.50, now - 20 * 86400),
+        # unsettled: counted as open, never scored
+        _f("4", "D", "YES", "buy", 1, 0.50, now - 3600, fee=0.02),
+        # bot-tagged fill: excluded from the manual panel
+        dict(_f("5", "E", "YES", "buy", 1, 0.50, now - 3600), source="bot"),
+    ]
+    fills[2]["taker"] = False
+    for f in fills[:2] + fills[3:]:
+        f["taker"] = True
+    settle = {"A": {"result": "yes"}, "B": {"result": "yes"}, "C": {"result": "no"},
+              "E": {"result": "yes"}}
+    s = manual_summary(fills, settle, now=now)
+    w7, w30 = s["windows"]["7d"], s["windows"]["30d"]
+    assert (w7["markets"], w7["right"]) == (2, 1)
+    assert w7["avg_price"] == 0.45                       # (0.30 + 0.60) / 2
+    assert w7["read_minus_price_c"] == 5.0               # 50% right vs 45c paid
+    assert w7["fees"] == 0.05 and w7["taker_share"] == 1.0
+    assert (w30["markets"], w30["right"]) == (3, 1)
+    assert w30["taker_share"] == 0.67                    # 2 of 3 settled-market fills
+    assert s["open"] == ["D"]
+    assert [b["band"] for b in s["bands"]] == ["30-50c", "50-70c"]
+    b30 = s["bands"][0]                                  # A @30c right, C @50c wrong
+    assert (b30["markets"], b30["right_pct"], b30["read_minus_price_c"]) == (1, 100.0, 70.0)
+
+
+def test_manual_summary_empty_is_safe():
+    from fills_sync import manual_summary
+    s = manual_summary([], {}, now=1e9)
+    assert s["windows"]["7d"]["markets"] == 0 and s["open"] == [] and s["bands"] == []
