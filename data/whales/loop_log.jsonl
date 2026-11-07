@@ -1050,3 +1050,36 @@
 {"ts": 1785391618.1700995, "type": "HB", "spot": 63979.99, "msg": "marketloop iteration \u2014 WAIT bias, spot 63980 just below 64k key; chop, no confirmed break"}
 {"ts": 1785393492.912592, "type": "HB", "spot": null, "msg": "marketloop iter \u2014 WAIT chop around 64k key"}
 {"ts": 1785717089.6276658, "type": "STATUS", "spot": 63180.51, "msg": "marketloop re-armed after 3d17h power outage (Jul 30 00:50 -> Aug 2 17:53 MDT). Scanner restarted, daedalus + bot_tuner stopped, swing bot is sole focus. Day plan: UP bias conv 2, key 63000, spot 63181 (above)."}
+{"ts": 1791408432.4521127, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791410177.1491878, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791410509.1651678, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791411655.1054652, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791412375.4886975, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791414079.585798, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791415745.9823296, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791416059.1657002, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791417798.6064937, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791419607.9612806, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791420332.6216574, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791420575.5071898, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791420785.9524632, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791421425.0828943, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791421516.0543168, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791422174.48899, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791422496.5415688, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791423430.6580582, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791424063.2320406, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791424703.8496394, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791424713.8251164, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791425238.164018, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791425654.6178243, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791426600.393628, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791427867.4996228, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791428674.4318595, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791429126.5442734, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791429137.404296, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791430054.8553052, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791430095.3696287, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791431053.5064006, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791431551.8314397, "type": "NOTE", "spot": null, "msg": ""}
+{"ts": 1791432306.9672084, "type": "NOTE", "spot": null, "msg": ""}
